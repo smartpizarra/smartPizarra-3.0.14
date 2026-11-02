@@ -148,6 +148,14 @@
         letter-spacing: 1px;
       }
 
+      .system-id {
+        /* id del dispositivo (si es largo se parte en líneas) */
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-bottom: 8px;
+        word-break: break-all;
+      }
+
       .email-contact {
         font-size: 1rem;
         color: rgba(255, 255, 255, 0.7);
@@ -314,6 +322,7 @@
       <div class="info version" id="versionText"></div>
       <div class="info website" id="websiteUrl"></div>
       <div class="info email-contact" id="emailContact"></div>
+      <div class="info system-id" id="systemId"></div>
 
       <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
       <div class="loading-container">
@@ -361,6 +370,32 @@
         function parseText(raw) {
           const text = raw === null ? "" : String(raw).trim();
           return text !== "" ? text : null;
+        }
+
+        /**
+         * Genera un id de dispositivo con el formato SP-XXXX-XXXX-XXXX
+         * (12 dígitos hexadecimales, 48 bits aleatorios).
+         * Usa crypto.getRandomValues (funciona también fuera de HTTPS, a
+         * diferencia de crypto.randomUUID); si no existe, usa Math.random.
+         * @returns {string}
+         */
+        function generateDeviceId() {
+          const bytes = new Uint8Array(6);
+          if (window.crypto && window.crypto.getRandomValues) {
+            window.crypto.getRandomValues(bytes);
+          } else {
+            for (let i = 0; i < bytes.length; i++) {
+              bytes[i] = Math.floor(Math.random() * 256);
+            }
+          }
+          let hex = "";
+          for (let i = 0; i < bytes.length; i++) {
+            hex += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+          }
+          hex = hex.toUpperCase();
+          return (
+            "SP-" + hex.slice(0, 4) + "-" + hex.slice(4, 8) + "-" + hex.slice(8, 12)
+          );
         }
 
         /**
@@ -437,6 +472,12 @@
               defaultValue: "smartpizarra@gmail.com",
               parse: parseText,
             },
+            /** Id único del dispositivo: se genera una sola vez y no cambia. */
+            deviceId: {
+              key: "smartpizarra.deviceId",
+              defaultValue: generateDeviceId,
+              parse: parseText,
+            },
             /** Opción de ligas elegida (id de LEAGUE_OPTIONS), no la lista de ligas. */
             league: {
               key: "smartpizarra.league",
@@ -462,6 +503,7 @@
             versionText: "versionText",
             websiteUrl: "websiteUrl",
             emailContact: "emailContact",
+            systemId: "systemId",
             welcomeUrl: "welcomeUrl",
           },
 
@@ -519,7 +561,11 @@
               const def = this.schema[name];
               let value = def.parse(this._read(def.key));
               if (value === null) {
-                value = def.defaultValue;
+                // defaultValue puede ser una función (ej. id generado al azar)
+                value =
+                  typeof def.defaultValue === "function"
+                    ? def.defaultValue()
+                    : def.defaultValue;
                 this._write(def.key, value);
               }
               this.values[name] = value;
@@ -650,6 +696,7 @@
            * @param {HTMLElement} elements.version    #versionText
            * @param {HTMLElement} elements.url        #websiteUrl
            * @param {HTMLElement} elements.email      #emailContact
+           * @param {HTMLElement} elements.deviceId   #systemId
            * @param {HTMLElement} elements.welcomeUrl #welcomeUrl (pantalla final)
            */
           constructor(elements) {
@@ -661,6 +708,7 @@
             this._setText(this.elements.version, "Versión: " + values.version);
             this._setText(this.elements.url, values.url);
             this._setText(this.elements.email, values.email);
+            this._setText(this.elements.deviceId, "Id: " + values.deviceId);
             this._setText(this.elements.welcomeUrl, values.url);
           }
 
@@ -799,6 +847,7 @@
               version: requireElement(ids.versionText),
               url: requireElement(ids.websiteUrl),
               email: requireElement(ids.emailContact),
+              deviceId: requireElement(ids.systemId),
               welcomeUrl: requireElement(ids.welcomeUrl),
             });
             this.container = requireElement(ids.splashContainer);
