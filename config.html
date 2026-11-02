@@ -61,16 +61,11 @@
     pudo guardar la configuración" y el JSON de "Salir" llega con
     "status":"error" (ver contrato de salida).
 
-  PROTECTOR DE PANTALLA (para que la imagen fija no marque la TV)
-    - Cada 60 s la tarjeta se desplaza unos píxeles (pixel shift).
-    - Tras 2 min sin teclas, clics ni toques: fondo negro con un logo
-      tenue que cambia de sitio cada 8 s. La primera tecla / clic / toque
-      solo lo quita (no pulsa nada). Ajustes => SAVER (sección 8b).
-
   SALIDA AUTOMÁTICA POR INACTIVIDAD
     Si pasan 5 min sin teclas, clics, toques ni movimiento del ratón, la
     página hace lo mismo que el botón "Salir" (exitConfig): descarta lo no
-    guardado y envía el JSON de salida. Ajuste => IDLE_EXIT_MS (sección 8c).
+    guardado y envía el JSON de salida. Ajuste => IDLE_EXIT_MS (sección 8b).
+    No hay protector de pantalla.
 
   COMPATIBILIDAD / RENDIMIENTO (Android WebView 101 en TV box)
   - JavaScript ES5 (var / function) + Promise: funciona en cualquier WebView.
@@ -533,57 +528,6 @@
         font-size: 0.8rem;
         color: rgba(255, 255, 255, 0.45);
       }
-
-      /* ==============================================================
-           6. PROTECTOR DE PANTALLA (evita marcas por imagen fija)
-           Lo controla screenSaver (sección 8b del script). Va dentro de
-           #stage, así gira con la página y su texto se lee derecho.
-           ============================================================== */
-
-      /* Tarjeta: el JS la desplaza unos píxeles cada cierto tiempo (pixel
-         shift) para que los bordes y textos no queden siempre en el mismo
-         sitio. offsetLeft/Width no cambian con transform: no afecta al
-         ajuste a pantalla ni a la navegación con flechas. */
-      .config-container {
-        transition: transform 1s ease;
-      }
-
-      /* Fondo negro que tapa todo tras un rato sin usar la pantalla */
-      #saver {
-        display: none;
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        height: 100%;
-        background: #000;
-        z-index: 10;
-        cursor: none;
-      }
-      #saver.on {
-        display: block;
-      }
-
-      /* Logo pequeño y tenue que salta a otra posición cada cierto tiempo
-         (se mueve con left/top, sin animación continua: casi no gasta CPU/GPU) */
-      .saver-badge {
-        position: absolute;
-        display: flex;
-        align-items: center;
-        opacity: 0.45;
-        color: #9aa4d6;
-        font-size: 18px;
-        white-space: nowrap;
-      }
-      .saver-badge .logo {
-        width: 44px;
-        height: 44px;
-        min-width: 44px;
-        margin-right: 12px;
-        font-size: 18px;
-        border-radius: 10px;
-        box-shadow: none;
-      }
     </style>
   </head>
   <body>
@@ -749,15 +693,6 @@
           </div>
         </div>
       </div>
-
-      <!-- PROTECTOR DE PANTALLA: tapa todo tras SAVER.idleMs sin usar la
-           pantalla. Cualquier tecla, clic o toque lo quita (sin pulsar nada). -->
-      <div id="saver">
-        <div class="saver-badge" id="saverBadge">
-          <div class="logo">SP</div>
-          <span data-i18n="saver.hint">Smart Pizarra</span>
-        </div>
-      </div>
     </div>
     <!-- /#scaler /#stage -->
 
@@ -847,7 +782,6 @@
             "status.dirty": "Cambios sin guardar",
             "status.saved": "Configuración guardada ✓",
             "status.checking": "Verificando internet…",
-            "saver.hint": "Smart Pizarra",
             hint: "Flechas: moverse · OK / Enter: elegir · 1-4: orientación · Esc: ir a Salir",
             version: "Versión: ",
             id: "Id: ",
@@ -879,7 +813,6 @@
             "status.dirty": "Unsaved changes",
             "status.saved": "Settings saved ✓",
             "status.checking": "Checking internet…",
-            "saver.hint": "Smart Pizarra",
             hint: "Arrows: move · OK / Enter: select · 1-4: orientation · Esc: go to Exit",
             version: "Version: ",
             id: "Id: ",
@@ -2131,153 +2064,7 @@
         }
 
         /* ==================================================================
-           8b. PROTECTOR DE PANTALLA
-           Evita que la imagen fija marque la pantalla (burn-in / retención)
-           si esta página queda abierta mucho tiempo:
-             - Pixel shift: la tarjeta se desplaza unos píxeles cada
-               SAVER.shiftMs, recorriendo SAVER.shifts.
-             - Tras SAVER.idleMs sin teclas, clics ni toques: fondo negro
-               con un logo tenue que cambia de sitio cada SAVER.moveMs.
-             - La primera tecla / clic / toque solo quita el protector
-               (no mueve el foco ni pulsa ningún botón).
-           Sin animaciones continuas: solo temporizadores (bajo consumo).
-           ================================================================== */
-
-        /** Tiempos y desplazamientos del protector de pantalla. */
-        var SAVER = {
-          idleMs: 120000, // sin uso durante este tiempo => se activa
-          moveMs: 8000, // cada cuánto salta el logo de sitio
-          shiftMs: 60000, // cada cuánto se desplaza la tarjeta
-          // Desplazamientos (px) de la tarjeta, en ciclo
-          shifts: [
-            [0, 0],
-            [3, 0],
-            [3, 3],
-            [0, 3],
-            [-3, 3],
-            [-3, 0],
-            [-3, -3],
-            [0, -3],
-            [3, -3],
-          ],
-        };
-
-        var screenSaver = {
-          active: false, // true mientras se ve el protector
-          _idleTimer: null,
-          _moveTimer: null,
-          _shiftIndex: 0,
-          _wokeAt: 0, // momento (ms) en que se quitó el protector
-
-          /** Prepara los eventos y arranca el contador de inactividad. */
-          init: function () {
-            var self = this;
-            this.saver = document.getElementById("saver");
-            this.badge = document.getElementById("saverBadge");
-            this.card = document.getElementById("configContainer");
-
-            // Fase de captura: se atiende ANTES que onKeyDown y los clics,
-            // para que la tecla que despierta no haga nada más
-            var onActivity = function (e) {
-              // El clic que sigue al toque que despertó tampoco pulsa nada
-              var wakeClick =
-                e.type === "click" && Date.now() - self._wokeAt < 600;
-              if (self.active || wakeClick) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-                self.hide();
-              } else {
-                self.resetIdle();
-              }
-            };
-            ["keydown", "mousedown", "touchstart", "click", "wheel"].forEach(
-              function (type) {
-                document.addEventListener(type, onActivity, true);
-              },
-            );
-            // Mover el ratón cuenta como actividad pero no quita el protector
-            // (un mando con giroscopio lo despertaría solo)
-            document.addEventListener(
-              "mousemove",
-              function () {
-                if (!self.active) self.resetIdle();
-              },
-              true,
-            );
-            // App en segundo plano: no hace falta protector; al volver, empieza de cero
-            document.addEventListener("visibilitychange", function () {
-              if (document.hidden) {
-                clearTimeout(self._idleTimer);
-              } else {
-                self.hide();
-              }
-            });
-
-            setInterval(function () {
-              self.shift();
-            }, SAVER.shiftMs);
-            this.resetIdle();
-          },
-
-          /** Reinicia la cuenta de inactividad. */
-          resetIdle: function () {
-            var self = this;
-            clearTimeout(this._idleTimer);
-            this._idleTimer = setTimeout(function () {
-              self.show();
-            }, SAVER.idleMs);
-          },
-
-          /** Muestra el fondo negro y empieza a mover el logo. */
-          show: function () {
-            var self = this;
-            if (this.active) return;
-            this.active = true;
-            this.saver.classList.add("on");
-            this.moveBadge();
-            this._moveTimer = setInterval(function () {
-              self.moveBadge();
-            }, SAVER.moveMs);
-          },
-
-          /** Quita el protector y vuelve a contar la inactividad. */
-          hide: function () {
-            clearInterval(this._moveTimer);
-            if (this.active) {
-              this.active = false;
-              this._wokeAt = Date.now();
-              this.saver.classList.remove("on");
-              // El foco sigue donde estaba; si se perdió, se recupera
-              if (el.focusables.indexOf(document.activeElement) === -1)
-                focusDefault();
-            }
-            this.resetIdle();
-          },
-
-          /** Pone el logo en un sitio al azar dentro del escenario (girado). */
-          moveBadge: function () {
-            var stage = layoutManager.stage;
-            var maxX = Math.max(0, stage.offsetWidth - this.badge.offsetWidth);
-            var maxY = Math.max(
-              0,
-              stage.offsetHeight - this.badge.offsetHeight,
-            );
-            this.badge.style.left = Math.round(Math.random() * maxX) + "px";
-            this.badge.style.top = Math.round(Math.random() * maxY) + "px";
-          },
-
-          /** Desplaza la tarjeta al siguiente punto de SAVER.shifts. */
-          shift: function () {
-            this._shiftIndex = (this._shiftIndex + 1) % SAVER.shifts.length;
-            var p = SAVER.shifts[this._shiftIndex];
-            this.card.style.transform =
-              "translate(" + p[0] + "px, " + p[1] + "px)";
-          },
-        };
-
-        /* ==================================================================
-           8c. SALIDA AUTOMÁTICA POR INACTIVIDAD
+           8b. SALIDA AUTOMÁTICA POR INACTIVIDAD
            Tras IDLE_EXIT_MS sin interacción hace lo mismo que el botón
            "Salir" (exitConfig): descarta lo no guardado y envía el JSON.
            Se dispara UNA vez; solo vuelve a contar tras una nueva
@@ -2489,7 +2276,6 @@
           // No se envía nada al arrancar: el único JSON sale con el botón "Salir"
           startConnectionMonitoring();
           idleExit.init(); // 5 min sin interacción => igual que "Salir"
-          screenSaver.init(); // protege la pantalla si queda mucho tiempo abierta
           console.log("Pantalla de configuración cargada.");
         }
 
