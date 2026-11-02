@@ -127,6 +127,33 @@
         text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
       }
 
+      /* --- Datos tomados de localStorage (InfoPanel) --- */
+
+      /* Si un dato está vacío no ocupa espacio */
+      .info:empty {
+        display: none;
+      }
+
+      .version {
+        font-size: 1.2rem;
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: 8px;
+      }
+
+      .website {
+        font-size: 1.1rem;
+        color: #00e5ff;
+        margin-bottom: 8px;
+        font-weight: 300;
+        letter-spacing: 1px;
+      }
+
+      .email-contact {
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 8px;
+      }
+
       /* --- Barra de progreso --- */
       .loading-container {
         /* riel gris de la barra */
@@ -283,6 +310,11 @@
       </div>
       <h1>Smart Pizarra</h1>
 
+      <!-- Los llena InfoPanel con los valores de localStorage (CONFIG.settings) -->
+      <div class="info version" id="versionText"></div>
+      <div class="info website" id="websiteUrl"></div>
+      <div class="info email-contact" id="emailContact"></div>
+
       <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
       <div class="loading-container">
         <div class="loading-bar" id="loadingBar"></div>
@@ -312,7 +344,7 @@
     <!-- PANTALLA DE BIENVENIDA: se muestra tras el fundido final -->
     <div class="welcome" id="welcome">
       <h2>¡Bienvenido a Smart Pizarra!</h2>
-      <p>smartpizarra.com</p>
+      <p class="info" id="welcomeUrl"></p>
     </div>
     </div>
     </div>
@@ -320,6 +352,16 @@
     <script>
       (function () {
         "use strict";
+
+        /**
+         * parse() de los settings de texto: válido si no está vacío.
+         * @param {string|null} raw Texto guardado en localStorage.
+         * @returns {string|null} Texto sin espacios sobrantes, o null si falta o está vacío.
+         */
+        function parseText(raw) {
+          const text = raw === null ? "" : String(raw).trim();
+          return text !== "" ? text : null;
+        }
 
         /* ==================================================================
            CONFIG - valores ajustables de la animación
@@ -368,6 +410,21 @@
                 return percent >= 10 && percent <= 300 ? percent : null;
               },
             },
+            version: {
+              key: "smartpizarra.version",
+              defaultValue: "3.0.14",
+              parse: parseText,
+            },
+            url: {
+              key: "smartpizarra.url",
+              defaultValue: "smartpizarra.com",
+              parse: parseText,
+            },
+            email: {
+              key: "smartpizarra.email",
+              defaultValue: "smartpizarra@gmail.com",
+              parse: parseText,
+            },
           },
 
           ids: {
@@ -379,6 +436,10 @@
             progressText: "progressText",
             loadingSteps: "loadingSteps",
             stepPrefix: "step", // los pasos son step1, step2, ...
+            versionText: "versionText",
+            websiteUrl: "websiteUrl",
+            emailContact: "emailContact",
+            welcomeUrl: "welcomeUrl",
           },
 
           cssClasses: {
@@ -556,6 +617,39 @@
         }
 
         /* ==================================================================
+           CLASE InfoPanel
+           Responsabilidad: mostrar versión, web y email tomados de los
+           settings. Solo escribe en el DOM si el texto cambió.
+           ================================================================== */
+        class InfoPanel {
+          /**
+           * @param {object} elements
+           * @param {HTMLElement} elements.version    #versionText
+           * @param {HTMLElement} elements.url        #websiteUrl
+           * @param {HTMLElement} elements.email      #emailContact
+           * @param {HTMLElement} elements.welcomeUrl #welcomeUrl (pantalla final)
+           */
+          constructor(elements) {
+            this.elements = elements;
+          }
+
+          /** @param {{version:string, url:string, email:string}} values SettingsStore.values */
+          show(values) {
+            this._setText(this.elements.version, "Versión: " + values.version);
+            this._setText(this.elements.url, values.url);
+            this._setText(this.elements.email, values.email);
+            this._setText(this.elements.welcomeUrl, values.url);
+          }
+
+          /** @private */
+          _setText(element, text) {
+            if (element.textContent !== text) {
+              element.textContent = text; // textContent: sin riesgo de XSS
+            }
+          }
+        }
+
+        /* ==================================================================
            CLASE LoadingAnimation
            Responsabilidad: barra de progreso, texto y pasos.
            ================================================================== */
@@ -678,6 +772,12 @@
               requireElement(ids.stage),
               requireElement(ids.scaler),
             );
+            this.info = new InfoPanel({
+              version: requireElement(ids.versionText),
+              url: requireElement(ids.websiteUrl),
+              email: requireElement(ids.emailContact),
+              welcomeUrl: requireElement(ids.welcomeUrl),
+            });
             this.container = requireElement(ids.splashContainer);
             this.welcome = requireElement(ids.welcome);
 
@@ -706,8 +806,9 @@
             this.animation.start(() => this._fadeOutAndShowWelcome());
           }
 
-          /** @private */
+          /** Aplica todos los settings: layout y textos. @private */
           _applyLayout() {
+            this.info.show(this.settings.values);
             this.layout.apply(
               this.settings.values.orientation,
               this.settings.values.scale,
