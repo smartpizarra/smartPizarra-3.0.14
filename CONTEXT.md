@@ -6,7 +6,12 @@ Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras 
 SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción funcional pendiente de completar).
 
 ## Estado actual (2026-11-02)
-- Git rama `main`; último respaldo `afe6bac` (responsive). `updateSettings` aún sin commit.
+- Git rama `main`; último respaldo `5e02f82` (updateSettings). Mensajes a la app + internet aún sin commit.
+- **Mensajes a la app** (`sendToAppInventor`, 4 métodos: AppInventor.setWebViewString → android → androidInterface → postMessage). Se envía un JSON:
+  - al terminar la animación (`action:"loading"`), tras esperar el resultado de internet (máx. 3 s);
+  - tras cada `updateSettings()` (`action:"updateSettings"`, con internet = último resultado conocido, más `ok/applied/rejected/error`).
+  Formato: `{"origin":"loadingPage","action":…,"status":"true","internetStatus":"online|offline","version","url","email","deviceId","orientation","scale"(factor %/100, como example1),"league"(opción),"leagues"(lista de LEAGUE_OPTIONS)}`. Los settings se releen de localStorage justo antes de enviar.
+- **Internet**: clase `InternetChecker` copiada de example1 (5 endpoints DNS/IP con CORS, se valida el contenido). Comprobación al iniciar y al 60 % de la animación. Verificado en el dispositivo online y offline.
 - **API pública `updateSettings(json)`** (global; la app la llama con RunJavaScript/EvaluateJavaScript). Acepta texto JSON u objeto; campos opcionales `version`, `url`, `email`, `orientation`, `scale`, `league` (lista en `CONFIG.editableSettings`; `deviceId` NO es editable). Valida con el `parse` de cada setting, guarda el valor normalizado en localStorage y refresca la pantalla al momento. Devuelve texto JSON `{"ok","applied":[...],"rejected":[...],"error"?}`. Un stub en `<head>` encola las llamadas hechas antes de que arranque la página (`window.__pendingSettings`). Verificado en el dispositivo.
 - **Responsive**: `LayoutManager` mide el tamaño natural de `#scaler` (offsetWidth/Height; `#scaler` sin ancho fijo y `flex-shrink:0`) y lo escala para ocupar `CONFIG.fitRatio` (0.9) del escenario rotado. `smartpizarra.scale` multiplica ese ajuste: 100 % = ocupa el 90 % de la pantalla (>100 % puede salirse). No se usan vw/vh porque la rotación los invertiría. Verificado en el dispositivo con 960x540, 1280x720, 480x320, 540x960 y 360x640 × 0°/90°: siempre cabe.
 - `CONFIG.settings.*.defaultValue` puede ser una función (se llama solo al crear el valor).
