@@ -1,0 +1,508 @@
+<!doctype html>
+<!--
+=====================================================================
+  SMART PIZARRA - ANIMACIÓN DE CARGA (solo animación)
+=====================================================================
+  Extraída de example1.html. Contiene únicamente la parte visual:
+  logo flotante, barra de progreso, texto, 4 pasos, puntos "..." y
+  fundido final hacia la pantalla de bienvenida.
+
+  NO incluye: comprobación de internet, updateData(), rotación/escala
+  ni envío de mensajes a la app (Kodular).
+
+  COMPATIBILIDAD (Android WebView 101 en TV box)
+  - Sin librerías externas ni backdrop-filter (pesado en GPU).
+  - La barra avanza con transform: scaleX (sin recalcular el layout).
+  - El DOM solo se toca cuando cambia el texto o los pasos.
+
+  COMO MODIFICAR
+    Duración, textos o cantidad de pasos => objeto CONFIG.
+    Colores, tamaños o animaciones       => bloque <style>.
+=====================================================================
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Sin zoom: en un WebView la pantalla de carga debe verse siempre igual -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Cargando...</title>
+
+    <style>
+      /* ==============================================================
+           1. BASE: reinicio de estilos y fondo de pantalla completa
+           ============================================================== */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent; /* sin resaltado azul al tocar */
+      }
+
+      /* height:100% y no 100vh: en WebView "vh" puede fallar cuando cambia la barra del sistema */
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #002b4f;
+      }
+
+      /* Centra la tarjeta en la pantalla */
+      body {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-family: "Segoe UI", Roboto, Tahoma, Geneva, Verdana, sans-serif;
+        color: #ffffff;
+        user-select: none; /* evita seleccionar texto por accidente */
+      }
+
+      /* ==============================================================
+           2. TARJETA DE CARGA
+           ============================================================== */
+      .splash-container {
+        text-align: center;
+        max-width: 100%;
+        width: 400px;
+        padding: 0 20px;
+      }
+
+      /* --- Logo con movimiento flotante --- */
+      .logo {
+        width: 120px;
+        height: 120px;
+        margin: 0 auto 30px;
+        border-radius: 20px;
+        background: linear-gradient(45deg, #2196f3, #21cbf3);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 10px 30px rgba(33, 150, 243, 0.4);
+        animation: float 3s ease-in-out infinite;
+        will-change: transform; /* capa propia en GPU: animar no repinta el resto */
+      }
+
+      .logo-icon {
+        font-size: 48px;
+        font-weight: bold;
+      }
+
+      h1 {
+        font-size: 2.5rem;
+        margin-bottom: 5px;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+      }
+
+      /* --- Barra de progreso --- */
+      .loading-container {
+        /* riel gris de la barra */
+        width: 100%;
+        height: 4px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 2px;
+        overflow: hidden;
+        margin-top: 22px;
+        margin-bottom: 20px;
+      }
+
+      /* Ocupa el 100% del riel y el JS la "estira" con scaleX(0..1) */
+      .loading-bar {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #00e5ff, #2979ff);
+        transform: scaleX(0);
+        transform-origin: 0 50%;
+        transition: transform 0.1s linear;
+        will-change: transform;
+      }
+
+      .progress-text {
+        /* texto bajo la barra */
+        font-size: 0.9rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-top: 10px;
+      }
+
+      /* --- Lista de pasos --- */
+      .loading-steps {
+        margin-top: 30px;
+        text-align: left;
+        /* Fondo semitransparente en vez de backdrop-filter (pesado en TV box) */
+        background: rgba(255, 255, 255, 0.12);
+        padding: 20px;
+        border-radius: 10px;
+      }
+
+      .step {
+        /* paso aún no alcanzado */
+        margin: 10px 0;
+        display: flex;
+        align-items: center;
+        opacity: 0.5;
+        transition: opacity 0.3s ease;
+      }
+
+      .step.active {
+        /* paso alcanzado */
+        opacity: 1;
+        color: #00e5ff;
+      }
+
+      .step-check {
+        margin-right: 10px;
+        font-size: 1.2rem;
+      }
+
+      /* --- Puntos "..." del último paso: 3 <span> que parpadean en secuencia
+           (no se anima "content" porque en WebView no es fiable) --- */
+      .dots span {
+        opacity: 0;
+        animation: dotBlink 1.5s linear infinite;
+      }
+      .dots span:nth-child(2) {
+        animation-delay: 0.25s;
+      }
+      .dots span:nth-child(3) {
+        animation-delay: 0.5s;
+      }
+
+      /* Al terminar (clase "done") los puntos se detienen y se ocultan */
+      .done .dots span {
+        animation: none;
+        opacity: 0;
+      }
+
+      /* ==============================================================
+           3. PANTALLA FINAL DE BIENVENIDA (oculta hasta el final)
+           ============================================================== */
+      .welcome {
+        display: none;
+        text-align: center;
+        padding: 20px;
+      }
+      .welcome h2 {
+        margin-bottom: 10px;
+      }
+      .welcome p {
+        color: #00e5ff;
+      }
+
+      /* ==============================================================
+           4. ANIMACIONES (@keyframes)
+           ============================================================== */
+
+      /* Logo: sube y baja 15px */
+      @keyframes float {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0);
+        }
+        50% {
+          transform: translate3d(0, -15px, 0);
+        }
+      }
+
+      /* Puntos: aparecen y desaparecen */
+      @keyframes dotBlink {
+        0%,
+        100% {
+          opacity: 0;
+        }
+        20%,
+        80% {
+          opacity: 1;
+        }
+      }
+
+      /* Salida: la tarjeta se desvanece */
+      @keyframes fadeOut {
+        from {
+          opacity: 1;
+        }
+        to {
+          opacity: 0;
+        }
+      }
+
+      /* Duración debe coincidir con CONFIG.fadeOutMs */
+      .fade-out {
+        animation: fadeOut 0.5s ease forwards;
+      }
+
+      /* Accesibilidad: si el sistema pide menos movimiento, el logo no flota */
+      @media (prefers-reduced-motion: reduce) {
+        .logo {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <!-- TARJETA DE CARGA -->
+    <div class="splash-container" id="splashContainer">
+      <div class="logo">
+        <div class="logo-icon">SP</div>
+      </div>
+      <h1>Smart Pizarra</h1>
+
+      <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
+      <div class="loading-container">
+        <div class="loading-bar" id="loadingBar"></div>
+      </div>
+      <div class="progress-text" id="progressText">Starting system...</div>
+
+      <!-- Pasos: ids consecutivos step1..stepN (ajustar CONFIG.animation.totalSteps) -->
+      <div class="loading-steps" id="loadingSteps">
+        <div class="step active" id="step1">
+          <span class="step-check">&#10003;</span> Loading configuration...
+        </div>
+        <div class="step" id="step2">
+          <span class="step-check">&#10003;</span> Initializing modules...
+        </div>
+        <div class="step" id="step3">
+          <span class="step-check">&#10003;</span> Preparing interface...
+        </div>
+        <div class="step" id="step4">
+          <span class="step-check">&#10003;</span> Loading complete<span
+            class="dots"
+            ><span>.</span><span>.</span><span>.</span></span
+          >
+        </div>
+      </div>
+    </div>
+
+    <!-- PANTALLA DE BIENVENIDA: se muestra tras el fundido final -->
+    <div class="welcome" id="welcome">
+      <h2>¡Bienvenido a Smart Pizarra!</h2>
+      <p>smartpizarra.com</p>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        /* ==================================================================
+           CONFIG - valores ajustables de la animación
+           ================================================================== */
+        const CONFIG = Object.freeze({
+          /** Duración (ms) del desvanecimiento final. Debe coincidir con .fade-out. */
+          fadeOutMs: 500,
+
+          animation: {
+            durationMs: 8000, // duración total de la animación
+            tickMs: 100, // cada cuántos ms se actualiza la barra (la transición CSS suaviza)
+            totalSteps: 4, // cantidad de pasos (#step1 ... #step4)
+            /** Se usa el primer texto cuyo "below" sea mayor al porcentaje actual. */
+            progressTexts: [
+              { below: 25, text: "Starting system..." },
+              { below: 50, text: "Loading modules..." },
+              { below: 75, text: "Preparing interface..." },
+              { below: Infinity, text: "Completing setup..." },
+            ],
+          },
+
+          ids: {
+            splashContainer: "splashContainer",
+            welcome: "welcome",
+            loadingBar: "loadingBar",
+            progressText: "progressText",
+            loadingSteps: "loadingSteps",
+            stepPrefix: "step", // los pasos son step1, step2, ...
+          },
+
+          cssClasses: {
+            active: "active", // paso alcanzado
+            done: "done", // animación terminada (detiene los puntos)
+            fadeOut: "fade-out", // inicia el desvanecimiento
+          },
+        });
+
+        /**
+         * Busca un elemento por id y falla con un mensaje claro si no existe.
+         * @param {string} id
+         * @returns {HTMLElement}
+         */
+        function requireElement(id) {
+          const element = document.getElementById(id);
+          if (!element) {
+            throw new Error(
+              'Loading: no se encontró el elemento HTML con id "' + id + '"',
+            );
+          }
+          return element;
+        }
+
+        /* ==================================================================
+           CLASE LoadingAnimation
+           Responsabilidad: barra de progreso, texto y pasos.
+           ================================================================== */
+        class LoadingAnimation {
+          /**
+           * @param {object} elements
+           * @param {HTMLElement} elements.bar       Barra (#loadingBar).
+           * @param {HTMLElement} elements.text      Texto de progreso (#progressText).
+           * @param {HTMLElement} elements.stepsBox  Caja de pasos (#loadingSteps).
+           * @param {HTMLElement[]} elements.steps   Pasos, en orden.
+           * @param {object} settings   CONFIG.animation.
+           * @param {object} cssClasses CONFIG.cssClasses.
+           */
+          constructor(elements, settings, cssClasses) {
+            this.elements = elements;
+            this.settings = settings;
+            this.cssClasses = cssClasses;
+            this._timer = null;
+            /** Último texto y pasos dibujados: solo se toca el DOM si cambian. */
+            this._lastText = null;
+            this._lastReached = -1;
+          }
+
+          /**
+           * Inicia la animación; al llegar a 100% se detiene y llama a onComplete.
+           * @param {function():void} onComplete
+           */
+          start(onComplete) {
+            if (this._timer) {
+              return;
+            } // ya está corriendo
+
+            const startTime = Date.now();
+
+            this._timer = setInterval(() => {
+              const elapsed = Date.now() - startTime;
+              const percent = Math.min(
+                100,
+                (elapsed / this.settings.durationMs) * 100,
+              );
+
+              this._render(percent);
+
+              if (percent >= 100) {
+                clearInterval(this._timer);
+                this._timer = null;
+                this.elements.stepsBox.classList.add(this.cssClasses.done);
+                onComplete();
+              }
+            }, this.settings.tickMs);
+          }
+
+          /**
+           * Dibuja el estado visual de un porcentaje (0 a 100).
+           * @private
+           */
+          _render(percent) {
+            // transform no recalcula el layout: solo la GPU recompone la barra
+            this.elements.bar.style.transform =
+              "scaleX(" + (percent / 100).toFixed(3) + ")";
+
+            const text = this._textFor(percent);
+            if (text !== this._lastText) {
+              this._lastText = text;
+              this.elements.text.textContent = text;
+            }
+            this._updateSteps(percent);
+          }
+
+          /**
+           * Elige el texto de progreso según el porcentaje.
+           * @private
+           */
+          _textFor(percent) {
+            const texts = this.settings.progressTexts;
+            for (let i = 0; i < texts.length; i++) {
+              if (percent < texts[i].below) {
+                return texts[i].text;
+              }
+            }
+            return texts[texts.length - 1].text;
+          }
+
+          /**
+           * Enciende los pasos alcanzados (con 4: 0%, 25%, 50%, 75%).
+           * Solo actúa cuando cambia la cantidad de pasos alcanzados.
+           * @private
+           */
+          _updateSteps(percent) {
+            const stepSize = 100 / this.settings.totalSteps;
+            const reached = Math.floor(percent / stepSize) + 1;
+            if (reached === this._lastReached) {
+              return;
+            }
+            this._lastReached = reached;
+
+            this.elements.steps.forEach((step, index) => {
+              step.classList.toggle(
+                this.cssClasses.active,
+                index + 1 <= reached,
+              );
+            });
+          }
+        }
+
+        /* ==================================================================
+           CLASE LoadingScreen
+           Responsabilidad: arrancar la animación y, al terminar, hacer el
+           fundido de salida y mostrar la bienvenida.
+           ================================================================== */
+        class LoadingScreen {
+          /** @param {object} config Objeto CONFIG. */
+          constructor(config) {
+            this.config = config;
+            const ids = config.ids;
+
+            this.container = requireElement(ids.splashContainer);
+            this.welcome = requireElement(ids.welcome);
+
+            const steps = [];
+            for (let i = 1; i <= config.animation.totalSteps; i++) {
+              steps.push(requireElement(ids.stepPrefix + i));
+            }
+
+            this.animation = new LoadingAnimation(
+              {
+                bar: requireElement(ids.loadingBar),
+                text: requireElement(ids.progressText),
+                stepsBox: requireElement(ids.loadingSteps),
+                steps: steps,
+              },
+              config.animation,
+              config.cssClasses,
+            );
+          }
+
+          /** Inicia la animación. */
+          start() {
+            this.animation.start(() => this._fadeOutAndShowWelcome());
+          }
+
+          /**
+           * Desvanece la tarjeta y luego muestra la bienvenida.
+           * @private
+           */
+          _fadeOutAndShowWelcome() {
+            this.container.classList.add(this.config.cssClasses.fadeOut);
+
+            setTimeout(() => {
+              this.container.style.display = "none";
+              this.welcome.style.display = "block";
+            }, this.config.fadeOutMs);
+          }
+        }
+
+        /* ARRANQUE: inicia la animación cuando el HTML está listo */
+        function start() {
+          new LoadingScreen(CONFIG).start();
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", start);
+        } else {
+          start();
+        }
+      })();
+    </script>
+  </body>
+</html>
