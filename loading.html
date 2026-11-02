@@ -16,9 +16,13 @@
   la rotación y la escala. Cualquier otra página del mismo origen
   puede leerlos o modificarlos con estas claves (valores en texto):
 
-    clave                       valores               defecto
-    smartpizarra.orientation    0 | 90 | 180 | 270    90
-    smartpizarra.scale          10 a 300 (%)          100
+    clave                                valores              defecto
+    smartpizarra.loading.orientation     0 | 90 | 180 | 270   90
+    smartpizarra.loading.scale           10 a 300 (%)         85
+    smartpizarra.config.orientation      0 | 90 | 180 | 270   90
+    smartpizarra.config.scale            10 a 300 (%)         100
+    (cada pantalla tiene orientación y escala propias: ver PAGES)
+    smartpizarra.version / url / email / deviceId / league
 
   Si otra página los modifica, esta los vuelve a leer al recibir el
   evento "storage", al volver a mostrarse o al cambiar el tamaño.
@@ -417,6 +421,64 @@
         }
 
         /**
+         * Pantallas con orientación y escala PROPIAS, y sus valores por
+         * defecto (los únicos del proyecto: config.html no tiene defaults).
+         * Claves: "smartpizarra.<pantalla>.orientation" y ".scale".
+         * Para agregar una pantalla: añadirla aquí y en PAGES de config.html.
+         */
+        const PAGES = Object.freeze({
+          loading: { orientation: 90, scale: 85 }, // esta página
+          config: { orientation: 90, scale: 100 }, // config.html
+        });
+
+        /**
+         * parse() de orientación: 0, 90, 180 o 270 (360 => 0, -90 => 270).
+         * @param {string|null} raw
+         * @returns {number|null}
+         */
+        function parseOrientation(raw) {
+          let degrees = parseInt(raw, 10);
+          if (isNaN(degrees)) {
+            return null;
+          }
+          degrees = ((degrees % 360) + 360) % 360;
+          return degrees % 90 === 0 ? degrees : null;
+        }
+
+        /**
+         * parse() de escala: entero de 10 a 300 (%).
+         * @param {string|null} raw
+         * @returns {number|null}
+         */
+        function parseScale(raw) {
+          const percent = parseInt(raw, 10);
+          return percent >= 10 && percent <= 300 ? percent : null;
+        }
+
+        /**
+         * Crea las entradas de settings "<pantalla>.orientation" y
+         * "<pantalla>.scale" de cada pantalla de PAGES.
+         * @param {object} pages PAGES
+         * @returns {object} Entradas para CONFIG.settings.
+         */
+        function buildPageSettings(pages) {
+          const settings = {};
+          Object.keys(pages).forEach((page) => {
+            settings[page + ".orientation"] = {
+              key: "smartpizarra." + page + ".orientation",
+              defaultValue: pages[page].orientation,
+              parse: parseOrientation,
+            };
+            settings[page + ".scale"] = {
+              key: "smartpizarra." + page + ".scale",
+              defaultValue: pages[page].scale,
+              parse: parseScale,
+            };
+          });
+          return settings;
+        }
+
+        /**
          * Opciones de ligas: id guardado en "smartpizarra.league" => ligas.
          * Debe ser IGUAL en todas las páginas que lean ese setting.
          * "todos" = cadena vacía (sin filtro).
@@ -454,27 +516,7 @@
            *   defaultValue valor que se crea si no existe o es inválido
            *   parse(raw)   convierte el texto guardado; devuelve null si es inválido
            */
-          settings: {
-            orientation: {
-              key: "smartpizarra.orientation",
-              defaultValue: 90,
-              parse: function (raw) {
-                let degrees = parseInt(raw, 10);
-                if (isNaN(degrees)) {
-                  return null;
-                }
-                degrees = ((degrees % 360) + 360) % 360; // 360 => 0, -90 => 270
-                return degrees % 90 === 0 ? degrees : null;
-              },
-            },
-            scale: {
-              key: "smartpizarra.scale",
-              defaultValue: 85,
-              parse: function (raw) {
-                const percent = parseInt(raw, 10);
-                return percent >= 10 && percent <= 300 ? percent : null;
-              },
-            },
+          settings: Object.assign(buildPageSettings(PAGES), {
             version: {
               key: "smartpizarra.version",
               defaultValue: "3.0.14",
@@ -511,17 +553,22 @@
                   : null;
               },
             },
-          },
+          }),
 
-          /** Settings que puede modificar updateSettings() (deviceId NO: es fijo). */
-          editableSettings: [
-            "version",
-            "url",
-            "email",
-            "orientation",
-            "scale",
-            "league",
-          ],
+          /**
+           * Settings que puede modificar updateSettings() (deviceId NO: es fijo).
+           * Incluye "<pantalla>.orientation" y "<pantalla>.scale" de cada PAGES.
+           */
+          editableSettings: ["version", "url", "email", "league"].concat(
+            Object.keys(PAGES).reduce(
+              (list, page) =>
+                list.concat([page + ".orientation", page + ".scale"]),
+              [],
+            ),
+          ),
+
+          /** Pantalla que es esta página (sus claves de orientación/escala). */
+          thisPage: "loading",
 
           ids: {
             stage: "stage",
@@ -1247,11 +1294,17 @@
               url: v.url,
               email: v.email,
               deviceId: v.deviceId,
-              orientation: v.orientation,
-              scale: v.scale / 100, // factor de zoom, igual que example1: 80 % => 0.8
               league: v.league, // opción guardada (mlb, nba, nflnhl, todos)
               leagues: LEAGUE_OPTIONS[v.league], // ligas de esa opción ("" = todas)
+              // Orientación y escala de CADA pantalla; scale como factor (80 % => 0.8)
+              pages: {},
             };
+            Object.keys(PAGES).forEach((page) => {
+              message.pages[page] = {
+                orientation: v[page + ".orientation"],
+                scale: v[page + ".scale"] / 100,
+              };
+            });
             if (extra) {
               Object.keys(extra).forEach((k) => {
                 message[k] = extra[k];
@@ -1304,8 +1357,28 @@
                 error: "Se esperaba un objeto JSON",
               };
             }
+            // "page" indica de qué pantalla son "orientation" y "scale"
+            // (sin "page" => esta pantalla). Se traducen a "<page>.orientation"/".scale".
+            const page =
+              data.page === undefined ? this.config.thisPage : String(data.page);
+            if (!Object.prototype.hasOwnProperty.call(PAGES, page)) {
+              return {
+                ok: false,
+                applied: [],
+                rejected: ["page"],
+                error: "Pantalla desconocida: " + page,
+              };
+            }
+            const fields = {};
+            Object.keys(data).forEach((name) => {
+              if (name === "orientation" || name === "scale") {
+                fields[page + "." + name] = data[name];
+              } else if (name !== "page") {
+                fields[name] = data[name];
+              }
+            });
             const result = this.settings.update(
-              data,
+              fields,
               this.config.editableSettings,
             );
             if (result.applied.length > 0) {
@@ -1320,11 +1393,10 @@
 
           /** Aplica todos los settings: layout y textos. @private */
           _applyLayout() {
-            this.info.show(this.settings.values);
-            this.layout.apply(
-              this.settings.values.orientation,
-              this.settings.values.scale,
-            );
+            const v = this.settings.values;
+            const page = this.config.thisPage;
+            this.info.show(v);
+            this.layout.apply(v[page + ".orientation"], v[page + ".scale"]);
           }
 
           /**
@@ -1382,7 +1454,11 @@
           /**
            * Función GLOBAL (la app la llama con RunJavaScript / EvaluateJavaScript):
            *   updateSettings('{"version":"3.0.15","url":"smartpizarra.com",
-           *     "email":"a@b.com","orientation":90,"scale":100,"league":"nba"}')
+           *     "email":"a@b.com","league":"nba",
+           *     "page":"config","orientation":90,"scale":100}')
+           * "page" (loading, config) dice de qué pantalla son orientation/scale;
+           * sin "page" se aplican a loading. También se aceptan directamente
+           * "loading.orientation", "config.scale", etc.
            * Todos los campos son opcionales. Devuelve el resultado como texto JSON:
            *   {"ok":true,"applied":["version",...],"rejected":[]}
            * Reemplaza a la provisional del <head>.

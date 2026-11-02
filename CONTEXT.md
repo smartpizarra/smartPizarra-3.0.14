@@ -6,7 +6,9 @@ Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras 
 SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción funcional pendiente de completar).
 
 ## Estado actual (2026-11-02)
-- Git rama `main`; último respaldo `b6f6613` (mensajes a la app + internet en loading.html). `config.html` aún sin commit. `example1.html` y `example2.html` son del usuario (sin commit, referencia).
+- Git rama `main`; último respaldo `a046dde` (antes de separar orientación/escala por pantalla). Ese cambio aún sin commit.
+- **Orientación y escala POR PANTALLA** (2026-11-02): `PAGES` en `loading.html` = `{loading:{orientation:90,scale:85}, config:{orientation:90,scale:100}}` son los ÚNICOS defaults; claves `smartpizarra.<pantalla>.orientation` / `.scale` (ya no existen `smartpizarra.orientation`/`.scale`). `loading.html` crea las de todas las pantallas y se aplica solo las suyas. `updateSettings` acepta `"page"` (sin page => loading; desconocida => error) o claves directas `"config.scale"`. Los JSON a la app llevan `"pages":{"loading":{orientation,scale},"config":{…}}` (scale como factor) en lugar de `orientation`/`scale` sueltos. `config.html` tiene fila "Pantalla a configurar" (Carga/Configuración, `PAGES` propia que debe coincidir); edita la pantalla elegida, se muestra con SU orientación/escala (vista previa en vivo solo al editar Configuración) y "Guardar" escribe todas las pantallas con valor. Verificado en el dispositivo.
+- **Conflicto con la app instalada**: en cada carga de página la app ejecuta `updateSettings('{"version":"3.0.14","url":…,"email":…,"orientation":90,"scale":80,"league":"mlb"}')` (capturado en el dispositivo). Sin `page` pisa `loading.orientation/scale` y `league`, deshaciendo lo guardado en config.html. Hay que quitar esa llamada de los bloques de Kodular o dejar solo version/url/email. `example1.html` y `example2.html` son del usuario (sin commit, referencia).
 - **`config.html`** (creado desde `example2.html`, ES5 var/function): pantalla para MODIFICAR orientación, ligas y escala con control remoto. NO tiene valores por defecto (son de `loading.html`): clave inexistente => "Sin configurar", null en el JSON, y "Guardar" solo escribe lo que tiene valor (escala sin clave parte de 100 solo en pantalla). Muestra versión/web/email/id leídos de localStorage (solo lectura; se quitó `updateData`). Mismas claves y `LEAGUE_OPTIONS` (`todos` en vez de `none`). Responsive como loading (FIT_RATIO 0.9 + revisión cada 1 s). Único JSON al pulsar "Salir": `{"origin":"config","action":"exit","status":"saved|unchanged|error","internetStatus","version","url","email","deviceId","orientation","scale"(factor),"league","leagues"}`; si internet aún no se verificó, espera hasta 3 s. Verificado en el dispositivo (con y sin claves, offline, 4 tamaños).
 - Observado en el dispositivo: la app instalada ejecuta `updateSettings(...)` en la WebView por su cuenta (errores "updateSettings is not defined" en páginas que no la tienen).
 - **Mensajes a la app** (`sendToAppInventor`, 4 métodos: AppInventor.setWebViewString → android → androidInterface → postMessage). Se envía un JSON:
@@ -23,8 +25,8 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
 - **Settings compartidos (localStorage)**: `loading.html` es el dueño/creador. Al iniciar verifica cada clave y, si falta o es inválida, la crea con el valor por defecto; luego aplica rotación (#stage) y escala (#scaler). Reacciona a `storage`, `resize`, `load`, `pageshow`, `visibilitychange` y a una revisión cada `CONFIG.watchMs` (1 s) que cubre el arranque del WebView compilado sin tamaño (0x0) y cambios sin evento `storage`; `LayoutManager.apply` solo toca el DOM si cambió orientación/escala/tamaño.
   | clave | valores | defecto |
   |---|---|---|
-  | `smartpizarra.orientation` | 0/90/180/270 | 90 |
-  | `smartpizarra.scale` | 10–300 (%) | 100 |
+  | `smartpizarra.<pantalla>.orientation` | 0/90/180/270 | `PAGES` (loading 90, config 90) |
+  | `smartpizarra.<pantalla>.scale` | 10–300 (%) | `PAGES` (loading 85, config 100) |
   | `smartpizarra.version` | texto no vacío | 3.0.14 |
   | `smartpizarra.url` | texto no vacío | smartpizarra.com |
   | `smartpizarra.email` | texto no vacío | smartpizarra@gmail.com |

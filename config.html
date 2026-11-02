@@ -41,9 +41,11 @@
     - "Guardar" solo escribe los settings que tienen valor.
 
   DÓNDE SE GUARDA LA CONFIGURACIÓN (localStorage, mismas claves que loading.html)
-    "smartpizarra.orientation"  0, 90, 180 o 270
+    "smartpizarra.<pantalla>.orientation"  0, 90, 180 o 270
+    "smartpizarra.<pantalla>.scale"        10 a 300 (%)
+        <pantalla> = loading (Carga) o config (Configuración): cada pantalla
+        tiene orientación y escala PROPIAS (ver PAGES; defaults en loading.html)
     "smartpizarra.league"       mlb, nba, nflnhl o todos
-    "smartpizarra.scale"        10 a 300 (%)
     "smartpizarra.version" / ".url" / ".email" / ".deviceId"
                                 solo se leen y se muestran (no se editan aquí;
                                 se modifican con updateSettings() de loading.html)
@@ -62,8 +64,9 @@
   1. init(): lee los settings guardados (los que falten quedan "Sin
      configurar"), gira la pantalla, dibuja la UI y pone el foco en la
      orientación actual. No envía nada a la app ni escribe nada.
-  2. El usuario elige otra orientación (se aplica en pantalla), otra
-     opción de ligas (se muestran sus valores debajo) y/o otra escala.
+  2. El usuario elige la pantalla a configurar (Carga / Configuración) y
+     su orientación y escala; la de "Configuración" se ve en vivo en esta
+     misma página. También elige la opción de ligas (común a todas).
   3. "Guardar" => escribe en localStorage los settings con valor (no envía JSON).
   4. "Salir" => descarta lo que no se haya guardado y envía a la app
      el ÚNICO JSON de esta pantalla, con la configuración guardada.
@@ -80,8 +83,9 @@
       {"origin":"config","action":"exit","status":"saved",
        "internetStatus":"online","version":"3.0.14","url":"smartpizarra.com",
        "email":"smartpizarra@gmail.com","deviceId":"SP-XXXX-XXXX-XXXX",
-       "orientation":90,"scale":0.8,"league":"mlb",
-       "leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"}
+       "league":"mlb","leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+       "pages":{"loading":{"orientation":90,"scale":0.85},
+                "config":{"orientation":90,"scale":1}}}
 
     origin          "config" (de dónde proviene la información).
     status          "saved"     => en esta visita se guardó la configuración.
@@ -90,16 +94,16 @@
                                    (localStorage no disponible).
     internetStatus  "online" | "offline" (resultado real de la verificación).
     version, url, email, deviceId   Leídos de localStorage al salir.
-    orientation     Orientación GUARDADA (null si no existe).
-    scale           Escala GUARDADA como factor: % / 100 (null si no existe).
+    pages           Orientación y escala GUARDADAS de cada pantalla; scale
+                    como factor % / 100. null en lo que no existe.
     league          Opción de ligas GUARDADA (mlb, nba, nflnhl, todos; null si no existe).
     leagues         Ligas de esa opción ("" = todas; null si no existe).
     Lo que se cambió sin pulsar "Guardar" se descarta.
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
     getConfig()             Devuelve un texto JSON con la configuración
-                            en pantalla: {"orientation":90,"scale":0.8,
-                            "league":"mlb","leagues":"LIDOM,MLB,..."}
+                            en pantalla: {"pages":{...},"league":"mlb",
+                            "leagues":"LIDOM,MLB,..."}
     saveConfig()            Igual que pulsar "Guardar" (no envía JSON).
     exitConfig()            Igual que pulsar "Salir" (envía el JSON).
     checkConnection()       Fuerza una verificación de internet (no envía
@@ -156,7 +160,8 @@
     Cómo eligen las flechas el siguiente botón
       => findNeighbor() (sección 7).
     Nombre de la clave donde se guarda la orientación
-      => ORIENTATION_KEY (sección 1). Debe ser IGUAL en los 4 archivos.
+      => orientationKey()/scaleKey() y PAGES (sección 1). Deben ser IGUALES
+         a PAGES de loading.html.
     Mensaje que se envía a la app al salir
       => exitConfig().
     Textos que ve el usuario
@@ -174,12 +179,12 @@
     loading.html, connection.html o fingerprint.html en el mismo
     navegador: se verán con la orientación guardada.
     Para ver o borrar el valor guardado (consola):
-      localStorage.getItem("smartpizarra.orientation")
-      localStorage.removeItem("smartpizarra.orientation")
+      localStorage.getItem("smartpizarra.loading.orientation")
+      localStorage.removeItem("smartpizarra.loading.orientation")
       localStorage.getItem("smartpizarra.league")
       localStorage.removeItem("smartpizarra.league")
-      localStorage.getItem("smartpizarra.scale")
-      localStorage.removeItem("smartpizarra.scale")
+      localStorage.getItem("smartpizarra.config.scale")
+      localStorage.removeItem("smartpizarra.config.scale")
 
   ARCHIVOS RELACIONADOS
     loading.html  Crea los settings con sus valores por defecto, los aplica
@@ -525,10 +530,21 @@
             </div>
           </div>
 
-          <!-- ORIENTACIÓN: cada botón lleva su valor en data-orientation.
-             La flecha apunta hacia donde quedará la parte superior del contenido. -->
+          <!-- PANTALLA: elige de qué pantalla se editan orientación y escala.
+             Cada botón lleva en data-page una clave de PAGES (sección 1 del script). -->
           <div class="section">
-            <div class="section-title">Orientación</div>
+            <div class="section-title">Pantalla a configurar</div>
+            <div class="row" id="pageRow">
+              <button class="btn page" data-page="loading">Carga</button>
+              <button class="btn page" data-page="config">Configuración</button>
+            </div>
+          </div>
+
+          <!-- ORIENTACIÓN (de la pantalla elegida): cada botón lleva su valor en
+             data-orientation. La flecha apunta hacia donde quedará la parte
+             superior del contenido. -->
+          <div class="section">
+            <div class="section-title" id="orientTitle">Orientación</div>
             <div class="row" id="orientRow">
               <button class="btn orient" data-orientation="0">
                 <svg
@@ -592,7 +608,7 @@
           <!-- ESCALA: − / + cambian el valor en pasos de SCALE_LIMITS.step.
              La aplica loading.html; esta pantalla solo la guarda e informa. -->
           <div class="section">
-            <div class="section-title">Escala</div>
+            <div class="section-title" id="scaleTitle">Escala</div>
             <div class="row" id="scaleRow">
               <button
                 class="btn scale-btn"
@@ -684,13 +700,28 @@
         }
 
         /**
+         * Pantallas con orientación y escala PROPIAS (clave => texto del botón).
+         * Deben ser IGUALES a PAGES de loading.html, que crea sus claves con
+         * los valores por defecto: "smartpizarra.<pantalla>.orientation/.scale".
+         * Para agregar una: añadirla aquí, en loading.html y un botón .page en el HTML.
+         */
+        var PAGES = { loading: "Carga", config: "Configuración" };
+
+        /** Esta pantalla: se muestra con SU orientación y escala. */
+        var THIS_PAGE = "config";
+
+        /**
          * Claves de localStorage. Deben ser IGUALES a CONFIG.settings de
          * loading.html (que es quien las crea con sus valores por defecto).
          * Esta página NO tiene valores por defecto: solo lee y modifica.
          */
-        var ORIENTATION_KEY = "smartpizarra.orientation";
+        function orientationKey(page) {
+          return "smartpizarra." + page + ".orientation";
+        }
+        function scaleKey(page) {
+          return "smartpizarra." + page + ".scale";
+        }
         var LEAGUE_KEY = "smartpizarra.league";
-        var SCALE_KEY = "smartpizarra.scale";
         /** Claves que solo se leen y se muestran (se editan desde loading.html). */
         var INFO_KEYS = {
           version: "smartpizarra.version",
@@ -746,18 +777,41 @@
 
         /** Configuración guardada (la que se informa al salir). Se lee de
             localStorage en init(); null = la clave no existe (sin defecto). */
-        var saved = {
-          orientation: null,
-          league: null,
-          scale: null,
-        };
+        var saved = { league: null, pages: emptyPages() };
 
         /** Configuración en pantalla (la que se está editando). */
-        var current = {
-          orientation: saved.orientation,
-          league: saved.league,
-          scale: saved.scale,
-        };
+        var current = { league: null, pages: emptyPages() };
+
+        /** Pantalla cuya orientación y escala se están editando (clave de PAGES). */
+        var editingPage = Object.keys(PAGES)[0];
+
+        /**
+         * @returns {object} {<pantalla>: {orientation:null, scale:null}} para cada PAGES.
+         */
+        function emptyPages() {
+          var pages = {};
+          for (var page in PAGES) {
+            if (Object.prototype.hasOwnProperty.call(PAGES, page)) {
+              pages[page] = { orientation: null, scale: null };
+            }
+          }
+          return pages;
+        }
+
+        /**
+         * Copia la configuración de una pantalla a otra (from => to).
+         * @param {{league:?string, pages:object}} from
+         * @param {{league:?string, pages:object}} to
+         */
+        function copyConfig(from, to) {
+          to.league = from.league;
+          for (var page in from.pages) {
+            if (Object.prototype.hasOwnProperty.call(from.pages, page)) {
+              to.pages[page].orientation = from.pages[page].orientation;
+              to.pages[page].scale = from.pages[page].scale;
+            }
+          }
+        }
 
         /** true justo después de guardar (para mostrar "Configuración guardada"). */
         var justSaved = false;
@@ -856,22 +910,24 @@
           scaler: null, // elemento #scaler
           card: null, // tarjeta de configuración (para medir su tamaño)
           orientation: 0, // grados aplicados ahora
-          _lastState: "", // "orientación|anchoxalto|tarjeta" aplicado por última vez
+          scale: 100, // escala (%) aplicada ahora
+          _lastState: "", // "orientación|escala|anchoxalto|tarjeta" aplicado por última vez
 
           /**
-           * Aplica la orientación y vuelve a aplicarla si la pantalla
+           * Aplica orientación y escala, y las vuelve a aplicar si la pantalla
            * cambia de tamaño (eventos + revisión cada WATCH_MS).
-           * @param {number|null} orientation Grados iniciales (null => 0, solo
-           *        para mostrar: no se guarda nada).
+           * @param {number|null} orientation Grados iniciales (null => 0).
+           * @param {number|null} scale       Escala (%) inicial (null => 100).
+           *        Los null son solo para mostrar: no se guarda nada.
            */
-          init: function (orientation) {
+          init: function (orientation, scale) {
             var self = this;
             this.stage = document.getElementById("stage");
             this.scaler = document.getElementById("scaler");
             this.card = document.getElementById("configContainer");
-            this.apply(orientation);
+            this.apply(orientation, scale);
             var reapply = function () {
-              self.apply(self.orientation);
+              self.apply(self.orientation, self.scale);
             };
             window.addEventListener("resize", reapply);
             window.addEventListener("orientationchange", reapply);
@@ -886,9 +942,11 @@
            * pequeñas). Solo toca el DOM si cambió la orientación, el tamaño
            * de la ventana o el de la tarjeta. Con la ventana 0x0 no aplica.
            * @param {number|null} orientation 0, 90, 180 o 270 (null => 0).
+           * @param {number|null} scale       % sobre el ajuste (null => 100).
            */
-          apply: function (orientation) {
+          apply: function (orientation, scale) {
             this.orientation = orientation === null ? 0 : orientation;
+            this.scale = scale === null || scale === undefined ? 100 : scale;
             orientation = this.orientation;
 
             var width =
@@ -897,7 +955,7 @@
               window.innerHeight || document.documentElement.clientHeight;
             if (!width || !height) return;
             var state =
-              orientation + "|" + width + "x" + height + "|" +
+              orientation + "|" + this.scale + "|" + width + "x" + height + "|" +
               this.card.offsetWidth + "x" + this.card.offsetHeight;
             if (state === this._lastState) return;
             this._lastState = state;
@@ -930,9 +988,19 @@
               (stageWidth * FIT_RATIO) / this.card.offsetWidth,
               (stageHeight * FIT_RATIO) / this.card.offsetHeight,
             );
-            this.scaler.style.transform = "scale(" + fit.toFixed(4) + ")";
+            // Igual que loading.html: la escala multiplica el ajuste (100 % = FIT_RATIO)
+            this.scaler.style.transform =
+              "scale(" + ((fit * this.scale) / 100).toFixed(4) + ")";
           },
         };
+
+        /** Aplica en pantalla la orientación y escala EN EDICIÓN de esta pantalla (vista previa). */
+        function applyOwnLayout() {
+          layoutManager.apply(
+            current.pages[THIS_PAGE].orientation,
+            current.pages[THIS_PAGE].scale,
+          );
+        }
 
         /* ==================================================================
            5. LÓGICA DE CONFIGURACIÓN
@@ -954,28 +1022,17 @@
         }
 
         /**
-         * Lee la orientación guardada en localStorage.
-         * @returns {number|null} Grados guardados, o null si no hay ninguno
-         *          (o si el WebView no permite localStorage).
+         * Lee un valor de localStorage.
+         * @param {string} key
+         * @returns {string|null} null si no existe o el WebView no permite localStorage.
          */
-        function readSavedOrientation() {
+        function readStorage(key) {
           try {
-            return normalizeOrientation(
-              window.localStorage.getItem(ORIENTATION_KEY),
-            );
+            return window.localStorage.getItem(key);
           } catch (e) {
             console.log("No se pudo leer localStorage:", e);
             return null;
           }
-        }
-
-        /**
-         * Guarda la orientación en localStorage (la leen las demás pantallas).
-         * @param {number} degrees
-         * @returns {boolean} true si se guardó.
-         */
-        function writeSavedOrientation(degrees) {
-          return writeStorage(ORIENTATION_KEY, String(degrees));
         }
 
         /**
@@ -1034,12 +1091,7 @@
          *          (o si el WebView no permite localStorage).
          */
         function readSavedLeague() {
-          try {
-            return normalizeLeague(window.localStorage.getItem(LEAGUE_KEY));
-          } catch (e) {
-            console.log("No se pudo leer localStorage:", e);
-            return null;
-          }
+          return normalizeLeague(readStorage(LEAGUE_KEY));
         }
 
         /**
@@ -1059,26 +1111,44 @@
         }
 
         /**
-         * Lee la escala guardada en localStorage.
-         * @returns {number|null} Porcentaje guardado, o null si no hay ninguno
-         *          (o si el WebView no permite localStorage).
+         * Lee la orientación y la escala guardadas de cada pantalla.
+         * @returns {object} {<pantalla>: {orientation, scale}}; null en las que no existen.
          */
-        function readSavedScale() {
-          try {
-            return normalizeScale(window.localStorage.getItem(SCALE_KEY));
-          } catch (e) {
-            console.log("No se pudo leer localStorage:", e);
-            return null;
+        function readSavedPages() {
+          var pages = emptyPages();
+          for (var page in pages) {
+            if (!Object.prototype.hasOwnProperty.call(pages, page)) continue;
+            pages[page].orientation = normalizeOrientation(
+              readStorage(orientationKey(page)),
+            );
+            pages[page].scale = normalizeScale(readStorage(scaleKey(page)));
           }
+          return pages;
         }
 
         /** @returns {boolean} true si lo que hay en pantalla difiere de lo guardado. */
         function isDirty() {
-          return (
-            current.orientation !== saved.orientation ||
-            current.league !== saved.league ||
-            current.scale !== saved.scale
-          );
+          if (current.league !== saved.league) return true;
+          for (var page in current.pages) {
+            if (!Object.prototype.hasOwnProperty.call(current.pages, page)) continue;
+            if (
+              current.pages[page].orientation !== saved.pages[page].orientation ||
+              current.pages[page].scale !== saved.pages[page].scale
+            )
+              return true;
+          }
+          return false;
+        }
+
+        /**
+         * Elige la pantalla cuya orientación y escala se editan. No envía nada.
+         * @param {string} page Clave de PAGES.
+         */
+        function setEditingPage(page) {
+          if (!Object.prototype.hasOwnProperty.call(PAGES, page)) return;
+          if (page === editingPage) return;
+          editingPage = page;
+          render();
         }
 
         /**
@@ -1087,17 +1157,18 @@
          * @param {number} delta Cuánto sumar (SCALE_LIMITS.step o -SCALE_LIMITS.step).
          */
         function changeScale(delta) {
+          var target = current.pages[editingPage];
           // Si la clave no existe se parte de SCALE_START (no se guarda hasta "Guardar")
-          var base = current.scale === null ? SCALE_START : current.scale;
+          var base = target.scale === null ? SCALE_START : target.scale;
           var scale = Math.min(
             SCALE_LIMITS.max,
             Math.max(SCALE_LIMITS.min, base + delta),
           );
-          if (scale === current.scale) return;
-          current.scale = scale;
+          if (scale === target.scale) return;
+          target.scale = scale;
           justSaved = false;
           saveError = false;
-          render();
+          render(); // si se edita esta pantalla, render() aplica la vista previa
         }
 
         /**
@@ -1114,39 +1185,42 @@
         }
 
         /**
-         * Cambia la orientación en pantalla (gira la página en vivo).
-         * No envía nada a la app.
+         * Cambia la orientación de la pantalla en edición. Si es esta misma
+         * pantalla, la página gira en vivo (vista previa). No envía nada.
          * @param {*} value Grados.
          */
         function setOrientation(value) {
           var degrees = normalizeOrientation(value);
-          if (degrees === null || degrees === current.orientation) return;
-          current.orientation = degrees;
+          var target = current.pages[editingPage];
+          if (degrees === null || degrees === target.orientation) return;
+          target.orientation = degrees;
           justSaved = false;
           saveError = false;
-          layoutManager.apply(degrees);
-          render();
+          render(); // render() aplica la vista previa de esta pantalla
         }
 
         /**
-         * "Guardar": escribe la orientación, la opción de ligas y la escala en
-         * localStorage (las leen las demás pantallas). Solo escribe los que
-         * tienen valor: un setting que no existe y que el usuario no eligió
-         * se deja sin crear (los valores por defecto son cosa de loading.html).
+         * "Guardar": escribe la opción de ligas y la orientación/escala de
+         * TODAS las pantallas en localStorage (las leen las demás páginas).
+         * Solo escribe los que tienen valor: un setting que no existe y que el
+         * usuario no eligió se deja sin crear (los valores por defecto son
+         * cosa de loading.html).
          * No envía nada a la app: el resultado se informa al pulsar "Salir".
          */
         function saveConfig() {
           var stored =
-            (current.orientation === null ||
-              writeSavedOrientation(current.orientation)) &&
-            (current.league === null ||
-              writeStorage(LEAGUE_KEY, current.league)) &&
-            (current.scale === null ||
-              writeStorage(SCALE_KEY, String(current.scale)));
+            current.league === null || writeStorage(LEAGUE_KEY, current.league);
+          for (var page in current.pages) {
+            if (!stored) break;
+            if (!Object.prototype.hasOwnProperty.call(current.pages, page)) continue;
+            var p = current.pages[page];
+            stored =
+              (p.orientation === null ||
+                writeStorage(orientationKey(page), String(p.orientation))) &&
+              (p.scale === null || writeStorage(scaleKey(page), String(p.scale)));
+          }
           if (stored) {
-            saved.orientation = current.orientation;
-            saved.league = current.league;
-            saved.scale = current.scale;
+            copyConfig(current, saved);
             justSaved = true;
             saveError = false;
             savedThisSession = true;
@@ -1163,8 +1237,8 @@
          *   status "saved"     => en esta visita se guardó la configuración.
          *   status "unchanged" => no se guardó nada en esta visita.
          *   status "error"     => el último intento de guardar falló.
-         *   orientation       => orientación guardada (número o null).
-         *   scale             => escala guardada como factor (0.8, 1, 1.2... o null).
+         *   pages             => orientación y escala guardadas de cada pantalla
+         *                        (escala como factor 0.8, 1...; null si no existe).
          *   league / leagues  => opción guardada y sus ligas ("" = todas; null si no existe).
          * Si internet aún no se verificó, espera el resultado (máx. EXIT_WAIT_MS)
          * para que "internetStatus" sea real. La app debe cerrar esta pantalla al recibirlo.
@@ -1197,19 +1271,33 @@
               : "unchanged";
           if (isDirty()) {
             // Descartar cambios sin guardar: volver a lo guardado
-            current.orientation = saved.orientation;
-            current.league = saved.league;
-            current.scale = saved.scale;
-            layoutManager.apply(current.orientation);
+            copyConfig(saved, current);
             render();
           }
           send("exit", status, {
-            orientation: saved.orientation,
-            scale: toZoom(saved.scale),
             league: saved.league,
             leagues:
               saved.league === null ? null : LEAGUE_OPTIONS[saved.league].values,
+            pages: pagesForJson(saved.pages),
           });
+        }
+
+        /**
+         * Orientación y escala de cada pantalla para los JSON (escala como factor).
+         * @param {object} pages {<pantalla>: {orientation, scale}}
+         * @returns {object} {"loading":{"orientation":90,"scale":0.85}, ...}; null si no existe.
+         */
+        function pagesForJson(pages) {
+          var out = {};
+          for (var page in pages) {
+            if (Object.prototype.hasOwnProperty.call(pages, page)) {
+              out[page] = {
+                orientation: pages[page].orientation,
+                scale: toZoom(pages[page].scale),
+              };
+            }
+          }
+          return out;
         }
 
         /* ==================================================================
@@ -1219,8 +1307,19 @@
         /** Actualiza los botones de orientación y de ligas, y el mensaje de estado. */
         function render() {
           var i;
+          var target = current.pages[editingPage]; // pantalla en edición
 
-          // Botón de la orientación elegida
+          // Pantalla en edición y títulos de sus secciones
+          for (i = 0; i < el.pageButtons.length; i++) {
+            el.pageButtons[i].classList.toggle(
+              "selected",
+              el.pageButtons[i].getAttribute("data-page") === editingPage,
+            );
+          }
+          el.orientTitle.textContent = "Orientación · " + PAGES[editingPage];
+          el.scaleTitle.textContent = "Escala · " + PAGES[editingPage];
+
+          // Botón de la orientación elegida (de la pantalla en edición)
           for (i = 0; i < el.orientButtons.length; i++) {
             var o = parseInt(
               el.orientButtons[i].getAttribute("data-orientation"),
@@ -1228,7 +1327,7 @@
             );
             el.orientButtons[i].classList.toggle(
               "selected",
-              o === current.orientation,
+              o === target.orientation,
             );
           }
 
@@ -1257,15 +1356,18 @@
             );
           }
 
-          // Escala elegida
-          if (current.scale === null) {
+          // Escala elegida (de la pantalla en edición)
+          if (target.scale === null) {
             el.scaleValue.textContent = "—";
             el.scaleNote.textContent = "Sin configurar";
           } else {
-            el.scaleValue.textContent = current.scale + "%";
+            el.scaleValue.textContent = target.scale + "%";
             el.scaleNote.textContent =
-              "Tamaño de la pantalla de carga · se envía como " +
-              toZoom(current.scale);
+              "100% = ocupa el 90% de la pantalla · se envía como " +
+              toZoom(target.scale);
+          }
+          if (target.orientation === null) {
+            el.orientTitle.textContent += " (sin configurar)";
           }
 
           // Mensaje de estado
@@ -1283,8 +1385,8 @@
             el.status.textContent = "";
           }
 
-          // El contenido pudo cambiar de tamaño: reajustar a la pantalla
-          if (layoutManager.stage) layoutManager.apply(current.orientation);
+          // Vista previa de esta pantalla y reajuste (el contenido pudo cambiar de tamaño)
+          if (layoutManager.stage) applyOwnLayout();
         }
 
         /** Muestra versión, web, email e id leídos de localStorage (solo lectura). */
@@ -1433,7 +1535,9 @@
         /** Pone el foco en el botón de la orientación actual (punto de partida). */
         function focusDefault() {
           // Sin orientación guardada (null) => primer botón
-          var index = ORIENTATIONS.indexOf(current.orientation);
+          var index = ORIENTATIONS.indexOf(
+            current.pages[editingPage].orientation,
+          );
           el.orientButtons[index === -1 ? 0 : index].focus();
         }
 
@@ -1725,12 +1829,12 @@
         // su updateSettings()).
 
         /** @returns {string} JSON con la configuración en pantalla:
-            {"orientation":..,"scale":..,"league":"mlb","leagues":"LIDOM,MLB,..."}
+            {"pages":{"loading":{"orientation":..,"scale":..},...},
+             "league":"mlb","leagues":"LIDOM,MLB,..."}
             (scale = factor; null en lo que no existe) */
         window.getConfig = function () {
           return JSON.stringify({
-            orientation: current.orientation,
-            scale: toZoom(current.scale),
+            pages: pagesForJson(current.pages),
             league: current.league,
             leagues:
               current.league === null
@@ -1760,6 +1864,11 @@
 
         /** Arranca la pantalla. Se ejecuta una sola vez, cuando el HTML está listo. */
         function init() {
+          el.pageButtons = Array.prototype.slice.call(
+            document.querySelectorAll(".page"),
+          );
+          el.orientTitle = document.getElementById("orientTitle");
+          el.scaleTitle = document.getElementById("scaleTitle");
           el.orientButtons = Array.prototype.slice.call(
             document.querySelectorAll(".orient"),
           );
@@ -1783,7 +1892,7 @@
           el.exitBtn = document.getElementById("exitBtn");
 
           // Botones a los que se llega con las flechas
-          el.focusables = el.orientButtons.concat(el.leagueButtons, [
+          el.focusables = el.pageButtons.concat(el.orientButtons, el.leagueButtons, [
             el.scaleDownBtn,
             el.scaleUpBtn,
             el.saveBtn,
@@ -1791,6 +1900,11 @@
           ]);
 
           // Clics / toques / OK del control remoto
+          el.pageButtons.forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              setEditingPage(btn.getAttribute("data-page"));
+            });
+          });
           el.orientButtons.forEach(function (btn) {
             btn.addEventListener("click", function () {
               setOrientation(btn.getAttribute("data-orientation"));
@@ -1827,26 +1941,18 @@
               focusDefault();
           });
 
-          // Orientación, ligas y escala guardadas. Si no existen quedan en null
-          // ("Sin configurar"): esta página no crea valores por defecto.
-          var stored = readSavedOrientation();
-          if (stored !== null) {
-            saved.orientation = stored;
-            current.orientation = stored;
-          }
-          var storedLeague = readSavedLeague();
-          if (storedLeague !== null) {
-            saved.league = storedLeague;
-            current.league = storedLeague;
-          }
-          var storedScale = readSavedScale();
-          if (storedScale !== null) {
-            saved.scale = storedScale;
-            current.scale = storedScale;
-          }
+          // Ligas y orientación/escala de cada pantalla. Si no existen quedan en
+          // null ("Sin configurar"): esta página no crea valores por defecto.
+          saved.league = readSavedLeague();
+          saved.pages = readSavedPages();
+          copyConfig(saved, current);
 
           renderInfo();
-          layoutManager.init(current.orientation);
+          // Esta pantalla se muestra con SU orientación y escala
+          layoutManager.init(
+            current.pages[THIS_PAGE].orientation,
+            current.pages[THIS_PAGE].scale,
+          );
           render();
           renderNet();
 
