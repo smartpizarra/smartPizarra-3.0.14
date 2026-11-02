@@ -6,7 +6,9 @@ Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras 
 SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción funcional pendiente de completar).
 
 ## Estado actual (2026-11-02)
-- Git rama `main`; último respaldo `5e02f82` (updateSettings). Mensajes a la app + internet aún sin commit.
+- Git rama `main`; último respaldo `b6f6613` (mensajes a la app + internet en loading.html). `config.html` aún sin commit. `example1.html` y `example2.html` son del usuario (sin commit, referencia).
+- **`config.html`** (creado desde `example2.html`, ES5 var/function): pantalla para MODIFICAR orientación, ligas y escala con control remoto. NO tiene valores por defecto (son de `loading.html`): clave inexistente => "Sin configurar", null en el JSON, y "Guardar" solo escribe lo que tiene valor (escala sin clave parte de 100 solo en pantalla). Muestra versión/web/email/id leídos de localStorage (solo lectura; se quitó `updateData`). Mismas claves y `LEAGUE_OPTIONS` (`todos` en vez de `none`). Responsive como loading (FIT_RATIO 0.9 + revisión cada 1 s). Único JSON al pulsar "Salir": `{"origin":"config","action":"exit","status":"saved|unchanged|error","internetStatus","version","url","email","deviceId","orientation","scale"(factor),"league","leagues"}`; si internet aún no se verificó, espera hasta 3 s. Verificado en el dispositivo (con y sin claves, offline, 4 tamaños).
+- Observado en el dispositivo: la app instalada ejecuta `updateSettings(...)` en la WebView por su cuenta (errores "updateSettings is not defined" en páginas que no la tienen).
 - **Mensajes a la app** (`sendToAppInventor`, 4 métodos: AppInventor.setWebViewString → android → androidInterface → postMessage). Se envía un JSON:
   - al terminar la animación (`action:"loading"`), tras esperar el resultado de internet (máx. 3 s);
   - tras cada `updateSettings()` (`action:"updateSettings"`, con internet = último resultado conocido, más `ok/applied/rejected/error`).
