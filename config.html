@@ -45,6 +45,8 @@
     "smartpizarra.<pantalla>.scale"        10 a 300 (%)
         <pantalla> = loading (Carga) o config (Configuración): cada pantalla
         tiene escala PROPIA (ver PAGES; defaults en loading.html)
+    "smartpizarra.language"                es o en (GLOBAL: idioma de todas las pantallas;
+                                           ver I18N, debe ser IGUAL a I18N de loading.html)
     "smartpizarra.league"       mlb, nba, nflnhl o todos
     "smartpizarra.version" / ".url" / ".email" / ".deviceId"
                                 solo se leen y se muestran (no se editan aquí;
@@ -88,9 +90,11 @@
        "internetStatus":"online","version":"3.0.14","url":"smartpizarra.com",
        "email":"smartpizarra@gmail.com","deviceId":"SP-XXXX-XXXX-XXXX",
        "league":"mlb","leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
-       "orientation":90,"pages":{"loading":{"scale":0.85},"config":{"scale":1}}}
+       "orientation":90,"language":"es",
+       "pages":{"loading":{"scale":0.85},"config":{"scale":1}}}
 
     origin          "config" (de dónde proviene la información).
+    language        Idioma GLOBAL guardado (es, en; null si no existe).
     status          "saved"     => en esta visita se guardó la configuración.
                     "unchanged" => no se guardó nada en esta visita.
                     "error"     => el último intento de guardar falló
@@ -167,8 +171,12 @@
          a PAGES de loading.html.
     Mensaje que se envía a la app al salir
       => exitConfig().
-    Textos que ve el usuario
-      => HTML y la función render().
+    Textos que ve el usuario / idiomas
+      => I18N (sección 1): un diccionario por idioma. Los textos fijos del
+         HTML llevan data-i18n="clave" (y data-i18n-aria para aria-label);
+         los dinámicos se piden con t("clave") en render().
+         Para agregar un idioma: añadirlo a I18N aquí y en loading.html, y
+         un botón .lang en el HTML.
     Colores, tamaños o estilo del foco
       => bloque <style> (cada sección está numerada y comentada).
 
@@ -518,7 +526,7 @@
           <div class="header">
             <div class="logo">SP</div>
             <div class="header-text">
-              <h1>Configuración de pantalla</h1>
+              <h1 data-i18n="heading">Configuración de pantalla</h1>
               <!-- Los llena renderInfo() desde localStorage; vacíos no se muestran -->
               <div class="app-info">
                 <span id="versionText"></span>
@@ -547,7 +555,7 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                0°<span class="orient-label">Normal</span>
+                0°<span class="orient-label" data-i18n="orient.0">Normal</span>
               </button>
               <button class="btn orient" data-orientation="90">
                 <svg
@@ -557,7 +565,7 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                90°<span class="orient-label">Derecha</span>
+                90°<span class="orient-label" data-i18n="orient.90">Derecha</span>
               </button>
               <button class="btn orient" data-orientation="180">
                 <svg
@@ -567,7 +575,7 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                180°<span class="orient-label">Invertida</span>
+                180°<span class="orient-label" data-i18n="orient.180">Invertida</span>
               </button>
               <button class="btn orient" data-orientation="270">
                 <svg
@@ -577,22 +585,35 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                270°<span class="orient-label">Izquierda</span>
+                270°<span class="orient-label" data-i18n="orient.270">Izquierda</span>
               </button>
+            </div>
+          </div>
+
+          <!-- IDIOMA (GLOBAL, todas las pantallas): cada botón lleva en data-language
+             una clave de I18N (sección 1 del script). Su texto es el nombre del
+             idioma en ese idioma y no se traduce. -->
+          <div class="section">
+            <div class="section-title" id="langTitle">Idioma</div>
+            <div class="row" id="langRow">
+              <button class="btn lang" data-language="es">Español</button>
+              <button class="btn lang" data-language="en">English</button>
             </div>
           </div>
 
           <!-- LIGAS (selector): cada botón lleva en data-league la clave de una
              opción de LEAGUE_OPTIONS (sección 1 del script), donde están sus valores. -->
           <div class="section">
-            <div class="section-title">Ligas</div>
+            <div class="section-title" data-i18n="league.title">Ligas</div>
             <div class="row" id="leagueRow">
               <button class="btn league" data-league="mlb">MLB</button>
               <button class="btn league" data-league="nba">NBA</button>
               <button class="btn league" data-league="nflnhl">
                 NFL &amp; NHL
               </button>
-              <button class="btn league" data-league="todos">TODOS</button>
+              <button class="btn league" data-league="todos" data-i18n="league.all">
+                TODOS
+              </button>
             </div>
             <!-- Valores de la opción elegida (los escribe render) -->
             <div class="league-values" id="leagueValues"></div>
@@ -601,10 +622,16 @@
           <!-- PANTALLA: elige de qué pantalla se edita la escala (la orientación es global).
              Cada botón lleva en data-page una clave de PAGES (sección 1 del script). -->
           <div class="section">
-            <div class="section-title">Pantalla a configurar</div>
+            <div class="section-title" data-i18n="page.title">
+              Pantalla a configurar
+            </div>
             <div class="row" id="pageRow">
-              <button class="btn page" data-page="loading">Carga</button>
-              <button class="btn page" data-page="config">Configuración</button>
+              <button class="btn page" data-page="loading" data-i18n="page.loading">
+                Carga
+              </button>
+              <button class="btn page" data-page="config" data-i18n="page.config">
+                Configuración
+              </button>
             </div>
           </div>
 
@@ -617,6 +644,7 @@
                 class="btn scale-btn"
                 id="scaleDownBtn"
                 aria-label="Reducir escala"
+                data-i18n-aria="scale.down"
               >
                 −
               </button>
@@ -625,6 +653,7 @@
                 class="btn scale-btn"
                 id="scaleUpBtn"
                 aria-label="Aumentar escala"
+                data-i18n-aria="scale.up"
               >
                 +
               </button>
@@ -635,14 +664,16 @@
 
           <!-- ACCIONES -->
           <div class="row actions" id="actionRow">
-            <button class="btn primary" id="saveBtn">Guardar</button>
+            <button class="btn primary" id="saveBtn" data-i18n="save">
+              Guardar
+            </button>
             <!-- ÚNICO botón que envía un JSON a la app (exitConfig) -->
-            <button class="btn exit" id="exitBtn">Salir</button>
+            <button class="btn exit" id="exitBtn" data-i18n="exit">Salir</button>
           </div>
 
           <!-- Mensaje de estado (lo escribe render) -->
           <div class="status" id="statusText"></div>
-          <div class="hint">
+          <div class="hint" data-i18n="hint">
             Flechas: moverse &nbsp;·&nbsp; OK / Enter: elegir &nbsp;·&nbsp; 1-4:
             orientación &nbsp;·&nbsp; Esc: ir a Salir
           </div>
@@ -703,12 +734,95 @@
         }
 
         /**
-         * Pantallas con escala PROPIA (clave => texto del botón). Deben ser
-         * IGUALES a PAGES de loading.html, que crea sus claves con los valores
-         * por defecto: "smartpizarra.<pantalla>.scale". La orientación es global.
+         * Pantallas con escala PROPIA (clave => clave de I18N con su nombre).
+         * Deben ser IGUALES a PAGES de loading.html, que crea sus claves con los
+         * valores por defecto: "smartpizarra.<pantalla>.scale". La orientación
+         * y el idioma son globales.
          * Para agregar una: añadirla aquí, en loading.html y un botón .page en el HTML.
          */
-        var PAGES = { loading: "Carga", config: "Configuración" };
+        var PAGES = { loading: "page.loading", config: "page.config" };
+
+        /**
+         * Textos de la pantalla por idioma (GLOBAL: clave "smartpizarra.language").
+         * Las claves de idioma (es, en) deben ser IGUALES a I18N de loading.html,
+         * que crea el setting con su valor por defecto.
+         * Para agregar un idioma: un diccionario aquí con TODAS las claves, otro
+         * en loading.html y un botón .lang en el HTML.
+         */
+        var I18N = {
+          es: {
+            title: "Configuración - Smart Pizarra",
+            heading: "Configuración de pantalla",
+            "net.checking": "Verificando…",
+            "net.online": "Con internet",
+            "net.offline": "Sin internet",
+            "orient.title": "Orientación · todas las pantallas",
+            "orient.0": "Normal",
+            "orient.90": "Derecha",
+            "orient.180": "Invertida",
+            "orient.270": "Izquierda",
+            "lang.title": "Idioma · todas las pantallas",
+            "league.title": "Ligas",
+            "league.all": "TODOS",
+            "league.allValues": "todas las ligas",
+            "page.title": "Pantalla a configurar",
+            "page.loading": "Carga",
+            "page.config": "Configuración",
+            "scale.title": "Escala",
+            "scale.down": "Reducir escala",
+            "scale.up": "Aumentar escala",
+            "scale.note": "100% = ocupa el 90% de la pantalla · se envía como ",
+            unset: "Sin configurar",
+            unsetSuffix: " (sin configurar)",
+            save: "Guardar",
+            exit: "Salir",
+            "status.error": "No se pudo guardar la configuración",
+            "status.dirty": "Cambios sin guardar",
+            "status.saved": "Configuración guardada ✓",
+            "status.checking": "Verificando internet…",
+            hint: "Flechas: moverse · OK / Enter: elegir · 1-4: orientación · Esc: ir a Salir",
+            version: "Versión: ",
+            id: "Id: ",
+          },
+          en: {
+            title: "Settings - Smart Pizarra",
+            heading: "Display settings",
+            "net.checking": "Checking…",
+            "net.online": "Online",
+            "net.offline": "Offline",
+            "orient.title": "Orientation · all screens",
+            "orient.0": "Normal",
+            "orient.90": "Right",
+            "orient.180": "Inverted",
+            "orient.270": "Left",
+            "lang.title": "Language · all screens",
+            "league.title": "Leagues",
+            "league.all": "ALL",
+            "league.allValues": "all leagues",
+            "page.title": "Screen to configure",
+            "page.loading": "Loading",
+            "page.config": "Settings",
+            "scale.title": "Scale",
+            "scale.down": "Decrease scale",
+            "scale.up": "Increase scale",
+            "scale.note": "100% = fills 90% of the screen · sent as ",
+            unset: "Not set",
+            unsetSuffix: " (not set)",
+            save: "Save",
+            exit: "Exit",
+            "status.error": "Settings could not be saved",
+            "status.dirty": "Unsaved changes",
+            "status.saved": "Settings saved ✓",
+            "status.checking": "Checking internet…",
+            hint: "Arrows: move · OK / Enter: select · 1-4: orientation · Esc: go to Exit",
+            version: "Version: ",
+            id: "Id: ",
+          },
+        };
+
+        /** Idioma con el que se MUESTRA la pantalla si la clave aún no existe.
+            NO se guarda (el valor por defecto lo crea loading.html). */
+        var DISPLAY_LANGUAGE = "es";
 
         /** Esta pantalla: se muestra con la orientación global y SU escala. */
         var THIS_PAGE = "config";
@@ -724,6 +838,8 @@
           return "smartpizarra." + page + ".scale";
         }
         var LEAGUE_KEY = "smartpizarra.league";
+        /** Idioma GLOBAL: uno solo para todas las pantallas. */
+        var LANGUAGE_KEY = "smartpizarra.language";
         /** Claves que solo se leen y se muestran (se editan desde loading.html). */
         var INFO_KEYS = {
           version: "smartpizarra.version",
@@ -779,10 +895,23 @@
 
         /** Configuración guardada (la que se informa al salir). Se lee de
             localStorage en init(); null = la clave no existe (sin defecto). */
-        var saved = { orientation: null, league: null, pages: emptyPages() };
+        var saved = {
+          orientation: null,
+          language: null,
+          league: null,
+          pages: emptyPages(),
+        };
 
         /** Configuración en pantalla (la que se está editando). */
-        var current = { orientation: null, league: null, pages: emptyPages() };
+        var current = {
+          orientation: null,
+          language: null,
+          league: null,
+          pages: emptyPages(),
+        };
+
+        /** Idioma cuyos textos están puestos ahora en el HTML (evita retocar el DOM). */
+        var appliedLanguage = null;
 
         /** Pantalla cuya escala se está editando (clave de PAGES). La orientación es global. */
         // Empieza en esta misma pantalla: se abre mostrando SU configuración
@@ -803,11 +932,12 @@
 
         /**
          * Copia una configuración en otra (from => to).
-         * @param {{orientation:?number, league:?string, pages:object}} from
-         * @param {{orientation:?number, league:?string, pages:object}} to
+         * @param {{orientation:?number, language:?string, league:?string, pages:object}} from
+         * @param {{orientation:?number, language:?string, league:?string, pages:object}} to
          */
         function copyConfig(from, to) {
           to.orientation = from.orientation;
+          to.language = from.language;
           to.league = from.league;
           for (var page in from.pages) {
             if (Object.prototype.hasOwnProperty.call(from.pages, page)) {
@@ -1016,15 +1146,20 @@
           renderInfo();
           if (isDirty()) return;
           var orientation = readSavedOrientation();
+          var language = readSavedLanguage();
           var league = readSavedLeague();
           var pages = readSavedPages();
-          var changed = orientation !== saved.orientation || league !== saved.league;
+          var changed =
+            orientation !== saved.orientation ||
+            language !== saved.language ||
+            league !== saved.league;
           for (var page in pages) {
             if (!Object.prototype.hasOwnProperty.call(pages, page)) continue;
             if (pages[page].scale !== saved.pages[page].scale) changed = true;
           }
           if (!changed) return;
           saved.orientation = orientation;
+          saved.language = language;
           saved.league = league;
           saved.pages = pages;
           copyConfig(saved, current);
@@ -1139,6 +1274,63 @@
           return percent;
         }
 
+        /**
+         * Valida un idioma (sin distinguir mayúsculas: "EN" => "en").
+         * @param {*} value Clave de I18N.
+         * @returns {string|null} La clave si es válida, o null.
+         */
+        function normalizeLanguage(value) {
+          var code = typeof value === "string" ? value.trim().toLowerCase() : "";
+          return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
+        }
+
+        /** @returns {string|null} Idioma global guardado (null si no existe). */
+        function readSavedLanguage() {
+          return normalizeLanguage(readStorage(LANGUAGE_KEY));
+        }
+
+        /**
+         * Texto traducido al idioma EN EDICIÓN (vista previa). Si el idioma
+         * aún no existe se usa DISPLAY_LANGUAGE; si falta la clave, el español.
+         * @param {string} key Clave de I18N.
+         * @returns {string}
+         */
+        function t(key) {
+          var dict = I18N[current.language || DISPLAY_LANGUAGE];
+          if (Object.prototype.hasOwnProperty.call(dict, key)) return dict[key];
+          return Object.prototype.hasOwnProperty.call(I18N.es, key)
+            ? I18N.es[key]
+            : key;
+        }
+
+        /**
+         * Pone en el HTML los textos fijos del idioma en edición: los
+         * elementos con data-i18n (texto) y data-i18n-aria (aria-label),
+         * el título del documento y <html lang>. Solo toca el DOM si el
+         * idioma cambió.
+         * @returns {boolean} true si cambió el idioma aplicado.
+         */
+        function applyLanguage() {
+          var lang = current.language || DISPLAY_LANGUAGE;
+          if (lang === appliedLanguage) return false;
+          appliedLanguage = lang;
+          var i;
+          var nodes = document.querySelectorAll("[data-i18n]");
+          for (i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = t(nodes[i].getAttribute("data-i18n"));
+          }
+          nodes = document.querySelectorAll("[data-i18n-aria]");
+          for (i = 0; i < nodes.length; i++) {
+            nodes[i].setAttribute(
+              "aria-label",
+              t(nodes[i].getAttribute("data-i18n-aria")),
+            );
+          }
+          document.title = t("title");
+          document.documentElement.lang = lang;
+          return true;
+        }
+
         /** @returns {number|null} Orientación global guardada (null si no existe). */
         function readSavedOrientation() {
           return normalizeOrientation(readStorage(ORIENTATION_KEY));
@@ -1160,6 +1352,7 @@
         /** @returns {boolean} true si lo que hay en pantalla difiere de lo guardado. */
         function isDirty() {
           if (current.orientation !== saved.orientation) return true;
+          if (current.language !== saved.language) return true;
           if (current.league !== saved.league) return true;
           for (var page in current.pages) {
             if (!Object.prototype.hasOwnProperty.call(current.pages, page)) continue;
@@ -1213,6 +1406,21 @@
         }
 
         /**
+         * Cambia el idioma GLOBAL (vale para todas las pantallas). Esta
+         * página se traduce en vivo (vista previa). No envía nada; se guarda
+         * con "Guardar" y las demás pantallas lo leen de localStorage.
+         * @param {string} value Clave de I18N (es, en).
+         */
+        function setLanguage(value) {
+          var language = normalizeLanguage(value);
+          if (language === null || language === current.language) return;
+          current.language = language;
+          justSaved = false;
+          saveError = false;
+          render(); // render() traduce la página
+        }
+
+        /**
          * Cambia la orientación GLOBAL (vale para todas las pantallas). La
          * página gira en vivo hacia ella (vista previa). No envía nada.
          * @param {*} value Grados.
@@ -1238,6 +1446,8 @@
           var stored =
             (current.orientation === null ||
               writeStorage(ORIENTATION_KEY, String(current.orientation))) &&
+            (current.language === null ||
+              writeStorage(LANGUAGE_KEY, current.language)) &&
             (current.league === null || writeStorage(LEAGUE_KEY, current.league));
           for (var page in current.pages) {
             if (!stored) break;
@@ -1265,6 +1475,7 @@
          *   status "unchanged" => no se guardó nada en esta visita.
          *   status "error"     => el último intento de guardar falló.
          *   orientation       => orientación global guardada (null si no existe).
+         *   language          => idioma global guardado (null si no existe).
          *   pages             => escala guardada de cada pantalla
          *                        (como factor 0.8, 1...; null si no existe).
          *   league / leagues  => opción guardada y sus ligas ("" = todas; null si no existe).
@@ -1275,7 +1486,7 @@
           if (exiting) return; // ya se está saliendo (OK pulsado dos veces)
           if (internetStatus === "unknown") {
             exiting = true;
-            el.status.textContent = "Verificando internet…";
+            el.status.textContent = t("status.checking");
             var done = false;
             var finish = function () {
               if (done) return;
@@ -1304,6 +1515,7 @@
           }
           send("exit", status, {
             orientation: saved.orientation, // global (null si no existe)
+            language: saved.language, // global (null si no existe)
             league: saved.league,
             leagues:
               saved.league === null ? null : LEAGUE_OPTIONS[saved.league].values,
@@ -1335,6 +1547,21 @@
           var i;
           var target = current.pages[editingPage]; // pantalla en edición
 
+          // Idioma (vista previa): si cambió, traducir los textos fijos y la cabecera
+          if (applyLanguage()) {
+            renderInfo();
+            renderNet();
+          }
+          for (i = 0; i < el.langButtons.length; i++) {
+            el.langButtons[i].classList.toggle(
+              "selected",
+              el.langButtons[i].getAttribute("data-language") ===
+                current.language,
+            );
+          }
+          el.langTitle.textContent =
+            t("lang.title") + (current.language === null ? t("unsetSuffix") : "");
+
           // Pantalla en edición y títulos de sus secciones
           for (i = 0; i < el.pageButtons.length; i++) {
             el.pageButtons[i].classList.toggle(
@@ -1342,8 +1569,9 @@
               el.pageButtons[i].getAttribute("data-page") === editingPage,
             );
           }
-          el.orientTitle.textContent = "Orientación · todas las pantallas";
-          el.scaleTitle.textContent = "Escala · " + PAGES[editingPage];
+          el.orientTitle.textContent = t("orient.title");
+          el.scaleTitle.textContent =
+            t("scale.title") + " · " + t(PAGES[editingPage]);
 
           // Botón de la orientación elegida (global)
           for (i = 0; i < el.orientButtons.length; i++) {
@@ -1367,16 +1595,18 @@
           }
           el.leagueValues.innerHTML = "";
           if (current.league === null) {
-            el.leagueValues.textContent = "Sin configurar";
+            el.leagueValues.textContent = t("unset");
           } else {
             var option = LEAGUE_OPTIONS[current.league];
             var label = document.createElement("b");
-            label.textContent = option.label + ": ";
+            // "TODOS" se traduce; MLB, NBA... son nombres propios
+            label.textContent =
+              (current.league === "todos" ? t("league.all") : option.label) + ": ";
             el.leagueValues.appendChild(label);
             el.leagueValues.appendChild(
               document.createTextNode(
                 option.values === ""
-                  ? "todas las ligas"
+                  ? t("league.allValues")
                   : option.values.split(",").join(", "),
               ),
             );
@@ -1385,27 +1615,25 @@
           // Escala elegida (de la pantalla en edición)
           if (target.scale === null) {
             el.scaleValue.textContent = "—";
-            el.scaleNote.textContent = "Sin configurar";
+            el.scaleNote.textContent = t("unset");
           } else {
             el.scaleValue.textContent = target.scale + "%";
-            el.scaleNote.textContent =
-              "100% = ocupa el 90% de la pantalla · se envía como " +
-              toZoom(target.scale);
+            el.scaleNote.textContent = t("scale.note") + toZoom(target.scale);
           }
           if (current.orientation === null) {
-            el.orientTitle.textContent += " (sin configurar)";
+            el.orientTitle.textContent += t("unsetSuffix");
           }
 
           // Mensaje de estado
           el.status.classList.remove("dirty", "saved");
           if (saveError) {
-            el.status.textContent = "No se pudo guardar la configuración";
+            el.status.textContent = t("status.error");
             el.status.classList.add("dirty");
           } else if (isDirty()) {
-            el.status.textContent = "Cambios sin guardar";
+            el.status.textContent = t("status.dirty");
             el.status.classList.add("dirty");
           } else if (justSaved) {
-            el.status.textContent = "Configuración guardada ✓";
+            el.status.textContent = t("status.saved");
             el.status.classList.add("saved");
           } else {
             el.status.textContent = "";
@@ -1418,10 +1646,10 @@
         /** Muestra versión, web, email e id leídos de localStorage (solo lectura). */
         function renderInfo() {
           var info = readInfo();
-          el.version.textContent = info.version ? "Versión: " + info.version : "";
+          el.version.textContent = info.version ? t("version") + info.version : "";
           el.website.textContent = info.url ? " · " + info.url : "";
           el.email.textContent = info.email ? " · " + info.email : "";
-          el.deviceId.textContent = info.deviceId ? "Id: " + info.deviceId : "";
+          el.deviceId.textContent = info.deviceId ? t("id") + info.deviceId : "";
         }
 
         /** Actualiza el indicador de internet de la cabecera. */
@@ -1430,10 +1658,10 @@
             "net " + (internetStatus === "unknown" ? "" : internetStatus);
           el.netText.textContent =
             internetStatus === "online"
-              ? "Con internet"
+              ? t("net.online")
               : internetStatus === "offline"
-                ? "Sin internet"
-                : "Verificando…";
+                ? t("net.offline")
+                : t("net.checking");
         }
 
         /* ==================================================================
@@ -1853,12 +2081,13 @@
         // su updateSettings()).
 
         /** @returns {string} JSON con la configuración en pantalla:
-            {"orientation":90,"pages":{"loading":{"scale":..},...},
+            {"orientation":90,"language":"es","pages":{"loading":{"scale":..},...},
              "league":"mlb","leagues":"LIDOM,MLB,..."}
             (scale = factor; null en lo que no existe) */
         window.getConfig = function () {
           return JSON.stringify({
             orientation: current.orientation,
+            language: current.language,
             pages: pagesForJson(current.pages),
             league: current.league,
             leagues:
@@ -1893,6 +2122,10 @@
             document.querySelectorAll(".page"),
           );
           el.orientTitle = document.getElementById("orientTitle");
+          el.langTitle = document.getElementById("langTitle");
+          el.langButtons = Array.prototype.slice.call(
+            document.querySelectorAll(".lang"),
+          );
           el.scaleTitle = document.getElementById("scaleTitle");
           el.orientButtons = Array.prototype.slice.call(
             document.querySelectorAll(".orient"),
@@ -1917,12 +2150,17 @@
           el.exitBtn = document.getElementById("exitBtn");
 
           // Botones a los que se llega con las flechas
-          el.focusables = el.pageButtons.concat(el.orientButtons, el.leagueButtons, [
+          el.focusables = el.pageButtons.concat(
+            el.orientButtons,
+            el.langButtons,
+            el.leagueButtons,
+            [
             el.scaleDownBtn,
             el.scaleUpBtn,
             el.saveBtn,
             el.exitBtn,
-          ]);
+            ],
+          );
 
           // Clics / toques / OK del control remoto
           el.pageButtons.forEach(function (btn) {
@@ -1933,6 +2171,11 @@
           el.orientButtons.forEach(function (btn) {
             btn.addEventListener("click", function () {
               setOrientation(btn.getAttribute("data-orientation"));
+            });
+          });
+          el.langButtons.forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              setLanguage(btn.getAttribute("data-language"));
             });
           });
           el.leagueButtons.forEach(function (btn) {
@@ -1966,13 +2209,15 @@
               focusDefault();
           });
 
-          // Orientación global, ligas y escala de cada pantalla. Si no existen quedan en
-          // null ("Sin configurar"): esta página no crea valores por defecto.
+          // Orientación e idioma globales, ligas y escala de cada pantalla. Si no
+          // existen quedan en null ("Sin configurar"): esta página no crea defaults.
           saved.orientation = readSavedOrientation();
+          saved.language = readSavedLanguage();
           saved.league = readSavedLeague();
           saved.pages = readSavedPages();
           copyConfig(saved, current);
 
+          applyLanguage(); // textos en el idioma guardado antes de medir la tarjeta
           renderInfo();
           // Esta pantalla se muestra con la orientación global y SU escala guardadas
           layoutManager.init(current.orientation, current.pages[THIS_PAGE].scale);

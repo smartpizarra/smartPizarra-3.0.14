@@ -21,6 +21,8 @@
     smartpizarra.loading.scale           10 a 300 (%)         85
     smartpizarra.config.scale            10 a 300 (%)         100
     (cada pantalla tiene escala propia: ver PAGES)
+    smartpizarra.language                es | en              es  (GLOBAL: idioma de todas
+                                                                   las pantallas; ver I18N)
     smartpizarra.version / url / email / deviceId / league
 
   Si otra página los modifica, esta los vuelve a leer al recibir el
@@ -33,7 +35,9 @@
   - El DOM solo se toca cuando cambia el texto o los pasos.
 
   COMO MODIFICAR
-    Duración, textos o cantidad de pasos => objeto CONFIG.
+    Duración o cantidad de pasos         => objeto CONFIG.
+    Textos / idiomas                     => I18N (los fijos del HTML llevan
+                                            data-i18n="clave").
     Colores, tamaños o animaciones       => bloque <style>.
 =====================================================================
 -->
@@ -344,21 +348,26 @@
           <div class="loading-container">
             <div class="loading-bar" id="loadingBar"></div>
           </div>
-          <div class="progress-text" id="progressText">Starting system...</div>
+          <div class="progress-text" id="progressText"></div>
 
-          <!-- Pasos: ids consecutivos step1..stepN (ajustar CONFIG.animation.totalSteps) -->
+          <!-- Pasos: ids consecutivos step1..stepN (ajustar CONFIG.animation.totalSteps).
+               El texto de cada paso (data-i18n) lo pone Translator según el idioma. -->
           <div class="loading-steps" id="loadingSteps">
             <div class="step active" id="step1">
-              <span class="step-check">&#10003;</span> Loading configuration...
+              <span class="step-check">&#10003;</span>
+              <span data-i18n="step1">Cargando configuración...</span>
             </div>
             <div class="step" id="step2">
-              <span class="step-check">&#10003;</span> Initializing modules...
+              <span class="step-check">&#10003;</span>
+              <span data-i18n="step2">Inicializando módulos...</span>
             </div>
             <div class="step" id="step3">
-              <span class="step-check">&#10003;</span> Preparing interface...
+              <span class="step-check">&#10003;</span>
+              <span data-i18n="step3">Preparando interfaz...</span>
             </div>
             <div class="step" id="step4">
-              <span class="step-check">&#10003;</span> Loading complete<span
+              <span class="step-check">&#10003;</span>
+              <span data-i18n="step4">Carga completa</span><span
                 class="dots"
                 ><span>.</span><span>.</span><span>.</span></span
               >
@@ -368,7 +377,7 @@
 
         <!-- PANTALLA DE BIENVENIDA: se muestra tras el fundido final -->
         <div class="welcome" id="welcome">
-          <h2>¡Bienvenido a Smart Pizarra!</h2>
+          <h2 data-i18n="welcome">¡Bienvenido a Smart Pizarra!</h2>
           <p class="info" id="welcomeUrl"></p>
         </div>
       </div>
@@ -496,6 +505,46 @@
           todos: "",
         });
 
+        /**
+         * Textos por idioma (GLOBAL: "smartpizarra.language"). Las claves de
+         * idioma deben ser IGUALES a I18N de config.html, que es donde el
+         * usuario lo cambia. Para agregar un idioma: un diccionario aquí con
+         * TODAS las claves, otro en config.html y su botón .lang.
+         */
+        const I18N = Object.freeze({
+          es: {
+            title: "Cargando...",
+            version: "Versión: ",
+            id: "Id: ",
+            progress1: "Iniciando sistema...",
+            progress2: "Cargando módulos...",
+            progress3: "Preparando interfaz...",
+            progress4: "Completando configuración...",
+            step1: "Cargando configuración...",
+            step2: "Inicializando módulos...",
+            step3: "Preparando interfaz...",
+            step4: "Carga completa",
+            welcome: "¡Bienvenido a Smart Pizarra!",
+          },
+          en: {
+            title: "Loading...",
+            version: "Version: ",
+            id: "Id: ",
+            progress1: "Starting system...",
+            progress2: "Loading modules...",
+            progress3: "Preparing interface...",
+            progress4: "Completing setup...",
+            step1: "Loading configuration...",
+            step2: "Initializing modules...",
+            step3: "Preparing interface...",
+            step4: "Loading complete",
+            welcome: "Welcome to Smart Pizarra!",
+          },
+        });
+
+        /** Idioma GLOBAL por defecto (lo crea esta página si no existe). */
+        const DEFAULT_LANGUAGE = "es";
+
         /* ==================================================================
            CONFIG - valores ajustables de la animación
            ================================================================== */
@@ -507,12 +556,13 @@
             durationMs: 8000, // duración total de la animación
             tickMs: 100, // cada cuántos ms se actualiza la barra (la transición CSS suaviza)
             totalSteps: 4, // cantidad de pasos (#step1 ... #step4)
-            /** Se usa el primer texto cuyo "below" sea mayor al porcentaje actual. */
+            /** Se usa el primer texto cuyo "below" sea mayor al porcentaje
+                actual. "key" es la clave de I18N (se traduce al idioma global). */
             progressTexts: [
-              { below: 25, text: "Starting system..." },
-              { below: 50, text: "Loading modules..." },
-              { below: 75, text: "Preparing interface..." },
-              { below: Infinity, text: "Completing setup..." },
+              { below: 25, key: "progress1" },
+              { below: 50, key: "progress2" },
+              { below: 75, key: "progress3" },
+              { below: Infinity, key: "progress4" },
             ],
           },
 
@@ -544,6 +594,18 @@
               defaultValue: generateDeviceId,
               parse: parseText,
             },
+            /** Idioma GLOBAL de todas las pantallas (clave de I18N). */
+            language: {
+              key: "smartpizarra.language",
+              defaultValue: DEFAULT_LANGUAGE,
+              parse: function (raw) {
+                const code =
+                  raw === null ? "" : String(raw).trim().toLowerCase();
+                return Object.prototype.hasOwnProperty.call(I18N, code)
+                  ? code
+                  : null;
+              },
+            },
             /** Opción de ligas elegida (id de LEAGUE_OPTIONS), no la lista de ligas. */
             league: {
               key: "smartpizarra.league",
@@ -571,6 +633,7 @@
             "email",
             "league",
             "orientation",
+            "language",
           ].concat(Object.keys(PAGES).map((page) => page + ".scale")),
 
           /** Pantalla que es esta página (sus claves de orientación/escala). */
@@ -907,12 +970,72 @@
         }
 
         /* ==================================================================
+           CLASE Translator
+           Responsabilidad: textos en el idioma global. Traduce los elementos
+           con data-i18n, el título del documento y <html lang>. Solo toca
+           el DOM cuando cambia el idioma.
+           ================================================================== */
+        class Translator {
+          /**
+           * @param {object} dictionaries I18N
+           * @param {string} fallback     Idioma si falta el elegido o una clave.
+           */
+          constructor(dictionaries, fallback) {
+            this.dictionaries = dictionaries;
+            this.fallback = fallback;
+            this.language = fallback;
+            /** Idioma aplicado al DOM por última vez (null = nunca). */
+            this._applied = null;
+          }
+
+          /**
+           * Cambia el idioma y traduce la página si es distinto al aplicado.
+           * @param {string} language Clave de I18N.
+           * @returns {boolean} true si cambió.
+           */
+          setLanguage(language) {
+            this.language = Object.prototype.hasOwnProperty.call(
+              this.dictionaries,
+              language,
+            )
+              ? language
+              : this.fallback;
+            if (this.language === this._applied) {
+              return false;
+            }
+            this._applied = this.language;
+            document.querySelectorAll("[data-i18n]").forEach((node) => {
+              node.textContent = this.t(node.getAttribute("data-i18n"));
+            });
+            document.title = this.t("title");
+            document.documentElement.lang = this.language;
+            return true;
+          }
+
+          /**
+           * @param {string} key Clave de I18N.
+           * @returns {string} Texto en el idioma actual (o en el de respaldo).
+           */
+          t(key) {
+            const dict = this.dictionaries[this.language];
+            if (Object.prototype.hasOwnProperty.call(dict, key)) {
+              return dict[key];
+            }
+            const base = this.dictionaries[this.fallback];
+            return Object.prototype.hasOwnProperty.call(base, key)
+              ? base[key]
+              : key;
+          }
+        }
+
+        /* ==================================================================
            CLASE InfoPanel
            Responsabilidad: mostrar versión, web y email tomados de los
            settings. Solo escribe en el DOM si el texto cambió.
            ================================================================== */
         class InfoPanel {
           /**
+           * @param {Translator} translator Textos fijos ("Versión: ", "Id: ").
            * @param {object} elements
            * @param {HTMLElement} elements.version    #versionText
            * @param {HTMLElement} elements.url        #websiteUrl
@@ -920,16 +1043,18 @@
            * @param {HTMLElement} elements.deviceId   #systemId
            * @param {HTMLElement} elements.welcomeUrl #welcomeUrl (pantalla final)
            */
-          constructor(elements) {
+          constructor(translator, elements) {
+            this.translator = translator;
             this.elements = elements;
           }
 
           /** @param {{version:string, url:string, email:string}} values SettingsStore.values */
           show(values) {
-            this._setText(this.elements.version, "Versión: " + values.version);
+            const t = this.translator;
+            this._setText(this.elements.version, t.t("version") + values.version);
             this._setText(this.elements.url, values.url);
             this._setText(this.elements.email, values.email);
-            this._setText(this.elements.deviceId, "Id: " + values.deviceId);
+            this._setText(this.elements.deviceId, t.t("id") + values.deviceId);
             this._setText(this.elements.welcomeUrl, values.url);
           }
 
@@ -954,11 +1079,15 @@
            * @param {HTMLElement[]} elements.steps   Pasos, en orden.
            * @param {object} settings   CONFIG.animation.
            * @param {object} cssClasses CONFIG.cssClasses.
+           * @param {Translator} translator Traduce los textos de progreso.
            */
-          constructor(elements, settings, cssClasses) {
+          constructor(elements, settings, cssClasses, translator) {
             this.elements = elements;
             this.settings = settings;
             this.cssClasses = cssClasses;
+            this.translator = translator;
+            /** Último porcentaje dibujado (para retraducir al cambiar idioma). */
+            this._percent = 0;
             this._timer = null;
             /** Último texto y pasos dibujados: solo se toca el DOM si cambian. */
             this._lastText = null;
@@ -999,6 +1128,7 @@
            * @private
            */
           _render(percent) {
+            this._percent = percent;
             // transform no recalcula el layout: solo la GPU recompone la barra
             this.elements.bar.style.transform =
               "scaleX(" + (percent / 100).toFixed(3) + ")";
@@ -1011,18 +1141,26 @@
             this._updateSteps(percent);
           }
 
+          /** Vuelve a escribir el texto de progreso (tras cambiar el idioma). */
+          refreshText() {
+            this._lastText = null;
+            this._render(this._percent);
+          }
+
           /**
-           * Elige el texto de progreso según el porcentaje.
+           * Elige el texto de progreso según el porcentaje, ya traducido.
            * @private
            */
           _textFor(percent) {
             const texts = this.settings.progressTexts;
+            let key = texts[texts.length - 1].key;
             for (let i = 0; i < texts.length; i++) {
               if (percent < texts[i].below) {
-                return texts[i].text;
+                key = texts[i].key;
+                break;
               }
             }
-            return texts[texts.length - 1].text;
+            return this.translator.t(key);
           }
 
           /**
@@ -1226,7 +1364,8 @@
               requireElement(ids.scaler),
               config.fitRatio,
             );
-            this.info = new InfoPanel({
+            this.translator = new Translator(I18N, DEFAULT_LANGUAGE);
+            this.info = new InfoPanel(this.translator, {
               version: requireElement(ids.versionText),
               url: requireElement(ids.websiteUrl),
               email: requireElement(ids.emailContact),
@@ -1250,6 +1389,7 @@
               },
               config.animation,
               config.cssClasses,
+              this.translator,
             );
           }
 
@@ -1303,6 +1443,7 @@
               league: v.league, // opción guardada (mlb, nba, nflnhl, todos)
               leagues: LEAGUE_OPTIONS[v.league], // ligas de esa opción ("" = todas)
               orientation: v.orientation, // global: todas las pantallas
+              language: v.language, // global: todas las pantallas
               // Escala de CADA pantalla, como factor (80 % => 0.8)
               pages: {},
             };
@@ -1395,10 +1536,13 @@
             };
           }
 
-          /** Aplica todos los settings: layout y textos. @private */
+          /** Aplica todos los settings: idioma, layout y textos. @private */
           _applyLayout() {
             const v = this.settings.values;
             const page = this.config.thisPage;
+            if (this.translator.setLanguage(v.language)) {
+              this.animation.refreshText(); // texto de progreso en el nuevo idioma
+            }
             this.info.show(v);
             this.layout.apply(v.orientation, v[page + ".scale"]);
           }
@@ -1460,7 +1604,8 @@
            *   updateSettings('{"version":"3.0.15","url":"smartpizarra.com",
            *     "email":"a@b.com","league":"nba",
            *     "page":"config","orientation":90,"scale":100}')
-           * "orientation" es GLOBAL (vale para todas las pantallas).
+           * "orientation" y "language" (es, en) son GLOBALES (valen para
+           * todas las pantallas).
            * "page" (loading, config) dice de qué pantalla es "scale"; sin
            * "page" se aplica a loading. También se acepta "config.scale", etc.
            * Todos los campos son opcionales. Devuelve el resultado como texto JSON:
