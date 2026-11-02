@@ -6,7 +6,7 @@ Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras 
 SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción funcional pendiente de completar).
 
 ## Estado actual (2026-11-02)
-- Git rama `main`; último respaldo `094ba68` (revisión periódica del layout). Versión/web/email en localStorage aún sin commit.
+- Git rama `main`; último respaldo `9fe37a8` (versión/web/email). Ligas en localStorage aún sin commit.
 - `example1.html`: pantalla de carga completa de referencia (animación + internet + updateData + rotación/escala + mensaje JSON a Kodular).
 - `loading.html`: solo la animación extraída de `example1.html` (logo flotante, barra scaleX, texto, 4 pasos, puntos, fundido → bienvenida). Arranca sola al cargar; sin comunicación con la app. Clases: `SettingsStore`, `LayoutManager`, `InfoPanel`, `LoadingAnimation`, `LoadingScreen`; ajustes en `CONFIG`.
 - **Settings compartidos (localStorage)**: `loading.html` es el dueño/creador. Al iniciar verifica cada clave y, si falta o es inválida, la crea con el valor por defecto; luego aplica rotación (#stage) y escala (#scaler). Reacciona a `storage`, `resize`, `load`, `pageshow`, `visibilitychange` y a una revisión cada `CONFIG.watchMs` (1 s) que cubre el arranque del WebView compilado sin tamaño (0x0) y cambios sin evento `storage`; `LayoutManager.apply` solo toca el DOM si cambió orientación/escala/tamaño.
@@ -17,6 +17,8 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
   | `smartpizarra.version` | texto no vacío | 3.0.14 |
   | `smartpizarra.url` | texto no vacío | smartpizarra.com |
   | `smartpizarra.email` | texto no vacío | smartpizarra@gmail.com |
+  | `smartpizarra.league` | `mlb` / `nba` / `nflnhl` / `todos` (sin distinguir mayúsculas) | todos |
+  `smartpizarra.league` guarda el **id de la opción**, no la lista. Tabla `LEAGUE_OPTIONS` en `loading.html` (copiarla igual en otras páginas): mlb=`LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB`, nba=`NBA,CBK,NBAPROP,WNBA,WCBK,EUBK`, nflnhl=`NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS`, todos=`""` (sin filtro). Nota: `example1.html` usaba `none` en lugar de `todos`.
   Los textos de versión/web/email (y la web de la bienvenida) se leen SIEMPRE de localStorage vía `InfoPanel` (textContent, sin XSS); un cambio desde otra página se ve en ≤1 s.
   Nuevos settings: añadir entrada en `CONFIG.settings` (key, defaultValue, parse). Las otras páginas deben usar las mismas claves.
 - `example1.html` sigue sin commit (es del usuario).

@@ -363,6 +363,18 @@
           return text !== "" ? text : null;
         }
 
+        /**
+         * Opciones de ligas: id guardado en "smartpizarra.league" => ligas.
+         * Debe ser IGUAL en todas las páginas que lean ese setting.
+         * "todos" = cadena vacía (sin filtro).
+         */
+        const LEAGUE_OPTIONS = Object.freeze({
+          mlb: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+          nba: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK",
+          nflnhl: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
+          todos: "",
+        });
+
         /* ==================================================================
            CONFIG - valores ajustables de la animación
            ================================================================== */
@@ -424,6 +436,17 @@
               key: "smartpizarra.email",
               defaultValue: "smartpizarra@gmail.com",
               parse: parseText,
+            },
+            /** Opción de ligas elegida (id de LEAGUE_OPTIONS), no la lista de ligas. */
+            league: {
+              key: "smartpizarra.league",
+              defaultValue: "todos",
+              parse: function (raw) {
+                const option = raw === null ? "" : String(raw).trim().toLowerCase();
+                return Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, option)
+                  ? option
+                  : null;
+              },
             },
           },
 
