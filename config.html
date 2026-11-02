@@ -128,6 +128,8 @@
                          → botón de la derecha    ← botón de la izquierda
                          ↑ fila de arriba         ↓ fila de abajo
                        Si no hay ningún botón en esa dirección, el foco se queda.
+                       Al subir/bajar se mantiene la columna. Mantener una
+                       flecha pulsada mueve como máximo cada 150 ms.
                        (En un monitor de PC SIN girar, con la página a 90°,
                        las flechas parecerán "giradas": es lo esperado.)
     OK / Enter / Espacio  Pulsan el botón con foco. Mantenerlas pulsadas
@@ -164,8 +166,8 @@
       => LEAGUE_OPTIONS (sección 1) y los botones .league del HTML
          (cada botón lleva su clave en data-league).
     Agregar un botón nuevo
-      => ponerlo en el HTML con class="btn" y añadirlo a el.focusables
-         en init(). Las flechas lo encuentran solas por su posición.
+      => ponerlo en el HTML con class="btn" y añadirlo a su fila en
+         el.rows (init()). Las flechas recorren esas filas.
     Teclas y atajos
       => onKeyDown() (sección 7).
     Cómo eligen las flechas el siguiente botón
@@ -751,19 +753,19 @@
             "net.checking": "Verificando…",
             "net.online": "Con internet",
             "net.offline": "Sin internet",
-            "orient.title": "Orientación · todas las pantallas",
+            "orient.title": "Orientación",
             "orient.0": "Normal",
             "orient.90": "Derecha",
             "orient.180": "Invertida",
             "orient.270": "Izquierda",
-            "lang.title": "Idioma · todas las pantallas",
+            "lang.title": "Idioma",
             "league.title": "Ligas",
             "league.all": "TODOS",
             "league.allValues": "todas las ligas",
             "scale.title": "Escala",
             "scale.down": "Reducir escala",
             "scale.up": "Aumentar escala",
-            "scale.note": "Valor para la app (no cambia el tamaño de las pantallas) · se envía como ",
+            "scale.note": "",
             unset: "Sin configurar",
             unsetSuffix: " (sin configurar)",
             save: "Guardar",
@@ -782,19 +784,19 @@
             "net.checking": "Checking…",
             "net.online": "Online",
             "net.offline": "Offline",
-            "orient.title": "Orientation · all screens",
+            "orient.title": "Orientation",
             "orient.0": "Normal",
             "orient.90": "Right",
             "orient.180": "Inverted",
             "orient.270": "Left",
-            "lang.title": "Language · all screens",
+            "lang.title": "Language ·",
             "league.title": "Leagues",
             "league.all": "ALL",
             "league.allValues": "all leagues",
             "scale.title": "Scale",
             "scale.down": "Decrease scale",
             "scale.up": "Increase scale",
-            "scale.note": "Value for the app (does not resize the screens) · sent as ",
+            "scale.note": "",
             unset: "Not set",
             unsetSuffix: " (not set)",
             save: "Save",
@@ -1624,10 +1626,29 @@
              → botón de la derecha    ← botón de la izquierda
              ↑ fila de arriba         ↓ fila de abajo
 
-           Cómo: las posiciones se miden SIN el giro de la página
-           (offsetLeft/offsetTop ignoran las transformaciones CSS), así el
-           resultado es el mismo en las 4 orientaciones.
+           Cómo: los botones están en FILAS fijas (el.rows, en init()):
+             ← / →  botón anterior / siguiente de la misma fila (se queda en el borde).
+             ↑ / ↓  fila anterior / siguiente, al botón cuyo centro horizontal
+                    está más cerca de la "columna" de partida. La columna se
+                    recuerda mientras se sube o baja (navX), así ir y volver
+                    entre filas con distinto número de botones no se desvía.
+           Las posiciones se miden SIN el giro de la página (offsetLeft
+           ignora las transformaciones CSS): igual en las 4 orientaciones.
            ================================================================== */
+
+        /** Columna (x del contenido) que se mantiene al moverse con ↑ / ↓.
+            null = tomarla del botón con foco. */
+        var navX = null;
+
+        /** Botón al que se movió el foco con las flechas por última vez
+            (si el foco cambió de otra forma, navX deja de valer). */
+        var navFocused = null;
+
+        /** Momento (ms) del último movimiento: limita la repetición al mantener una flecha. */
+        var lastMoveAt = 0;
+
+        /** Mínimo entre movimientos (ms) cuando la flecha se mantiene pulsada. */
+        var REPEAT_MS = 150;
 
         /** Flechas según e.key (teclado y WebView modernos). */
         var KEY_DIRECTIONS = {
@@ -1696,43 +1717,43 @@
         }
 
         /**
-         * Busca el botón más cercano en una dirección del contenido.
-         * Puntuación = distancia en la dirección pedida + 4 × desvío lateral,
-         * así se prefiere el botón que está "en línea" (misma fila o columna)
-         * antes que uno en diagonal, aunque esté más lejos.
+         * Ubica un botón en las filas.
+         * @param {HTMLElement} btn
+         * @returns {{row:number, col:number}|null} null si no está en ninguna fila.
+         */
+        function locate(btn) {
+          for (var r = 0; r < el.rows.length; r++) {
+            var c = el.rows[r].indexOf(btn);
+            if (c !== -1) return { row: r, col: c };
+          }
+          return null;
+        }
+
+        /**
+         * Busca el botón vecino en una dirección del contenido (ver sección 7).
          * @param {HTMLElement} from Botón con el foco.
          * @param {string} dir 'up' | 'down' | 'left' | 'right' (tal como se pulsó).
+         * @param {number} x   Columna (x del contenido) para ↑ / ↓.
          * @returns {HTMLElement|null} null si no hay ninguno en esa dirección (borde).
          */
-        function findNeighbor(from, dir) {
-          var a = contentCenter(from);
+        function findNeighbor(from, dir, x) {
+          var pos = locate(from);
+          if (!pos) return null;
+          var row = el.rows[pos.row];
+          if (dir === "left") return pos.col > 0 ? row[pos.col - 1] : null;
+          if (dir === "right")
+            return pos.col < row.length - 1 ? row[pos.col + 1] : null;
+
+          var r = pos.row + (dir === "down" ? 1 : -1);
+          if (r < 0 || r >= el.rows.length) return null;
+          // En la fila destino: el botón con el centro más cerca de la columna
           var best = null;
-          var bestScore = Infinity;
-
-          for (var i = 0; i < el.focusables.length; i++) {
-            var btn = el.focusables[i];
-            if (btn === from || btn.disabled) continue;
-
-            var c = contentCenter(btn);
-            var dx = c.x - a.x;
-            var dy = c.y - a.y;
-            var along =
-              dir === "right"
-                ? dx
-                : dir === "left"
-                  ? -dx
-                  : dir === "down"
-                    ? dy
-                    : -dy;
-            var across =
-              dir === "left" || dir === "right" ? Math.abs(dy) : Math.abs(dx);
-            if (along < 1) continue; // no está en esa dirección
-            if (across > along) continue; // está más "al costado" que en la dirección (diagonal)
-
-            var score = along + across * 4;
-            if (score < bestScore) {
-              best = btn;
-              bestScore = score;
+          var bestDist = Infinity;
+          for (var i = 0; i < el.rows[r].length; i++) {
+            var dist = Math.abs(contentCenter(el.rows[r][i]).x - x);
+            if (dist < bestDist) {
+              best = el.rows[r][i];
+              bestDist = dist;
             }
           }
           return best;
@@ -1756,8 +1777,15 @@
             focusDefault();
             return;
           }
-          var target = findNeighbor(from, dir);
-          if (target) target.focus();
+          // La columna recordada solo vale si el foco no cambió por otro medio
+          if (from !== navFocused) navX = null;
+          var vertical = dir === "up" || dir === "down";
+          var x = navX !== null ? navX : contentCenter(from).x;
+          var target = findNeighbor(from, dir, x);
+          if (!target) return;
+          navX = vertical ? x : null; // ← / → eligen una columna nueva
+          navFocused = target;
+          target.focus();
         }
 
         /**
@@ -1771,6 +1799,10 @@
           var dir = getDirection(e);
           if (dir) {
             e.preventDefault(); // evita que la página se desplace
+            // Flecha mantenida: como máximo un movimiento cada REPEAT_MS
+            var now = Date.now();
+            if (e.repeat && now - lastMoveAt < REPEAT_MS) return;
+            lastMoveAt = now;
             moveFocus(dir);
             return;
           }
@@ -2097,12 +2129,17 @@
           el.saveBtn = document.getElementById("saveBtn");
           el.exitBtn = document.getElementById("exitBtn");
 
-          // Botones a los que se llega con las flechas
-          el.focusables = el.orientButtons.concat(
+          // Filas de botones, de arriba a abajo tal como se leen (navegación
+          // con flechas, sección 7). Un botón nuevo debe ir en su fila.
+          el.rows = [
+            el.orientButtons,
             el.langButtons,
             el.leagueButtons,
-            [el.scaleDownBtn, el.scaleUpBtn, el.saveBtn, el.exitBtn],
-          );
+            [el.scaleDownBtn, el.scaleUpBtn],
+            [el.saveBtn, el.exitBtn],
+          ];
+          // Botones a los que se llega con las flechas
+          el.focusables = [].concat.apply([], el.rows);
 
           // Clics / toques / OK del control remoto
           el.orientButtons.forEach(function (btn) {
