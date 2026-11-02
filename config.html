@@ -65,8 +65,12 @@
      configurar"), gira la pantalla, dibuja la UI y pone el foco en la
      orientación actual. No envía nada a la app ni escribe nada.
   2. El usuario elige la pantalla a configurar (Carga / Configuración) y
-     su orientación y escala; la de "Configuración" se ve en vivo en esta
-     misma página. También elige la opción de ligas (común a todas).
+     su orientación y escala. Al elegir una orientación el contenido gira
+     en vivo hacia ella (vista previa), sea de la pantalla que sea. La
+     escala aplicada es siempre la de "Configuración". También elige la
+     opción de ligas (común a todas).
+     Se abre en "Configuración", con lo guardado en localStorage, y vuelve
+     a leerlo cada 1 s / al mostrarse (si no hay cambios sin guardar).
   3. "Guardar" => escribe en localStorage los settings con valor (no envía JSON).
   4. "Salir" => descarta lo que no se haya guardado y envía a la app
      el ÚNICO JSON de esta pantalla, con la configuración guardada.
@@ -783,7 +787,8 @@
         var current = { league: null, pages: emptyPages() };
 
         /** Pantalla cuya orientación y escala se están editando (clave de PAGES). */
-        var editingPage = Object.keys(PAGES)[0];
+        // Empieza en esta misma pantalla: se abre mostrando SU configuración
+        var editingPage = THIS_PAGE;
 
         /**
          * @returns {object} {<pantalla>: {orientation:null, scale:null}} para cada PAGES.
@@ -994,12 +999,45 @@
           },
         };
 
-        /** Aplica en pantalla la orientación y escala EN EDICIÓN de esta pantalla (vista previa). */
+        /**
+         * Vista previa: gira el contenido a la orientación EN EDICIÓN de la
+         * pantalla elegida, para ver hacia dónde quedará (si aún no tiene,
+         * usa la de esta pantalla). La escala es siempre la de esta pantalla,
+         * para que la tarjeta se lea igual al cambiar de pantalla.
+         */
         function applyOwnLayout() {
+          var orientation = current.pages[editingPage].orientation;
           layoutManager.apply(
-            current.pages[THIS_PAGE].orientation,
+            orientation === null ? current.pages[THIS_PAGE].orientation : orientation,
             current.pages[THIS_PAGE].scale,
           );
+        }
+
+        /**
+         * Vuelve a leer de localStorage la liga y la orientación/escala de cada
+         * pantalla (y los datos de la cabecera). Así se ve lo que guardó otra
+         * página aunque esta se haya cargado antes (WebView oculto en la app).
+         * Si hay cambios sin guardar no se tocan: se respeta lo que se edita.
+         */
+        function reloadFromStorage() {
+          renderInfo();
+          if (isDirty()) return;
+          var league = readSavedLeague();
+          var pages = readSavedPages();
+          var changed = league !== saved.league;
+          for (var page in pages) {
+            if (!Object.prototype.hasOwnProperty.call(pages, page)) continue;
+            if (
+              pages[page].orientation !== saved.pages[page].orientation ||
+              pages[page].scale !== saved.pages[page].scale
+            )
+              changed = true;
+          }
+          if (!changed) return;
+          saved.league = league;
+          saved.pages = pages;
+          copyConfig(saved, current);
+          render();
         }
 
         /* ==================================================================
@@ -1948,7 +1986,7 @@
           copyConfig(saved, current);
 
           renderInfo();
-          // Esta pantalla se muestra con SU orientación y escala
+          // Esta pantalla se muestra con SU orientación y escala guardadas
           layoutManager.init(
             current.pages[THIS_PAGE].orientation,
             current.pages[THIS_PAGE].scale,
@@ -1958,6 +1996,16 @@
 
           // Foco inicial en la orientación actual (para empezar a usar el teclado)
           focusDefault();
+
+          // Releer localStorage al volver a mostrarse, si otra página lo cambia
+          // y cada WATCH_MS (en la app la página puede cargarse oculta antes
+          // de que loading.html cree o cambie los valores)
+          window.addEventListener("pageshow", reloadFromStorage);
+          window.addEventListener("storage", reloadFromStorage);
+          document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) reloadFromStorage();
+          });
+          setInterval(reloadFromStorage, WATCH_MS);
 
           // No se envía nada al arrancar: el único JSON sale con el botón "Salir"
           startConnectionMonitoring();
