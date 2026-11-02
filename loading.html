@@ -7,8 +7,22 @@
   logo flotante, barra de progreso, texto, 4 pasos, puntos "..." y
   fundido final hacia la pantalla de bienvenida.
 
-  NO incluye: comprobación de internet, updateData(), rotación/escala
-  ni envío de mensajes a la app (Kodular).
+  NO incluye: comprobación de internet, updateData() ni envío de
+  mensajes a la app (Kodular).
+
+  SETTINGS COMPARTIDOS (localStorage)
+  Al iniciar, esta página verifica cada setting en localStorage: si no
+  existe o es inválido, lo crea con su valor por defecto. Luego aplica
+  la rotación y la escala. Cualquier otra página del mismo origen
+  puede leerlos o modificarlos con estas claves (valores en texto):
+
+    clave                       valores               defecto
+    smartpizarra.orientation    0 | 90 | 180 | 270    90
+    smartpizarra.scale          10 a 300 (%)          100
+
+  Si otra página los modifica, esta los vuelve a leer al recibir el
+  evento "storage", al volver a mostrarse o al cambiar el tamaño.
+  Agregar un setting nuevo => una entrada en CONFIG.settings.
 
   COMPATIBILIDAD (Android WebView 101 en TV box)
   - Sin librerías externas ni backdrop-filter (pesado en GPU).
@@ -50,14 +64,31 @@
         background: #002b4f;
       }
 
-      /* Centra la tarjeta en la pantalla */
       body {
-        display: flex;
-        justify-content: center;
-        align-items: center;
+        position: relative;
         font-family: "Segoe UI", Roboto, Tahoma, Geneva, Verdana, sans-serif;
         color: #ffffff;
         user-select: none; /* evita seleccionar texto por accidente */
+      }
+
+      /* #stage: se rota 0/90/180/270. Ancho, alto y transform los fija
+         LayoutManager (se intercambian ancho/alto con 90 y 270) */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      /* #scaler: recibe la escala (%) desde su centro */
+      #scaler {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        transform-origin: 50% 50%;
       }
 
       /* ==============================================================
@@ -242,6 +273,9 @@
   </head>
 
   <body>
+    <!-- #stage => rotación · #scaler => escala (ambos desde los settings) -->
+    <div id="stage">
+    <div id="scaler">
     <!-- TARJETA DE CARGA -->
     <div class="splash-container" id="splashContainer">
       <div class="logo">
@@ -280,6 +314,8 @@
       <h2>¡Bienvenido a Smart Pizarra!</h2>
       <p>smartpizarra.com</p>
     </div>
+    </div>
+    </div>
 
     <script>
       (function () {
@@ -305,7 +341,38 @@
             ],
           },
 
+          /**
+           * Settings compartidos en localStorage. Cada uno:
+           *   key          clave de localStorage (igual en todas las páginas)
+           *   defaultValue valor que se crea si no existe o es inválido
+           *   parse(raw)   convierte el texto guardado; devuelve null si es inválido
+           */
+          settings: {
+            orientation: {
+              key: "smartpizarra.orientation",
+              defaultValue: 90,
+              parse: function (raw) {
+                let degrees = parseInt(raw, 10);
+                if (isNaN(degrees)) {
+                  return null;
+                }
+                degrees = ((degrees % 360) + 360) % 360; // 360 => 0, -90 => 270
+                return degrees % 90 === 0 ? degrees : null;
+              },
+            },
+            scale: {
+              key: "smartpizarra.scale",
+              defaultValue: 100,
+              parse: function (raw) {
+                const percent = parseInt(raw, 10);
+                return percent >= 10 && percent <= 300 ? percent : null;
+              },
+            },
+          },
+
           ids: {
+            stage: "stage",
+            scaler: "scaler",
             splashContainer: "splashContainer",
             welcome: "welcome",
             loadingBar: "loadingBar",
@@ -334,6 +401,134 @@
             );
           }
           return element;
+        }
+
+        /* ==================================================================
+           CLASE SettingsStore
+           Responsabilidad: leer, validar y crear los settings compartidos
+           en localStorage. Si el WebView no permite localStorage, trabaja
+           solo en memoria con los valores por defecto.
+           ================================================================== */
+        class SettingsStore {
+          /** @param {object} schema CONFIG.settings */
+          constructor(schema) {
+            this.schema = schema;
+            /** Valores actuales ya validados, por nombre de setting. */
+            this.values = {};
+          }
+
+          /**
+           * Verifica cada setting: si no existe o es inválido lo crea
+           * con su valor por defecto. Llamar una vez al iniciar.
+           */
+          init() {
+            Object.keys(this.schema).forEach((name) => {
+              const def = this.schema[name];
+              let value = def.parse(this._read(def.key));
+              if (value === null) {
+                value = def.defaultValue;
+                this._write(def.key, value);
+              }
+              this.values[name] = value;
+            });
+          }
+
+          /**
+           * Vuelve a leer los settings (los pudo cambiar otra página).
+           * Un valor inválido o borrado no se aplica: se conserva el actual.
+           * @returns {boolean} true si algún valor cambió.
+           */
+          reload() {
+            let changed = false;
+            Object.keys(this.schema).forEach((name) => {
+              const value = this.schema[name].parse(
+                this._read(this.schema[name].key),
+              );
+              if (value !== null && value !== this.values[name]) {
+                this.values[name] = value;
+                changed = true;
+              }
+            });
+            return changed;
+          }
+
+          /** @returns {boolean} true si la clave pertenece a algún setting. */
+          isSettingKey(key) {
+            return Object.keys(this.schema).some(
+              (name) => this.schema[name].key === key,
+            );
+          }
+
+          /** @private */
+          _read(key) {
+            try {
+              return window.localStorage.getItem(key);
+            } catch (e) {
+              console.log("No se pudo leer localStorage:", e);
+              return null;
+            }
+          }
+
+          /** @private */
+          _write(key, value) {
+            try {
+              window.localStorage.setItem(key, String(value));
+            } catch (e) {
+              console.log("No se pudo escribir localStorage:", e);
+            }
+          }
+        }
+
+        /* ==================================================================
+           CLASE LayoutManager
+           Responsabilidad: rotar #stage y escalar #scaler.
+           #stage se gira desde su esquina superior izquierda y se desplaza
+           para volver a cubrir la pantalla; con 90/270 se intercambian
+           ancho y alto.
+           ================================================================== */
+        class LayoutManager {
+          /**
+           * @param {HTMLElement} stage  Elemento que se rota.
+           * @param {HTMLElement} scaler Elemento que se escala.
+           */
+          constructor(stage, scaler) {
+            this.stage = stage;
+            this.scaler = scaler;
+          }
+
+          /**
+           * @param {number} orientation 0, 90, 180 o 270.
+           * @param {number} scale       Porcentaje (100 = normal).
+           */
+          apply(orientation, scale) {
+            const width =
+              window.innerWidth || document.documentElement.clientWidth;
+            const height =
+              window.innerHeight || document.documentElement.clientHeight;
+
+            let stageWidth = width;
+            let stageHeight = height;
+            let transform = "none";
+
+            if (orientation === 90) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(" + width + "px, 0px) rotate(90deg)";
+            } else if (orientation === 180) {
+              transform =
+                "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            } else if (orientation === 270) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(0px, " + height + "px) rotate(270deg)";
+            }
+
+            this.stage.style.width = stageWidth + "px";
+            this.stage.style.height = stageHeight + "px";
+            this.stage.style.transformOrigin = "0 0";
+            this.stage.style.transform = transform;
+            this.scaler.style.transform = "scale(" + scale / 100 + ")";
+          }
         }
 
         /* ==================================================================
@@ -444,8 +639,9 @@
 
         /* ==================================================================
            CLASE LoadingScreen
-           Responsabilidad: arrancar la animación y, al terminar, hacer el
-           fundido de salida y mostrar la bienvenida.
+           Responsabilidad: preparar los settings, aplicar el layout,
+           arrancar la animación y, al terminar, hacer el fundido de salida
+           y mostrar la bienvenida.
            ================================================================== */
         class LoadingScreen {
           /** @param {object} config Objeto CONFIG. */
@@ -453,6 +649,11 @@
             this.config = config;
             const ids = config.ids;
 
+            this.settings = new SettingsStore(config.settings);
+            this.layout = new LayoutManager(
+              requireElement(ids.stage),
+              requireElement(ids.scaler),
+            );
             this.container = requireElement(ids.splashContainer);
             this.welcome = requireElement(ids.welcome);
 
@@ -473,9 +674,47 @@
             );
           }
 
-          /** Inicia la animación. */
+          /** Crea/lee los settings, aplica el layout e inicia la animación. */
           start() {
+            this.settings.init();
+            this._applyLayout();
+            this._listenForChanges();
             this.animation.start(() => this._fadeOutAndShowWelcome());
+          }
+
+          /** @private */
+          _applyLayout() {
+            this.layout.apply(
+              this.settings.values.orientation,
+              this.settings.values.scale,
+            );
+          }
+
+          /**
+           * Reaplica el layout si cambia el tamaño de la ventana o si otra
+           * página modifica los settings.
+           * @private
+           */
+          _listenForChanges() {
+            const refresh = () => {
+              this.settings.reload();
+              this._applyLayout();
+            };
+            window.addEventListener("resize", refresh);
+            window.addEventListener("orientationchange", refresh);
+            window.addEventListener("pageshow", refresh);
+            document.addEventListener("visibilitychange", () => {
+              if (!document.hidden) refresh();
+            });
+            // "storage" solo llega cuando OTRA página cambia localStorage
+            window.addEventListener("storage", (e) => {
+              if (
+                (e.key === null || this.settings.isSettingKey(e.key)) &&
+                this.settings.reload()
+              ) {
+                this._applyLayout();
+              }
+            });
           }
 
           /**
