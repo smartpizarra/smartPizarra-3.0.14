@@ -6,7 +6,8 @@ Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras 
 SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción funcional pendiente de completar).
 
 ## Estado actual (2026-11-02)
-- Git rama `main`; último respaldo `701edf7` (ligas). Id de dispositivo aún sin commit.
+- Git rama `main`; último respaldo `c2adb18` (id de dispositivo). Responsive aún sin commit.
+- **Responsive**: `LayoutManager` mide el tamaño natural de `#scaler` (offsetWidth/Height; `#scaler` sin ancho fijo y `flex-shrink:0`) y lo escala para ocupar `CONFIG.fitRatio` (0.9) del escenario rotado. `smartpizarra.scale` multiplica ese ajuste: 100 % = ocupa el 90 % de la pantalla (>100 % puede salirse). No se usan vw/vh porque la rotación los invertiría. Verificado en el dispositivo con 960x540, 1280x720, 480x320, 540x960 y 360x640 × 0°/90°: siempre cabe.
 - `CONFIG.settings.*.defaultValue` puede ser una función (se llama solo al crear el valor).
 - Limitación: el id vive en el localStorage del WebView; si se borran los datos de la app o se reinstala, se genera otro.
 - `example1.html`: pantalla de carga completa de referencia (animación + internet + updateData + rotación/escala + mensaje JSON a Kodular).

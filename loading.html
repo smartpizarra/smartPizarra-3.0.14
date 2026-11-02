@@ -83,11 +83,13 @@
         align-items: center;
       }
 
-      /* #scaler: recibe la escala (%) desde su centro */
+      /* #scaler: recibe la escala desde su centro. Sin ancho fijo y sin
+         encogerse, para que su tamaño sea el natural del contenido: así
+         LayoutManager lo mide y calcula cuánto escalar para llenar la pantalla */
       #scaler {
-        width: 100%;
         display: flex;
         justify-content: center;
+        flex-shrink: 0;
         transform-origin: 50% 50%;
       }
 
@@ -521,6 +523,12 @@
            * algo cambió).
            */
           watchMs: 1000,
+
+          /**
+           * Fracción de la pantalla (rotada) que ocupa el contenido con
+           * escala 100 %. 0.9 deja un 5 % de margen por cada lado.
+           */
+          fitRatio: 0.9,
         });
 
         /**
@@ -620,30 +628,37 @@
 
         /* ==================================================================
            CLASE LayoutManager
-           Responsabilidad: rotar #stage y escalar #scaler.
+           Responsabilidad: rotar #stage y escalar #scaler (responsive).
            #stage se gira desde su esquina superior izquierda y se desplaza
            para volver a cubrir la pantalla; con 90/270 se intercambian
            ancho y alto.
+           Responsive: no se usan vw/vh (con la rotación se invertirían);
+           se mide el tamaño natural del contenido (offsetWidth/Height, que
+           no dependen de transform) y se escala para que quepa en el
+           escenario rotado. La escala guardada multiplica ese ajuste.
            ================================================================== */
         class LayoutManager {
           /**
-           * @param {HTMLElement} stage  Elemento que se rota.
-           * @param {HTMLElement} scaler Elemento que se escala.
+           * @param {HTMLElement} stage    Elemento que se rota.
+           * @param {HTMLElement} scaler   Elemento que se escala.
+           * @param {number}      fitRatio Fracción del escenario a ocupar (CONFIG.fitRatio).
            */
-          constructor(stage, scaler) {
+          constructor(stage, scaler, fitRatio) {
             this.stage = stage;
             this.scaler = scaler;
-            /** "orientación|escala|anchoxalto" aplicado por última vez. */
+            this.fitRatio = fitRatio;
+            /** "orientación|escala|ventana|contenido" aplicado por última vez. */
             this._lastState = "";
           }
 
           /**
-           * Aplica rotación y escala solo si cambiaron ellas o el tamaño de
-           * la ventana desde la última vez (evita tocar el DOM sin motivo).
+           * Aplica rotación y escala solo si cambió algo (settings, tamaño de
+           * la ventana o tamaño del contenido) desde la última vez.
            * Con la ventana aún sin tamaño (0x0) no aplica: se reintenta en
            * la siguiente revisión.
            * @param {number} orientation 0, 90, 180 o 270.
-           * @param {number} scale       Porcentaje (100 = normal).
+           * @param {number} scale       Porcentaje: 100 = el contenido ocupa
+           *                             fitRatio de la pantalla.
            */
           apply(orientation, scale) {
             const width =
@@ -653,8 +668,12 @@
             if (!width || !height) {
               return;
             }
+            // Tamaño natural del contenido (sin la escala aplicada)
+            const contentWidth = this.scaler.offsetWidth;
+            const contentHeight = this.scaler.offsetHeight;
             const state =
-              orientation + "|" + scale + "|" + width + "x" + height;
+              orientation + "|" + scale + "|" + width + "x" + height +
+              "|" + contentWidth + "x" + contentHeight;
             if (state === this._lastState) {
               return;
             }
@@ -681,7 +700,17 @@
             this.stage.style.height = stageHeight + "px";
             this.stage.style.transformOrigin = "0 0";
             this.stage.style.transform = transform;
-            this.scaler.style.transform = "scale(" + scale / 100 + ")";
+
+            // Factor que hace caber el contenido en el escenario (ancho y alto)
+            let fit = 1;
+            if (contentWidth > 0 && contentHeight > 0) {
+              fit = Math.min(
+                (stageWidth * this.fitRatio) / contentWidth,
+                (stageHeight * this.fitRatio) / contentHeight,
+              );
+            }
+            this.scaler.style.transform =
+              "scale(" + ((fit * scale) / 100).toFixed(4) + ")";
           }
         }
 
@@ -842,6 +871,7 @@
             this.layout = new LayoutManager(
               requireElement(ids.stage),
               requireElement(ids.scaler),
+              config.fitRatio,
             );
             this.info = new InfoPanel({
               version: requireElement(ids.versionText),
@@ -928,6 +958,7 @@
             setTimeout(() => {
               this.container.style.display = "none";
               this.welcome.style.display = "block";
+              this._applyLayout(); // el contenido cambió de tamaño: reajustar ya
             }, this.config.fadeOutMs);
           }
         }
