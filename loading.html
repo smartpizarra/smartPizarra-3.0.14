@@ -386,6 +386,15 @@
             done: "done", // animación terminada (detiene los puntos)
             fadeOut: "fade-out", // inicia el desvanecimiento
           },
+
+          /**
+           * Cada cuántos ms se revisa si cambiaron los settings o el tamaño de
+           * la ventana. En la app compilada el WebView puede cargar la página
+           * sin tamaño (0x0) o con localStorage aún no listo, y no siempre
+           * dispara "resize"; esta revisión lo corrige (solo toca el DOM si
+           * algo cambió).
+           */
+          watchMs: 1000,
         });
 
         /**
@@ -494,9 +503,15 @@
           constructor(stage, scaler) {
             this.stage = stage;
             this.scaler = scaler;
+            /** "orientación|escala|anchoxalto" aplicado por última vez. */
+            this._lastState = "";
           }
 
           /**
+           * Aplica rotación y escala solo si cambiaron ellas o el tamaño de
+           * la ventana desde la última vez (evita tocar el DOM sin motivo).
+           * Con la ventana aún sin tamaño (0x0) no aplica: se reintenta en
+           * la siguiente revisión.
            * @param {number} orientation 0, 90, 180 o 270.
            * @param {number} scale       Porcentaje (100 = normal).
            */
@@ -505,6 +520,15 @@
               window.innerWidth || document.documentElement.clientWidth;
             const height =
               window.innerHeight || document.documentElement.clientHeight;
+            if (!width || !height) {
+              return;
+            }
+            const state =
+              orientation + "|" + scale + "|" + width + "x" + height;
+            if (state === this._lastState) {
+              return;
+            }
+            this._lastState = state;
 
             let stageWidth = width;
             let stageHeight = height;
@@ -702,7 +726,11 @@
             };
             window.addEventListener("resize", refresh);
             window.addEventListener("orientationchange", refresh);
+            window.addEventListener("load", refresh);
             window.addEventListener("pageshow", refresh);
+            // Revisión periódica (ver CONFIG.watchMs): cubre el arranque sin
+            // tamaño y cambios hechos por otro WebView sin evento "storage"
+            setInterval(refresh, this.config.watchMs);
             document.addEventListener("visibilitychange", () => {
               if (!document.hidden) refresh();
             });
