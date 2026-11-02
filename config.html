@@ -565,7 +565,9 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                90°<span class="orient-label" data-i18n="orient.90">Derecha</span>
+                90°<span class="orient-label" data-i18n="orient.90"
+                  >Derecha</span
+                >
               </button>
               <button class="btn orient" data-orientation="180">
                 <svg
@@ -575,7 +577,9 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                180°<span class="orient-label" data-i18n="orient.180">Invertida</span>
+                180°<span class="orient-label" data-i18n="orient.180"
+                  >Invertida</span
+                >
               </button>
               <button class="btn orient" data-orientation="270">
                 <svg
@@ -585,7 +589,9 @@
                 >
                   <path d="M12 20V4M5 11l7-7 7 7" />
                 </svg>
-                270°<span class="orient-label" data-i18n="orient.270">Izquierda</span>
+                270°<span class="orient-label" data-i18n="orient.270"
+                  >Izquierda</span
+                >
               </button>
             </div>
           </div>
@@ -611,7 +617,11 @@
               <button class="btn league" data-league="nflnhl">
                 NFL &amp; NHL
               </button>
-              <button class="btn league" data-league="todos" data-i18n="league.all">
+              <button
+                class="btn league"
+                data-league="todos"
+                data-i18n="league.all"
+              >
                 TODOS
               </button>
             </div>
@@ -626,10 +636,18 @@
               Pantalla a configurar
             </div>
             <div class="row" id="pageRow">
-              <button class="btn page" data-page="loading" data-i18n="page.loading">
+              <button
+                class="btn page"
+                data-page="loading"
+                data-i18n="page.loading"
+              >
                 Carga
               </button>
-              <button class="btn page" data-page="config" data-i18n="page.config">
+              <button
+                class="btn page"
+                data-page="config"
+                data-i18n="page.config"
+              >
                 Configuración
               </button>
             </div>
@@ -668,7 +686,9 @@
               Guardar
             </button>
             <!-- ÚNICO botón que envía un JSON a la app (exitConfig) -->
-            <button class="btn exit" id="exitBtn" data-i18n="exit">Salir</button>
+            <button class="btn exit" id="exitBtn" data-i18n="exit">
+              Salir
+            </button>
           </div>
 
           <!-- Mensaje de estado (lo escribe render) -->
@@ -822,7 +842,7 @@
 
         /** Idioma con el que se MUESTRA la pantalla si la clave aún no existe.
             NO se guarda (el valor por defecto lo crea loading.html). */
-        var DISPLAY_LANGUAGE = "es";
+        var DISPLAY_LANGUAGE = "en"; // igual que DEFAULT_LANGUAGE de loading.html
 
         /** Esta pantalla: se muestra con la orientación global y SU escala. */
         var THIS_PAGE = "config";
@@ -1088,8 +1108,17 @@
               window.innerHeight || document.documentElement.clientHeight;
             if (!width || !height) return;
             var state =
-              orientation + "|" + this.scale + "|" + width + "x" + height + "|" +
-              this.card.offsetWidth + "x" + this.card.offsetHeight;
+              orientation +
+              "|" +
+              this.scale +
+              "|" +
+              width +
+              "x" +
+              height +
+              "|" +
+              this.card.offsetWidth +
+              "x" +
+              this.card.offsetHeight;
             if (state === this._lastState) return;
             this._lastState = state;
 
@@ -1133,7 +1162,10 @@
          * de esta pantalla, para que la tarjeta se lea igual al cambiar de pantalla.
          */
         function applyOwnLayout() {
-          layoutManager.apply(current.orientation, current.pages[THIS_PAGE].scale);
+          layoutManager.apply(
+            current.orientation,
+            current.pages[THIS_PAGE].scale,
+          );
         }
 
         /**
@@ -1222,7 +1254,8 @@
          */
         function normalizeLeague(value) {
           // Sin distinguir mayúsculas, igual que loading.html ("NBA" => "nba")
-          var option = typeof value === "string" ? value.trim().toLowerCase() : "";
+          var option =
+            typeof value === "string" ? value.trim().toLowerCase() : "";
           return Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, option)
             ? option
             : null;
@@ -1236,7 +1269,8 @@
         function readInfo() {
           var info = {};
           for (var name in INFO_KEYS) {
-            if (!Object.prototype.hasOwnProperty.call(INFO_KEYS, name)) continue;
+            if (!Object.prototype.hasOwnProperty.call(INFO_KEYS, name))
+              continue;
             var value = null;
             try {
               value = window.localStorage.getItem(INFO_KEYS[name]);
@@ -1280,7 +1314,8 @@
          * @returns {string|null} La clave si es válida, o null.
          */
         function normalizeLanguage(value) {
-          var code = typeof value === "string" ? value.trim().toLowerCase() : "";
+          var code =
+            typeof value === "string" ? value.trim().toLowerCase() : "";
           return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
         }
 
@@ -1355,8 +1390,10 @@
           if (current.language !== saved.language) return true;
           if (current.league !== saved.league) return true;
           for (var page in current.pages) {
-            if (!Object.prototype.hasOwnProperty.call(current.pages, page)) continue;
-            if (current.pages[page].scale !== saved.pages[page].scale) return true;
+            if (!Object.prototype.hasOwnProperty.call(current.pages, page))
+              continue;
+            if (current.pages[page].scale !== saved.pages[page].scale)
+              return true;
           }
           return false;
         }
@@ -1448,10 +1485,12 @@
               writeStorage(ORIENTATION_KEY, String(current.orientation))) &&
             (current.language === null ||
               writeStorage(LANGUAGE_KEY, current.language)) &&
-            (current.league === null || writeStorage(LEAGUE_KEY, current.league));
+            (current.league === null ||
+              writeStorage(LEAGUE_KEY, current.league));
           for (var page in current.pages) {
             if (!stored) break;
-            if (!Object.prototype.hasOwnProperty.call(current.pages, page)) continue;
+            if (!Object.prototype.hasOwnProperty.call(current.pages, page))
+              continue;
             var p = current.pages[page];
             stored =
               p.scale === null || writeStorage(scaleKey(page), String(p.scale));
@@ -1518,7 +1557,9 @@
             language: saved.language, // global (null si no existe)
             league: saved.league,
             leagues:
-              saved.league === null ? null : LEAGUE_OPTIONS[saved.league].values,
+              saved.league === null
+                ? null
+                : LEAGUE_OPTIONS[saved.league].values,
             pages: pagesForJson(saved.pages),
           });
         }
@@ -1560,7 +1601,8 @@
             );
           }
           el.langTitle.textContent =
-            t("lang.title") + (current.language === null ? t("unsetSuffix") : "");
+            t("lang.title") +
+            (current.language === null ? t("unsetSuffix") : "");
 
           // Pantalla en edición y títulos de sus secciones
           for (i = 0; i < el.pageButtons.length; i++) {
@@ -1601,7 +1643,8 @@
             var label = document.createElement("b");
             // "TODOS" se traduce; MLB, NBA... son nombres propios
             label.textContent =
-              (current.league === "todos" ? t("league.all") : option.label) + ": ";
+              (current.league === "todos" ? t("league.all") : option.label) +
+              ": ";
             el.leagueValues.appendChild(label);
             el.leagueValues.appendChild(
               document.createTextNode(
@@ -1646,10 +1689,14 @@
         /** Muestra versión, web, email e id leídos de localStorage (solo lectura). */
         function renderInfo() {
           var info = readInfo();
-          el.version.textContent = info.version ? t("version") + info.version : "";
+          el.version.textContent = info.version
+            ? t("version") + info.version
+            : "";
           el.website.textContent = info.url ? " · " + info.url : "";
           el.email.textContent = info.email ? " · " + info.email : "";
-          el.deviceId.textContent = info.deviceId ? t("id") + info.deviceId : "";
+          el.deviceId.textContent = info.deviceId
+            ? t("id") + info.deviceId
+            : "";
         }
 
         /** Actualiza el indicador de internet de la cabecera. */
@@ -2154,12 +2201,7 @@
             el.orientButtons,
             el.langButtons,
             el.leagueButtons,
-            [
-            el.scaleDownBtn,
-            el.scaleUpBtn,
-            el.saveBtn,
-            el.exitBtn,
-            ],
+            [el.scaleDownBtn, el.scaleUpBtn, el.saveBtn, el.exitBtn],
           );
 
           // Clics / toques / OK del control remoto
@@ -2220,7 +2262,10 @@
           applyLanguage(); // textos en el idioma guardado antes de medir la tarjeta
           renderInfo();
           // Esta pantalla se muestra con la orientación global y SU escala guardadas
-          layoutManager.init(current.orientation, current.pages[THIS_PAGE].scale);
+          layoutManager.init(
+            current.orientation,
+            current.pages[THIS_PAGE].scale,
+          );
           render();
           renderNet();
 
