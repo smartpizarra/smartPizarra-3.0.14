@@ -43,6 +43,17 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
     <title>Cargando...</title>
+    <script>
+      // updateSettings() provisional: existe desde el <head> para que una
+      // llamada de la app mientras la página aún carga no se pierda. Se
+      // guarda y se procesa al ARRANCAR (ver final del script principal).
+      window.updateSettings = function (jsonData) {
+        (window.__pendingSettings = window.__pendingSettings || []).push(
+          jsonData,
+        );
+        return '{"ok":true,"queued":true}';
+      };
+    </script>
 
     <style>
       /* ==============================================================
@@ -312,52 +323,52 @@
   <body>
     <!-- #stage => rotación · #scaler => escala (ambos desde los settings) -->
     <div id="stage">
-    <div id="scaler">
-    <!-- TARJETA DE CARGA -->
-    <div class="splash-container" id="splashContainer">
-      <div class="logo">
-        <div class="logo-icon">SP</div>
+      <div id="scaler">
+        <!-- TARJETA DE CARGA -->
+        <div class="splash-container" id="splashContainer">
+          <div class="logo">
+            <div class="logo-icon">SP</div>
+          </div>
+          <h1>Smart Pizarra</h1>
+
+          <!-- Los llena InfoPanel con los valores de localStorage (CONFIG.settings) -->
+          <div class="info version" id="versionText"></div>
+          <div class="info website" id="websiteUrl"></div>
+          <div class="info email-contact" id="emailContact"></div>
+          <div class="info system-id" id="systemId"></div>
+
+          <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
+          <div class="loading-container">
+            <div class="loading-bar" id="loadingBar"></div>
+          </div>
+          <div class="progress-text" id="progressText">Starting system...</div>
+
+          <!-- Pasos: ids consecutivos step1..stepN (ajustar CONFIG.animation.totalSteps) -->
+          <div class="loading-steps" id="loadingSteps">
+            <div class="step active" id="step1">
+              <span class="step-check">&#10003;</span> Loading configuration...
+            </div>
+            <div class="step" id="step2">
+              <span class="step-check">&#10003;</span> Initializing modules...
+            </div>
+            <div class="step" id="step3">
+              <span class="step-check">&#10003;</span> Preparing interface...
+            </div>
+            <div class="step" id="step4">
+              <span class="step-check">&#10003;</span> Loading complete<span
+                class="dots"
+                ><span>.</span><span>.</span><span>.</span></span
+              >
+            </div>
+          </div>
+        </div>
+
+        <!-- PANTALLA DE BIENVENIDA: se muestra tras el fundido final -->
+        <div class="welcome" id="welcome">
+          <h2>¡Bienvenido a Smart Pizarra!</h2>
+          <p class="info" id="welcomeUrl"></p>
+        </div>
       </div>
-      <h1>Smart Pizarra</h1>
-
-      <!-- Los llena InfoPanel con los valores de localStorage (CONFIG.settings) -->
-      <div class="info version" id="versionText"></div>
-      <div class="info website" id="websiteUrl"></div>
-      <div class="info email-contact" id="emailContact"></div>
-      <div class="info system-id" id="systemId"></div>
-
-      <!-- Barra de progreso: LoadingAnimation cambia el scaleX de #loadingBar -->
-      <div class="loading-container">
-        <div class="loading-bar" id="loadingBar"></div>
-      </div>
-      <div class="progress-text" id="progressText">Starting system...</div>
-
-      <!-- Pasos: ids consecutivos step1..stepN (ajustar CONFIG.animation.totalSteps) -->
-      <div class="loading-steps" id="loadingSteps">
-        <div class="step active" id="step1">
-          <span class="step-check">&#10003;</span> Loading configuration...
-        </div>
-        <div class="step" id="step2">
-          <span class="step-check">&#10003;</span> Initializing modules...
-        </div>
-        <div class="step" id="step3">
-          <span class="step-check">&#10003;</span> Preparing interface...
-        </div>
-        <div class="step" id="step4">
-          <span class="step-check">&#10003;</span> Loading complete<span
-            class="dots"
-            ><span>.</span><span>.</span><span>.</span></span
-          >
-        </div>
-      </div>
-    </div>
-
-    <!-- PANTALLA DE BIENVENIDA: se muestra tras el fundido final -->
-    <div class="welcome" id="welcome">
-      <h2>¡Bienvenido a Smart Pizarra!</h2>
-      <p class="info" id="welcomeUrl"></p>
-    </div>
-    </div>
     </div>
 
     <script>
@@ -396,7 +407,12 @@
           }
           hex = hex.toUpperCase();
           return (
-            "SP-" + hex.slice(0, 4) + "-" + hex.slice(4, 8) + "-" + hex.slice(8, 12)
+            "SP-" +
+            hex.slice(0, 4) +
+            "-" +
+            hex.slice(4, 8) +
+            "-" +
+            hex.slice(8, 12)
           );
         }
 
@@ -453,7 +469,7 @@
             },
             scale: {
               key: "smartpizarra.scale",
-              defaultValue: 100,
+              defaultValue: 85,
               parse: function (raw) {
                 const percent = parseInt(raw, 10);
                 return percent >= 10 && percent <= 300 ? percent : null;
@@ -485,13 +501,27 @@
               key: "smartpizarra.league",
               defaultValue: "todos",
               parse: function (raw) {
-                const option = raw === null ? "" : String(raw).trim().toLowerCase();
-                return Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, option)
+                const option =
+                  raw === null ? "" : String(raw).trim().toLowerCase();
+                return Object.prototype.hasOwnProperty.call(
+                  LEAGUE_OPTIONS,
+                  option,
+                )
                   ? option
                   : null;
               },
             },
           },
+
+          /** Settings que puede modificar updateSettings() (deviceId NO: es fijo). */
+          editableSettings: [
+            "version",
+            "url",
+            "email",
+            "orientation",
+            "scale",
+            "league",
+          ],
 
           ids: {
             stage: "stage",
@@ -599,6 +629,38 @@
             return changed;
           }
 
+          /**
+           * Modifica settings y los guarda en localStorage. Solo acepta los
+           * nombres de `editable`; cada valor se valida con su parse() y se
+           * guarda ya normalizado (ej. "NBA" => "nba", 360 => 0).
+           * Un campo inválido se rechaza sin afectar a los demás.
+           * @param {object} data      Campos a cambiar ({version:"3.0.15", ...}).
+           * @param {string[]} editable Nombres de settings modificables.
+           * @returns {{applied:string[], rejected:string[]}}
+           */
+          update(data, editable) {
+            const result = { applied: [], rejected: [] };
+            Object.keys(data).forEach((name) => {
+              const def = this.schema[name];
+              const raw = data[name];
+              const value =
+                def &&
+                editable.indexOf(name) !== -1 &&
+                raw !== null &&
+                typeof raw !== "object"
+                  ? def.parse(String(raw))
+                  : null;
+              if (value === null) {
+                result.rejected.push(name);
+                return;
+              }
+              this._write(def.key, value);
+              this.values[name] = value;
+              result.applied.push(name);
+            });
+            return result;
+          }
+
           /** @returns {boolean} true si la clave pertenece a algún setting. */
           isSettingKey(key) {
             return Object.keys(this.schema).some(
@@ -672,8 +734,17 @@
             const contentWidth = this.scaler.offsetWidth;
             const contentHeight = this.scaler.offsetHeight;
             const state =
-              orientation + "|" + scale + "|" + width + "x" + height +
-              "|" + contentWidth + "x" + contentHeight;
+              orientation +
+              "|" +
+              scale +
+              "|" +
+              width +
+              "x" +
+              height +
+              "|" +
+              contentWidth +
+              "x" +
+              contentHeight;
             if (state === this._lastState) {
               return;
             }
@@ -908,6 +979,47 @@
             this.animation.start(() => this._fadeOutAndShowWelcome());
           }
 
+          /**
+           * Modifica settings desde un JSON (texto u objeto), los guarda en
+           * localStorage y actualiza la pantalla al momento.
+           * @param {string|object} jsonData Ej. '{"version":"3.0.15","league":"nba"}'
+           * @returns {{ok:boolean, applied:string[], rejected:string[], error?:string}}
+           */
+          updateSettings(jsonData) {
+            let data;
+            try {
+              data =
+                typeof jsonData === "string" ? JSON.parse(jsonData) : jsonData;
+            } catch (e) {
+              return {
+                ok: false,
+                applied: [],
+                rejected: [],
+                error: "JSON inválido",
+              };
+            }
+            if (!data || typeof data !== "object" || Array.isArray(data)) {
+              return {
+                ok: false,
+                applied: [],
+                rejected: [],
+                error: "Se esperaba un objeto JSON",
+              };
+            }
+            const result = this.settings.update(
+              data,
+              this.config.editableSettings,
+            );
+            if (result.applied.length > 0) {
+              this._applyLayout();
+            }
+            return {
+              ok: result.rejected.length === 0,
+              applied: result.applied,
+              rejected: result.rejected,
+            };
+          }
+
           /** Aplica todos los settings: layout y textos. @private */
           _applyLayout() {
             this.info.show(this.settings.values);
@@ -963,9 +1075,33 @@
           }
         }
 
-        /* ARRANQUE: inicia la animación cuando el HTML está listo */
+        /* ARRANQUE: inicia la animación cuando el HTML está listo, expone
+           updateSettings() y procesa las llamadas que llegaron antes */
         function start() {
-          new LoadingScreen(CONFIG).start();
+          const screen = new LoadingScreen(CONFIG);
+          screen.start();
+
+          /**
+           * Función GLOBAL (la app la llama con RunJavaScript / EvaluateJavaScript):
+           *   updateSettings('{"version":"3.0.15","url":"smartpizarra.com",
+           *     "email":"a@b.com","orientation":90,"scale":100,"league":"nba"}')
+           * Todos los campos son opcionales. Devuelve el resultado como texto JSON:
+           *   {"ok":true,"applied":["version",...],"rejected":[]}
+           * Reemplaza a la provisional del <head>.
+           * @param {string|object} jsonData
+           * @returns {string}
+           */
+          window.updateSettings = function (jsonData) {
+            const result = JSON.stringify(screen.updateSettings(jsonData));
+            console.log("updateSettings:", result);
+            return result;
+          };
+
+          const pending = window.__pendingSettings || [];
+          window.__pendingSettings = null;
+          pending.forEach(function (jsonData) {
+            window.updateSettings(jsonData);
+          });
         }
 
         if (document.readyState === "loading") {
