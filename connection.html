@@ -37,11 +37,11 @@
   - Sin backdrop-filter ni filter (muy pesados en GPU de TV box).
   - SIN animaciones CSS continuas: en el TV box cada fotograma cuesta casi
     lo mismo (60 fps = ~80-100 % de CPU). Todo lo que se mueve avanza en UN
-    reloj JS a 8 fps (TICK_MS, sección 8), detenido en segundo plano.
+    reloj JS a 3 fps (TICK_MS, sección 8), detenido en segundo plano.
     Las capas de pantalla completa (fondo, atenuación) cambian cada 2-4 s y
     los iconos no cambian de tamaño (redibujar el SVG duplicaba la CPU).
-    Medido en el TV box: ~20-30 % de CPU del proceso (antes ~60-80 %);
-    0 % con la app en segundo plano.
+    Medido en el TV box (CPU del proceso, % de un núcleo): ~13 % (a 8 fps
+    ~37 %; con animaciones CSS continuas ~60-80 %); 0 % en segundo plano.
   - JavaScript ES5 (var / function) + Promise.
 
   CONTRATO DE SALIDA: UN SOLO tipo de mensaje, cuando se RESTABLECE la conexión
@@ -1249,15 +1249,34 @@
            reloj JS (TICK_MS), que se detiene con la app en segundo plano.
            ================================================================== */
 
-        /** Un paso del reloj (ms). 125 = 8 fotogramas/s. Subirlo ahorra CPU. */
-        var TICK_MS = 125;
+        /**
+         * Un paso del reloj (ms) = fotogramas por segundo: es lo que más
+         * influye en la CPU. 333 = 3 fotogramas/s. Las velocidades y tiempos
+         * de abajo están en px/s y ms: se adaptan solos si se cambia.
+         * Medido en el TV box (CPU del proceso, % de un núcleo):
+         *   8 fps ~37 %, 4 fps ~20 %, 3 fps ~13 %, 2 fps ~12 %, quieto 0 %.
+         * La cantidad de iconos casi no influye (18 o 12: igual).
+         */
+        var TICK_MS = 333;
 
-        // Desplazamiento de la tarjeta (pixel shift)
+        /** @returns {number} Pasos del reloj que caben en "ms" (mínimo 1). */
+        function ticks(ms) {
+          return Math.max(1, Math.round(ms / TICK_MS));
+        }
+
+        /** @returns {number} px por paso para una velocidad en px/s. */
+        function perTick(pxPerSecond) {
+          return (pxPerSecond * TICK_MS) / 1000;
+        }
+
+        // Desplazamiento de la tarjeta (pixel shift). Es una capa grande:
+        // se mueve solo cada CARD_EVERY_MS, un paso pequeño cada vez.
         var MAX_X = 120; // desplazamiento horizontal máximo deseado (px)
         var MAX_Y = 80; // desplazamiento vertical máximo deseado (px)
-        var DRIFT_STEP = 0.4; // px que avanza la tarjeta por paso (~3 px/s)
+        var CARD_EVERY = ticks(2000); // pasos entre movimientos de la tarjeta (2 s)
+        var DRIFT_STEP = 2; // px por movimiento (~1 px/s)
 
-        var BLINK_TICKS = 6; // pasos entre cambios del punto de estado (0,75 s)
+        var BLINK_TICKS = ticks(750); // pasos entre cambios del punto de estado
 
         // Capas que cubren TODA la pantalla (atenuación y fondo): cambiarlas es
         // caro en el TV box, así que se actualizan pocas veces y en pasos
@@ -1265,9 +1284,9 @@
         var DIM_MS = 300000; // cada cuánto cambia el objetivo de la atenuación (5 min)
         var DIM_LOW = 0.15; // atenuación mínima
         var DIM_HIGH = 0.35; // atenuación máxima
-        var DIM_EVERY = 16; // pasos entre actualizaciones (2 s)
+        var DIM_EVERY = ticks(2000); // pasos entre actualizaciones (2 s)
         var DIM_STEP = 0.01; // cambio por actualización (0.15 => 0.35 en ~40 s)
-        var BG_EVERY = 32; // pasos entre cambios del fondo (4 s)
+        var BG_EVERY = ticks(4000); // pasos entre cambios del fondo (4 s)
         var BG_STEP = 0.05; // cambio por actualización (de 0 a 1 en ~80 s)
 
         var COLOR_MS = 60000; // cada cuánto cambian los colores de acento
@@ -1324,7 +1343,7 @@
         /** Tamaño (px) de un icono flotante: igual que .floating-icon en el CSS. */
         var ICON_SIZE = 34;
 
-        /** Cantidad de iconos flotantes. */
+        /** Cantidad de iconos flotantes (casi no influye en la CPU). */
         var ICON_COUNT = 18;
 
         /**
@@ -1333,13 +1352,15 @@
          * veces se detiene, gira y rebota en los bordes.
          */
         var ICON_MOTION = {
-          maxSpeed: 4, // px por paso en marcha normal
-          dashSpeed: 14, // px por paso en un acelerón
-          turnChance: 0.12, // probabilidad por paso de cambiar de dirección
-          dashChance: 0.02, // probabilidad por paso de dar un acelerón
-          pauseChance: 0.01, // probabilidad por paso de detenerse
-          maxPauseTicks: 16, // pausa máxima (pasos)
+          maxSpeed: perTick(32), // marcha normal (32 px/s)
+          dashSpeed: perTick(110), // acelerón (110 px/s)
+          turnChance: perTick(1), // cambios de dirección: ~1 por segundo
+          dashChance: perTick(0.16), // acelerones: ~1 cada 6 s
+          pauseChance: perTick(0.08), // pausas: ~1 cada 12 s
+          maxPauseTicks: ticks(2000), // pausa máxima (2 s)
           maxRotate: 45, // giro máximo a cada lado (grados)
+          turnRate: perTick(32), // giro máximo (grados/s)
+          friction: Math.pow(0.92, TICK_MS / 125), // frenado tras un acelerón
         };
 
         /** @returns {number} Número al azar entre min y max. */
@@ -1408,11 +1429,11 @@
           } else if (Math.random() < k.turnChance) {
             m.vx = rand(-k.maxSpeed, k.maxSpeed);
             m.vy = rand(-k.maxSpeed, k.maxSpeed);
-            m.vr = rand(-4, 4);
+            m.vr = rand(-k.turnRate, k.turnRate);
           } else {
             // Frena poco a poco tras un acelerón
-            m.vx *= 0.92;
-            m.vy *= 0.92;
+            m.vx *= k.friction;
+            m.vy *= k.friction;
           }
           var left = (m.leftPct / 100) * areaW;
           var top = (m.topPct / 100) * areaH;
@@ -1478,27 +1499,13 @@
           // 1) Tarjeta: avanza despacio hacia su destino; al llegar, otro.
           //    El destino se limita al margen libre: nunca sale de la pantalla.
           var c = motion.card;
-          var maxX = Math.min(MAX_X, layoutManager.driftX);
-          var maxY = Math.min(MAX_Y, layoutManager.driftY);
-          c.tx = Math.min(maxX, Math.max(-maxX, c.tx));
-          c.ty = Math.min(maxY, Math.max(-maxY, c.ty));
-          var nx = approach(c.x, c.tx, DRIFT_STEP);
-          var ny = approach(c.y, c.ty, DRIFT_STEP);
-          if (nx !== c.x || ny !== c.y) {
-            c.x = nx;
-            c.y = ny;
-            layoutManager.card.style.transform =
-              "translate3d(" + c.x.toFixed(1) + "px," + c.y.toFixed(1) + "px,0)";
-          } else {
-            newCardTarget();
-          }
+          if (motion.tick % CARD_EVERY === 0) moveCard(c);
 
           // Punto de la píldora: parpadea
           if (motion.tick % BLINK_TICKS === 0) {
             motion.dotOn = !motion.dotOn;
             el.statusDot.style.opacity = motion.dotOn ? "1" : "0.3";
           }
-
           // 3) Atenuación: se acerca a su objetivo poco a poco
           var d = motion.dim;
           if (d.value !== d.target && motion.tick % DIM_EVERY === 0) {
@@ -1515,6 +1522,28 @@
             b.dir = -b.dir;
           }
           el.bgShift.style.opacity = b.value.toFixed(3);
+        }
+
+        /**
+         * Avanza la tarjeta un paso hacia su destino; al llegar, elige otro.
+         * El destino se limita al margen libre: nunca sale de la pantalla.
+         * @param {{x:number,y:number,tx:number,ty:number}} c motion.card
+         */
+        function moveCard(c) {
+          var maxX = Math.min(MAX_X, layoutManager.driftX);
+          var maxY = Math.min(MAX_Y, layoutManager.driftY);
+          c.tx = Math.min(maxX, Math.max(-maxX, c.tx));
+          c.ty = Math.min(maxY, Math.max(-maxY, c.ty));
+          var nx = approach(c.x, c.tx, DRIFT_STEP);
+          var ny = approach(c.y, c.ty, DRIFT_STEP);
+          if (nx !== c.x || ny !== c.y) {
+            c.x = nx;
+            c.y = ny;
+            layoutManager.card.style.transform =
+              "translate3d(" + c.x.toFixed(1) + "px," + c.y.toFixed(1) + "px,0)";
+          } else {
+            newCardTarget();
+          }
         }
 
         /** Arranca el reloj (si no está ya en marcha). */
