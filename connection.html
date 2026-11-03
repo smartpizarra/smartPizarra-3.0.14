@@ -35,7 +35,13 @@
   - Sin librerías externas: los iconos son SVG escritos en el propio
     archivo, así que funciona aunque no haya internet (justo su caso).
   - Sin backdrop-filter ni filter (muy pesados en GPU de TV box).
-  - Las animaciones mueven solo transform u opacity.
+  - SIN animaciones CSS continuas: en el TV box cada fotograma cuesta casi
+    lo mismo (60 fps = ~80-100 % de CPU). Todo lo que se mueve avanza en UN
+    reloj JS a 8 fps (TICK_MS, sección 8), detenido en segundo plano.
+    Las capas de pantalla completa (fondo, atenuación) cambian cada 2-4 s y
+    los iconos no cambian de tamaño (redibujar el SVG duplicaba la CPU).
+    Medido en el TV box: ~20-30 % de CPU del proceso (antes ~60-80 %);
+    0 % con la app en segundo plano.
   - JavaScript ES5 (var / function) + Promise.
 
   CONTRATO DE SALIDA: UN SOLO tipo de mensaje, cuando se RESTABLECE la conexión
@@ -143,7 +149,6 @@
         opacity: 0.2;
         pointer-events: none; /* no bloquea toques ni el control remoto */
         z-index: 100;
-        transition: opacity 10s linear;
       }
 
       /* ==============================================================
@@ -189,7 +194,7 @@
          ============================================================== */
 
       /* La tarjeta se desplaza despacio (pixel shift anti-quemado): el JS
-         cambia su transform cada DRIFT_MS y la transición lo suaviza.
+         mueve poco a poco en cada paso de tick() (DRIFT_STEP).
          transform no cambia offsetWidth/Height: no afecta al ajuste. */
       .no-connection-container {
         text-align: center;
@@ -199,8 +204,7 @@
         border-radius: 20px;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
         border: 1px solid rgba(100, 150, 255, 0.3);
-        will-change: transform;
-        transition: transform 40s linear; /* debe coincidir con DRIFT_MS */
+        will-change: transform; /* la mueve tick() poco a poco */
       }
 
       /* Logo "SP": su degradado usa --logo-a/--logo-b (cambian con el tiempo) */
@@ -214,8 +218,7 @@
         justify-content: center;
         align-items: center;
         box-shadow: 0 8px 20px rgba(244, 67, 54, 0.4);
-        will-change: transform;
-        animation: pulse 2s ease-in-out infinite alternate;
+        /* Sin latido: una animación continua costaba ~50 % de CPU en el TV box */
       }
 
       .logo-icon {
@@ -292,8 +295,7 @@
         height: 12px;
         background-color: #f44336;
         border-radius: 50%;
-        margin-right: 10px;
-        animation: blink 1.5s infinite;
+        margin-right: 10px; /* parpadea con tick() (sin animación CSS) */
       }
 
       .connection-status.checking {
@@ -364,8 +366,6 @@
         height: 34px;
         z-index: 1;
         will-change: transform; /* capa propia en GPU: moverlo no repinta el resto */
-        /* La duración y la curva de cada salto las pone wanderIcon() */
-        transition-property: transform;
         stroke: currentColor; /* el color lo da la clase .icon-N */
         fill: none;
         stroke-width: 2;
@@ -394,58 +394,24 @@
       }
 
       /* ==============================================================
-         7. FONDO ANIMADO Y ANIMACIONES (@keyframes)
+         7. VARIACIÓN DEL COLOR DE FONDO (anti-quemado)
+         Capa (#bgShift) cuya opacidad sube y baja en tick(). SIN animaciones
+         CSS continuas: obligan a 60 fotogramas/s y en el TV box cuestan
+         ~80-100 % de CPU (ver sección 8 del script).
          ============================================================== */
-
-      /* Variación de color de fondo (anti-quemado): capa con opacidad animada
-         (solo recompone en la GPU, no repinta la pantalla) */
-      body::before {
-        content: "";
+      .bg-shift {
         position: absolute;
         top: 0;
         left: 0;
-        right: 0;
-        bottom: 0;
+        width: 100%;
+        height: 100%;
         background: linear-gradient(
           135deg,
           hsl(220, 70%, 15%) 0%,
           hsl(260, 65%, 18%) 100%
         );
         opacity: 0;
-        animation: bgShift 30s ease-in-out infinite alternate;
         pointer-events: none;
-      }
-
-      @keyframes bgShift {
-        0% {
-          opacity: 0;
-        }
-        100% {
-          opacity: 1;
-        }
-      }
-
-      /* Logo: late suavemente */
-      @keyframes pulse {
-        0% {
-          transform: scale(1);
-          opacity: 0.85;
-        }
-        100% {
-          transform: scale(1.08);
-          opacity: 1;
-        }
-      }
-
-      /* Punto de la píldora de estado: parpadea */
-      @keyframes blink {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.3;
-        }
       }
       /* Sin @media por ancho: con la página girada el ancho físico no es el
          del contenido. El tamaño lo ajusta layoutManager (responsive). */
@@ -454,6 +420,8 @@
   <body>
     <!-- Capa de atenuación (anti-quemado): fuera del escenario para cubrir siempre toda la pantalla -->
     <div class="dimmer" id="dimmer"></div>
+    <!-- Variación del color de fondo (detrás de todo; su opacidad la cambia tick()) -->
+    <div class="bg-shift" id="bgShift"></div>
 
     <!-- #stage  => se rota según la orientación global
          #scaler => ajusta la tarjeta a la pantalla y aplica su escala
@@ -1271,18 +1239,38 @@
         };
 
         /* ==================================================================
-           8. PROTECCIÓN ANTI-QUEMADO (esta pantalla puede quedarse horas)
-           Iconos flotantes + 3 técnicas: desplazamiento de la tarjeta,
-           rotación de colores y atenuación variable del brillo.
+           8. MOVIMIENTO Y PROTECCIÓN ANTI-QUEMADO (puede quedarse horas)
+           RENDIMIENTO (medido en el TV box): cada fotograma que cambia algo
+           cuesta casi lo mismo, se mueva un icono o todos. Una animación CSS
+           continua obliga a 60 fotogramas/s (~80-100 % de CPU del proceso);
+           a 8 fotogramas/s cuesta ~10 % y quieta ~0 %.
+           Por eso NO hay animaciones CSS continuas: TODO lo que se mueve
+           (iconos, tarjeta, punto, atenuación, fondo) avanza en UN solo
+           reloj JS (TICK_MS), que se detiene con la app en segundo plano.
            ================================================================== */
 
+        /** Un paso del reloj (ms). 125 = 8 fotogramas/s. Subirlo ahorra CPU. */
+        var TICK_MS = 125;
+
+        // Desplazamiento de la tarjeta (pixel shift)
         var MAX_X = 120; // desplazamiento horizontal máximo deseado (px)
         var MAX_Y = 80; // desplazamiento vertical máximo deseado (px)
-        var DRIFT_MS = 40000; // cada cuánto se elige nueva posición (= transición CSS)
-        var COLOR_MS = 60000; // cada cuánto cambian los colores de acento
-        var DIM_MS = 300000; // cada cuánto alterna la atenuación (5 min)
+        var DRIFT_STEP = 0.4; // px que avanza la tarjeta por paso (~3 px/s)
+
+        var BLINK_TICKS = 6; // pasos entre cambios del punto de estado (0,75 s)
+
+        // Capas que cubren TODA la pantalla (atenuación y fondo): cambiarlas es
+        // caro en el TV box, así que se actualizan pocas veces y en pasos
+        // tan pequeños que no se notan.
+        var DIM_MS = 300000; // cada cuánto cambia el objetivo de la atenuación (5 min)
         var DIM_LOW = 0.15; // atenuación mínima
         var DIM_HIGH = 0.35; // atenuación máxima
+        var DIM_EVERY = 16; // pasos entre actualizaciones (2 s)
+        var DIM_STEP = 0.01; // cambio por actualización (0.15 => 0.35 en ~40 s)
+        var BG_EVERY = 32; // pasos entre cambios del fondo (4 s)
+        var BG_STEP = 0.05; // cambio por actualización (de 0 a 1 en ~80 s)
+
+        var COLOR_MS = 60000; // cada cuánto cambian los colores de acento
 
         /**
          * Dibujos SVG de 24x24 (solo trazos) de los iconos flotantes: red,
@@ -1336,31 +1324,22 @@
         /** Tamaño (px) de un icono flotante: igual que .floating-icon en el CSS. */
         var ICON_SIZE = 34;
 
-        /** Cantidad de iconos flotantes (pocos = mejor rendimiento en TV box). */
+        /** Cantidad de iconos flotantes. */
         var ICON_COUNT = 18;
 
         /**
-         * Movimiento errático de los iconos: cada uno salta a un punto al azar
-         * cercano, con duración, giro, tamaño y curva al azar, y a veces se
-         * queda quieto un momento. Solo se anima transform (GPU).
+         * Movimiento errático de los iconos (por paso del reloj): cada icono
+         * lleva una velocidad que cambia al azar, a veces da un acelerón, a
+         * veces se detiene, gira y rebota en los bordes.
          */
         var ICON_MOTION = {
-          maxJump: 140, // distancia máxima de cada salto (px)
-          minMs: 700, // duración mínima de un salto
-          maxMs: 3500, // duración máxima de un salto
-          maxRotate: 45, // giro máximo acumulado a cada lado (grados)
-          pauseChance: 0.25, // probabilidad de quedarse quieto tras un salto
-          maxPauseMs: 2500, // pausa máxima
-          // Curvas de movimiento: suaves, bruscas y con rebote (overshoot)
-          easings: [
-            "linear",
-            "ease-in-out",
-            "ease-out",
-            "cubic-bezier(.2,1.6,.4,1)",
-            "cubic-bezier(.7,0,.3,1)",
-            "cubic-bezier(.3,-0.6,.7,1.6)",
-            "steps(4, end)",
-          ],
+          maxSpeed: 4, // px por paso en marcha normal
+          dashSpeed: 14, // px por paso en un acelerón
+          turnChance: 0.12, // probabilidad por paso de cambiar de dirección
+          dashChance: 0.02, // probabilidad por paso de dar un acelerón
+          pauseChance: 0.01, // probabilidad por paso de detenerse
+          maxPauseTicks: 16, // pausa máxima (pasos)
+          maxRotate: 45, // giro máximo a cada lado (grados)
         };
 
         /** @returns {number} Número al azar entre min y max. */
@@ -1368,62 +1347,21 @@
           return min + Math.random() * (max - min);
         }
 
-        /**
-         * Mueve un icono de forma errática y programa su siguiente salto.
-         * La posición se guarda como desplazamiento (x, y) desde su punto de
-         * partida y se limita para que el icono no salga del escenario.
-         * @param {SVGElement} icon
-         */
-        function wanderIcon(icon) {
-          var area = icon.parentNode;
-          var m = ICON_MOTION;
-          var st = icon._wander;
-          // Punto de partida en px (los SVG no tienen offsetLeft): se recalcula
-          // desde el % porque el escenario cambia de tamaño al girar
-          var left = (st.leftPct / 100) * area.offsetWidth;
-          var top = (st.topPct / 100) * area.offsetHeight;
-          // Límites del desplazamiento para no salir del escenario (girado)
-          var minX = -left;
-          var maxX = Math.max(minX, area.offsetWidth - ICON_SIZE - left);
-          var minY = -top;
-          var maxY = Math.max(minY, area.offsetHeight - ICON_SIZE - top);
+        /** Elementos que mueve tick() (se buscan en startBurnInProtection). */
+        var el = {};
 
-          st.x = Math.min(maxX, Math.max(minX, st.x + rand(-m.maxJump, m.maxJump)));
-          st.y = Math.min(maxY, Math.max(minY, st.y + rand(-m.maxJump, m.maxJump)));
-          st.rotate = Math.min(
-            m.maxRotate,
-            Math.max(-m.maxRotate, st.rotate + rand(-30, 30)),
-          );
-          var scale = rand(0.8, 1.25);
-          var ms = Math.round(rand(m.minMs, m.maxMs));
+        /** Iconos creados (con su estado de movimiento en icon._m). */
+        var icons = [];
 
-          icon.style.transitionDuration = ms + "ms";
-          icon.style.transitionTimingFunction =
-            m.easings[Math.floor(Math.random() * m.easings.length)];
-          icon.style.transform =
-            "translate3d(" + st.x.toFixed(1) + "px," + st.y.toFixed(1) +
-            "px,0) rotate(" + st.rotate.toFixed(1) + "deg) scale(" +
-            scale.toFixed(2) + ")";
-
-          // Siguiente salto: al terminar este, a veces tras una pausa
-          var pause =
-            Math.random() < m.pauseChance ? rand(300, m.maxPauseMs) : 0;
-          setTimeout(function () {
-            wanderIcon(icon);
-          }, ms + pause);
-        }
-
-        /** Crea los iconos flotantes de fondo (una sola vez) y los pone en marcha. */
+        /** Crea los iconos flotantes de fondo (una sola vez). */
         function createFloatingIcons() {
           var container = document.getElementById("floating-icons-container");
           var frag = document.createDocumentFragment();
           var wrapper = document.createElement("div"); // convierte texto SVG en elemento
-          var icons = [];
           // Orden al azar: así se ven todos los dibujos aunque haya menos iconos
           var order = ICON_PATHS.slice().sort(function () {
             return Math.random() - 0.5;
           });
-
           for (var i = 0; i < ICON_COUNT; i++) {
             wrapper.innerHTML =
               '<svg class="floating-icon icon-' + ((i % 6) + 1) +
@@ -1433,33 +1371,161 @@
             var topPct = rand(0, 95);
             icon.style.left = leftPct + "%";
             icon.style.top = topPct + "%";
-            icon._wander = { leftPct: leftPct, topPct: topPct, x: 0, y: 0, rotate: 0 };
             icon.style.opacity = rand(0.3, 0.7).toFixed(2);
+            // x/y: desplazamiento desde el punto de partida; vx/vy: px por paso
+            icon._m = {
+              leftPct: leftPct, topPct: topPct, x: 0, y: 0,
+              vx: rand(-2, 2), vy: rand(-2, 2), rot: 0, vr: 0, pause: 0,
+            };
             frag.appendChild(icon);
             icons.push(icon);
           }
           container.appendChild(frag);
-
-          // Primer salto con un retraso distinto en cada uno
-          icons.forEach(function (icon) {
-            setTimeout(function () {
-              wanderIcon(icon);
-            }, rand(0, 1500));
-          });
         }
 
         /**
-         * 1) Desplazamiento (pixel shift): la tarjeta viaja despacio a una
-         *    posición al azar, limitada por el margen libre (driftX/Y) para
-         *    que nunca se salga de la pantalla.
+         * Avanza un paso un icono. Los SVG no tienen offsetLeft: el punto de
+         * partida en px se calcula desde su % (el escenario cambia al girar).
+         * @param {SVGElement} icon
+         * @param {number} areaW Ancho del escenario (px).
+         * @param {number} areaH Alto del escenario (px).
          */
-        function drift() {
+        function stepIcon(icon, areaW, areaH) {
+          var m = icon._m;
+          var k = ICON_MOTION;
+          if (m.pause > 0) {
+            m.pause--;
+            return;
+          }
+          if (Math.random() < k.pauseChance) {
+            m.pause = Math.round(rand(3, k.maxPauseTicks));
+            return;
+          }
+          if (Math.random() < k.dashChance) {
+            var angle = rand(0, Math.PI * 2);
+            m.vx = Math.cos(angle) * k.dashSpeed;
+            m.vy = Math.sin(angle) * k.dashSpeed;
+          } else if (Math.random() < k.turnChance) {
+            m.vx = rand(-k.maxSpeed, k.maxSpeed);
+            m.vy = rand(-k.maxSpeed, k.maxSpeed);
+            m.vr = rand(-4, 4);
+          } else {
+            // Frena poco a poco tras un acelerón
+            m.vx *= 0.92;
+            m.vy *= 0.92;
+          }
+          var left = (m.leftPct / 100) * areaW;
+          var top = (m.topPct / 100) * areaH;
+          var minX = -left;
+          var maxX = Math.max(minX, areaW - ICON_SIZE - left);
+          var minY = -top;
+          var maxY = Math.max(minY, areaH - ICON_SIZE - top);
+          m.x += m.vx;
+          m.y += m.vy;
+          // Rebote en los bordes del escenario
+          if (m.x < minX || m.x > maxX) {
+            m.vx = -m.vx;
+            m.x = Math.min(maxX, Math.max(minX, m.x));
+          }
+          if (m.y < minY || m.y > maxY) {
+            m.vy = -m.vy;
+            m.y = Math.min(maxY, Math.max(minY, m.y));
+          }
+          m.rot = Math.min(k.maxRotate, Math.max(-k.maxRotate, m.rot + m.vr));
+          icon.style.transform =
+            "translate3d(" + m.x.toFixed(1) + "px," + m.y.toFixed(1) +
+            "px,0) rotate(" + m.rot.toFixed(1) + "deg)";
+          // Sin scale(): cambiar el tamaño obliga a redibujar el SVG en cada
+          // paso y duplicaba la CPU (medido en el TV box)
+        }
+
+        /** Estado de lo que se mueve fuera de los iconos. */
+        var motion = {
+          timer: null, // reloj (setInterval) o null si está detenido
+          tick: 0, // pasos desde que arrancó
+          card: { x: 0, y: 0, tx: 0, ty: 0 }, // posición y destino de la tarjeta
+          dim: { value: DIM_LOW, target: DIM_LOW },
+          bg: { value: 0, dir: 1 },
+          dotOn: true,
+        };
+
+        /** Elige un destino nuevo para la tarjeta dentro del margen libre. */
+        function newCardTarget() {
           var maxX = Math.min(MAX_X, layoutManager.driftX);
           var maxY = Math.min(MAX_Y, layoutManager.driftY);
-          var x = (Math.random() * 2 - 1) * maxX;
-          var y = (Math.random() * 2 - 1) * maxY;
-          layoutManager.card.style.transform =
-            "translate3d(" + x.toFixed(1) + "px," + y.toFixed(1) + "px,0)";
+          motion.card.tx = rand(-maxX, maxX);
+          motion.card.ty = rand(-maxY, maxY);
+        }
+
+        /**
+         * Acerca un valor a su destino como máximo "step".
+         * @returns {number}
+         */
+        function approach(value, target, step) {
+          return Math.abs(target - value) <= step
+            ? target
+            : value + (target > value ? step : -step);
+        }
+
+        /** Un paso del reloj: mueve todo lo animado. */
+        function tick() {
+          motion.tick++;
+          var area = el.iconArea;
+          var areaW = area.offsetWidth;
+          var areaH = area.offsetHeight;
+          for (var i = 0; i < icons.length; i++) stepIcon(icons[i], areaW, areaH);
+
+          // 1) Tarjeta: avanza despacio hacia su destino; al llegar, otro.
+          //    El destino se limita al margen libre: nunca sale de la pantalla.
+          var c = motion.card;
+          var maxX = Math.min(MAX_X, layoutManager.driftX);
+          var maxY = Math.min(MAX_Y, layoutManager.driftY);
+          c.tx = Math.min(maxX, Math.max(-maxX, c.tx));
+          c.ty = Math.min(maxY, Math.max(-maxY, c.ty));
+          var nx = approach(c.x, c.tx, DRIFT_STEP);
+          var ny = approach(c.y, c.ty, DRIFT_STEP);
+          if (nx !== c.x || ny !== c.y) {
+            c.x = nx;
+            c.y = ny;
+            layoutManager.card.style.transform =
+              "translate3d(" + c.x.toFixed(1) + "px," + c.y.toFixed(1) + "px,0)";
+          } else {
+            newCardTarget();
+          }
+
+          // Punto de la píldora: parpadea
+          if (motion.tick % BLINK_TICKS === 0) {
+            motion.dotOn = !motion.dotOn;
+            el.statusDot.style.opacity = motion.dotOn ? "1" : "0.3";
+          }
+
+          // 3) Atenuación: se acerca a su objetivo poco a poco
+          var d = motion.dim;
+          if (d.value !== d.target && motion.tick % DIM_EVERY === 0) {
+            d.value = approach(d.value, d.target, DIM_STEP);
+            el.dimmer.style.opacity = d.value.toFixed(3);
+          }
+
+          // Fondo: su capa sube y baja de opacidad (variación de color)
+          if (motion.tick % BG_EVERY !== 0) return;
+          var b = motion.bg;
+          b.value += BG_STEP * b.dir;
+          if (b.value >= 1 || b.value <= 0) {
+            b.value = Math.min(1, Math.max(0, b.value));
+            b.dir = -b.dir;
+          }
+          el.bgShift.style.opacity = b.value.toFixed(3);
+        }
+
+        /** Arranca el reloj (si no está ya en marcha). */
+        function startMotion() {
+          if (motion.timer === null) motion.timer = setInterval(tick, TICK_MS);
+        }
+
+        /** Detiene el reloj (app en segundo plano: no se gasta CPU). */
+        function stopMotion() {
+          clearInterval(motion.timer);
+          motion.timer = null;
         }
 
         /** 2) Rotación lenta de colores de acento y logo (15° de tono cada vez). */
@@ -1472,17 +1538,23 @@
           root.setProperty("--logo-b", "hsl(" + ((33 + colorStep) % 360) + ", 70%, 46%)");
         }
 
-        /** Arranca las 3 técnicas anti-quemado. */
+        /** Arranca el movimiento y la protección anti-quemado. */
         function startBurnInProtection() {
-          setInterval(drift, DRIFT_MS);
+          el.iconArea = document.getElementById("floating-icons-container");
+          el.statusDot = document.querySelector(".status-dot");
+          el.dimmer = document.getElementById("dimmer");
+          el.bgShift = document.getElementById("bgShift");
+          createFloatingIcons();
+          newCardTarget();
           setInterval(shiftColors, COLOR_MS);
-          // 3) Atenuación variable del brillo (alterna entre DIM_LOW y DIM_HIGH)
-          var dimmer = document.getElementById("dimmer");
-          var dimHigh = false;
           setInterval(function () {
-            dimHigh = !dimHigh;
-            dimmer.style.opacity = dimHigh ? DIM_HIGH : DIM_LOW;
+            motion.dim.target = motion.dim.target === DIM_HIGH ? DIM_LOW : DIM_HIGH;
           }, DIM_MS);
+          document.addEventListener("visibilitychange", function () {
+            if (document.hidden) stopMotion();
+            else startMotion();
+          });
+          if (!document.hidden) startMotion();
         }
 
         /* ==================================================================
@@ -1507,9 +1579,7 @@
           applyLanguage(); // textos en el idioma guardado antes de medir la tarjeta
           noConnectionScreen.updateUI();
           refresh(); // orientación, tamaño y datos desde localStorage
-          createFloatingIcons();
-          drift();
-          startBurnInProtection();
+          startBurnInProtection(); // iconos + reloj único de movimiento
 
           // Releer settings: cambio de tamaño, al mostrarse, si otra página
           // los cambia y cada WATCH_MS (el WebView puede arrancar en 0x0)
