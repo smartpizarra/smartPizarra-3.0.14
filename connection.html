@@ -1,0 +1,1466 @@
+<!doctype html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA "SIN CONEXIÓN" PARA ANDROID WEBVIEW
+=====================================================================
+  Adaptada de example3.html a este proyecto.
+
+  QUE HACE
+  Se muestra cuando la app (Kodular / App Inventor) detecta que no hay
+  internet. La página:
+    - Comprueba por su cuenta, de forma periódica, si hay internet REAL.
+    - Muestra el estado en una "píldora" de color:
+        amarillo = verificando, rojo = sin conexión, verde = recuperada.
+    - Avisa a la app con un JSON cada vez que el estado cambia.
+    - Protege la pantalla contra el quemado (burn-in) porque puede
+      quedarse visible durante horas en una TV.
+
+  SETTINGS (localStorage) - SOLO SE LEEN, ESTA PÁGINA NO ESCRIBE NADA
+  Los crea loading.html con sus valores por defecto (CONFIG.settings y
+  PAGES). config.html no tiene ninguna opción para esta pantalla.
+    "smartpizarra.orientation"        0/90/180/270  GLOBAL: gira la página
+    "smartpizarra.language"           es | en       GLOBAL: idioma de los textos
+    "smartpizarra.connection.scale"   10 a 300 (%)  tamaño de ESTA pantalla
+                                                    (100 % = 90 % de la pantalla)
+    "smartpizarra.version" / ".url" / ".email" / ".deviceId"   se muestran
+    "smartpizarra.league" / "smartpizarra.scale"   solo viajan en los JSON
+  Para cambiar el tamaño: updateSettings('{"page":"connection","scale":95}')
+  en loading.html, o su default en PAGES de loading.html.
+  Si otra página los cambia, esta los vuelve a leer cada 1 s, al
+  mostrarse y con el evento "storage".
+  Si una clave no existe (loading.html nunca se abrió): orientación 0°,
+  tamaño 100 %, idioma DISPLAY_LANGUAGE y campos vacíos (null en el JSON).
+
+  COMPATIBILIDAD / RENDIMIENTO (Android WebView 101 en TV box)
+  - Sin librerías externas: los iconos son SVG escritos en el propio
+    archivo, así que funciona aunque no haya internet (justo su caso).
+  - Sin backdrop-filter ni filter (muy pesados en GPU de TV box).
+  - Las animaciones mueven solo transform u opacity.
+  - JavaScript ES5 (var / function) + Promise.
+
+  CONTRATO DE SALIDA: mensajes enviados a la app
+    Al iniciar (una vez):
+      {"origin":"connection_status","action":"info","status":"","internetStatus":"", ...}
+    Cada vez que cambia el estado (o cuando se pide con checkConnection):
+      {"origin":"connection_status","action":"connection",
+       "internetStatus":"online","status":"online","latency":94,
+       "localNetwork":true,"checkedAt":"2026-11-02T17:41:11.909Z", ...}
+        internetStatus  "online" | "offline"  -> estado REAL de internet
+        status          igual que internetStatus (compatibilidad)
+        latency         ms que tardó la última verificación
+        localNetwork    true si hay Wi-Fi/cable aunque no haya internet
+        checkedAt       fecha y hora de la verificación (ISO 8601)
+    "..." = TODOS los mensajes llevan además los settings leídos de
+    localStorage en ese momento (null si no existen):
+      "version","url","email","deviceId","league","leagues",
+      "orientation","language","scale" (escala para la app, factor % / 100)
+
+  FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
+    checkConnection()        Fuerza una verificación y envía el resultado.
+                             Devuelve el último estado conocido (true/false).
+    checkConnectionAsync()   Igual, pero devuelve Promise<boolean>.
+  updateData() de example3.html ya no existe: versión, web, email, id y
+  tamaño se leen de localStorage (se cambian con updateSettings() de loading.html).
+
+  ARQUITECTURA (bloque <script>)
+    1. Configuración     Claves, defaults de pantalla, I18N, endpoints.
+    2. Settings          Lectura de localStorage y armado de los JSON.
+    3. Comunicación      sendToAppInventor(), report().
+    4. Internet          validateResponse(), pingEndpoint(), probeInternet().
+    5. layoutManager     Gira, ajusta a pantalla y calcula el margen para
+                         el desplazamiento anti-quemado.
+    6. Textos            applyLanguage(), renderInfo().
+    7. noConnectionScreen  Estado, verificaciones periódicas, histéresis, UI.
+    8. Anti-quemado      Iconos flotantes, desplazamiento, colores, brillo.
+    9. API pública e inicio.
+
+  COMO PROBAR EN UN NAVEGADOR DE PC
+    Abrir antes loading.html en el mismo navegador (crea los settings).
+    Consola (F12):
+      window.AppInventor = { setWebViewString: function (m) { console.log(m); } };
+      checkConnectionAsync().then(console.log);
+    Para simular un corte: DevTools -> Network -> "Offline".
+
+  ARCHIVOS RELACIONADOS
+    loading.html   Crea los settings (defaults) y los modifica con updateSettings().
+    example3.html  Versión original de esta pantalla (referencia).
+=====================================================================
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Sin Conexión - Smart Pizarra</title>
+    <style>
+      /* ==============================================================
+         1. BASE: reinicio de estilos, colores globales y fondo
+         ============================================================== */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      /* Colores que cambian con el tiempo (anti-quemado). Los modifica
+         shiftColors() en el JavaScript; aquí están sus valores iniciales. */
+      :root {
+        --accent: hsl(187, 100%, 38%); /* sitio web e ID */
+        --logo-a: hsl(4, 60%, 42%); /* degradado del logo (inicio) */
+        --logo-b: hsl(33, 70%, 46%); /* degradado del logo (fin) */
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #141a5e;
+      }
+
+      body {
+        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
+        background: linear-gradient(135deg, #141a5e 0%, #251570 100%);
+        color: rgba(255, 255, 255, 0.88);
+        position: relative;
+        user-select: none;
+      }
+
+      /* Capa negra que reduce el brillo máximo de toda la pantalla.
+         Su opacidad alterna entre DIM_LOW y DIM_HIGH (ver JavaScript). */
+      .dimmer {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #000;
+        opacity: 0.2;
+        pointer-events: none; /* no bloquea toques ni el control remoto */
+        z-index: 100;
+        transition: opacity 10s linear;
+      }
+
+      /* ==============================================================
+         2. ESCENARIO Y AJUSTE A PANTALLA (rotación y tamaño)
+         Los dimensiona y transforma layoutManager desde JavaScript.
+         ============================================================== */
+
+      /* #stage: se rota 0/90/180/270 (ancho y alto se intercambian a 90/270) */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      /* #scaler: el JS lo escala para que la tarjeta ocupe FIT_RATIO de la
+         pantalla. Sin ancho fijo y sin encogerse: mide su tamaño natural. */
+      #scaler {
+        position: relative;
+        z-index: 20;
+        display: flex;
+        justify-content: center;
+        flex-shrink: 0;
+        transform-origin: 50% 50%;
+      }
+
+      /* Los iconos flotantes ocupan todo el escenario (rotan, pero no se escalan) */
+      #floating-icons-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        pointer-events: none;
+      }
+
+      /* ==============================================================
+         3. TARJETA PRINCIPAL (logo, título y datos de la app)
+         ============================================================== */
+
+      /* La tarjeta se desplaza despacio (pixel shift anti-quemado): el JS
+         cambia su transform cada DRIFT_MS y la transición lo suaviza.
+         transform no cambia offsetWidth/Height: no afecta al ajuste. */
+      .no-connection-container {
+        text-align: center;
+        width: 520px;
+        background: rgba(30, 40, 100, 0.85);
+        padding: 40px 30px;
+        border-radius: 20px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(100, 150, 255, 0.3);
+        will-change: transform;
+        transition: transform 40s linear; /* debe coincidir con DRIFT_MS */
+      }
+
+      /* Logo "SP": su degradado usa --logo-a/--logo-b (cambian con el tiempo) */
+      .logo {
+        width: 100px;
+        height: 100px;
+        margin: 0 auto 25px;
+        border-radius: 20px;
+        background: linear-gradient(45deg, var(--logo-a), var(--logo-b));
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 8px 20px rgba(244, 67, 54, 0.4);
+        will-change: transform;
+        animation: pulse 2s ease-in-out infinite alternate;
+      }
+
+      .logo-icon {
+        font-size: 40px;
+        font-weight: bold;
+      }
+
+      h1 {
+        font-size: 2.8rem;
+        margin-bottom: 5px;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+      }
+
+      /* --- Datos leídos de localStorage (renderInfo). Vacíos no ocupan espacio --- */
+      .info:empty {
+        display: none;
+      }
+
+      .version {
+        font-size: 1.1rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-bottom: 10px;
+        font-style: italic;
+      }
+
+      .website,
+      .id-number {
+        font-size: 1.2rem;
+        color: var(--accent);
+        margin-bottom: 10px;
+        font-weight: 300;
+        letter-spacing: 1px;
+        word-break: break-all;
+      }
+
+      .email-contact {
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 20px;
+      }
+
+      /* Texto fijo "No se ha detectado una conexión..." */
+      .message {
+        font-size: 1.4rem;
+        color: rgba(255, 255, 255, 0.9);
+        margin-top: 10px;
+        margin-bottom: 30px;
+        line-height: 1.6;
+      }
+      .message span {
+        display: block;
+      }
+
+      /* ==============================================================
+         4. PÍLDORA DE ESTADO DE CONEXIÓN
+         Sin clase extra = rojo (offline). updateUI() le agrega
+         "checking" (amarillo) u "online" (verde).
+         ============================================================== */
+      .connection-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 25px;
+        background: rgba(244, 67, 54, 0.2);
+        border-radius: 50px;
+        margin: 20px 0;
+        border: 1px solid rgba(244, 67, 54, 0.5);
+        font-size: 1.1rem;
+      }
+
+      /* Punto que parpadea a la izquierda del texto */
+      .status-dot {
+        width: 12px;
+        height: 12px;
+        background-color: #f44336;
+        border-radius: 50%;
+        margin-right: 10px;
+        animation: blink 1.5s infinite;
+      }
+
+      .connection-status.checking {
+        background: rgba(255, 193, 7, 0.15);
+        border-color: rgba(255, 193, 7, 0.5);
+      }
+      .connection-status.checking .status-dot {
+        background-color: #ffc107;
+      }
+      .connection-status.online {
+        background: rgba(76, 175, 80, 0.2);
+        border-color: rgba(76, 175, 80, 0.5);
+      }
+      .connection-status.online .status-dot {
+        background-color: #4caf50;
+      }
+
+      /* ==============================================================
+         5. INSTRUCCIONES Y PIE DE PÁGINA
+         ============================================================== */
+      .instructions {
+        margin-top: 30px;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        text-align: left;
+        font-size: 1.1rem;
+        line-height: 1.6;
+        color: rgba(255, 255, 255, 0.8);
+      }
+
+      .instruction-item {
+        margin: 12px 0;
+        display: flex;
+        align-items: center;
+      }
+
+      /* Icono SVG de cada instrucción: solo trazo (stroke), sin relleno */
+      .instruction-icon {
+        margin-right: 12px;
+        width: 22px;
+        height: 22px;
+        min-width: 22px;
+        stroke: #4fc3f7;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .contact-info {
+        margin-top: 20px;
+        padding: 15px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        font-size: 0.9em;
+        color: rgba(255, 255, 255, 0.7);
+        text-align: center;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      /* ==============================================================
+         6. ICONOS FLOTANTES DE FONDO (los crea el JavaScript)
+         ============================================================== */
+      .floating-icon {
+        position: absolute;
+        width: 34px;
+        height: 34px;
+        z-index: 1;
+        will-change: transform; /* capa propia en GPU: moverlo no repinta el resto */
+        stroke: currentColor; /* el color lo da la clase .icon-N */
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* Paleta de los iconos (el JS asigna icon-1 ... icon-6 en orden) */
+      .icon-1 {
+        color: #ff9966;
+      }
+      .icon-2 {
+        color: #66ff99;
+      }
+      .icon-3 {
+        color: #6699ff;
+      }
+      .icon-4 {
+        color: #ff66cc;
+      }
+      .icon-5 {
+        color: #ffcc66;
+      }
+      .icon-6 {
+        color: #66ffff;
+      }
+
+      /* ==============================================================
+         7. FONDO ANIMADO Y ANIMACIONES (@keyframes)
+         ============================================================== */
+
+      /* Variación de color de fondo (anti-quemado): capa con opacidad animada
+         (solo recompone en la GPU, no repinta la pantalla) */
+      body::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(
+          135deg,
+          hsl(220, 70%, 15%) 0%,
+          hsl(260, 65%, 18%) 100%
+        );
+        opacity: 0;
+        animation: bgShift 30s ease-in-out infinite alternate;
+        pointer-events: none;
+      }
+
+      @keyframes bgShift {
+        0% {
+          opacity: 0;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+
+      /* float, float2, float3: tres recorridos para los iconos flotantes */
+      @keyframes float {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0) rotate(0deg);
+        }
+        25% {
+          transform: translate3d(20px, 30px, 0) rotate(5deg);
+        }
+        50% {
+          transform: translate3d(-15px, 20px, 0) rotate(-5deg);
+        }
+        75% {
+          transform: translate3d(10px, -10px, 0) rotate(3deg);
+        }
+      }
+
+      @keyframes float2 {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0) rotate(0deg);
+        }
+        33% {
+          transform: translate3d(30px, -20px, 0) rotate(-8deg);
+        }
+        66% {
+          transform: translate3d(-20px, 25px, 0) rotate(8deg);
+        }
+      }
+
+      @keyframes float3 {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0) rotate(0deg);
+        }
+        20% {
+          transform: translate3d(-25px, 15px, 0) rotate(-3deg);
+        }
+        40% {
+          transform: translate3d(20px, -25px, 0) rotate(3deg);
+        }
+        60% {
+          transform: translate3d(-15px, -20px, 0) rotate(-5deg);
+        }
+        80% {
+          transform: translate3d(25px, 10px, 0) rotate(5deg);
+        }
+      }
+
+      /* Logo: late suavemente */
+      @keyframes pulse {
+        0% {
+          transform: scale(1);
+          opacity: 0.85;
+        }
+        100% {
+          transform: scale(1.08);
+          opacity: 1;
+        }
+      }
+
+      /* Punto de la píldora de estado: parpadea */
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+      /* Sin @media por ancho: con la página girada el ancho físico no es el
+         del contenido. El tamaño lo ajusta layoutManager (responsive). */
+    </style>
+  </head>
+  <body>
+    <!-- Capa de atenuación (anti-quemado): fuera del escenario para cubrir siempre toda la pantalla -->
+    <div class="dimmer" id="dimmer"></div>
+
+    <!-- #stage  => se rota según la orientación global
+         #scaler => ajusta la tarjeta a la pantalla y aplica su escala
+         Los iconos flotantes están dentro de #stage (rotan) pero fuera de #scaler (no se escalan) -->
+    <div id="stage">
+      <div id="floating-icons-container"></div>
+      <div id="scaler">
+        <!-- TARJETA PRINCIPAL -->
+        <div class="no-connection-container" id="card">
+          <div class="logo">
+            <div class="logo-icon">SP</div>
+          </div>
+
+          <h1>Smart Pizarra</h1>
+
+          <!-- Los llena renderInfo() desde localStorage; vacíos no se muestran -->
+          <div class="info version" id="versionText"></div>
+          <div class="info website" id="websiteUrl"></div>
+          <div class="info email-contact" id="emailContact"></div>
+          <div class="info id-number" id="idNumber"></div>
+
+          <!-- Textos con data-i18n: los traduce applyLanguage() (I18N) -->
+          <div class="message">
+            <span data-i18n="message1"
+              >No se ha detectado una conexión a internet activa.</span
+            >
+            <span data-i18n="message2">Algunas funciones pueden estar limitadas.</span>
+          </div>
+
+          <!-- Píldora de estado: updateUI() cambia su clase y su texto -->
+          <div class="connection-status checking" id="connectionStatus">
+            <div class="status-dot"></div>
+            <span id="statusText">VERIFICANDO CONEXIÓN…</span>
+          </div>
+
+          <!-- Instrucciones. Cada icono es un SVG de 24x24 dibujado con trazos. -->
+          <div class="instructions">
+            <div class="instruction-item">
+              <!-- Icono: Wi-Fi -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <path
+                  d="M2 8.8a15 15 0 0 1 20 0M5 12.5a10.5 10.5 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"
+                />
+                <circle cx="12" cy="19.5" r="1" />
+              </svg>
+              <span data-i18n="tip1"
+                >Verifica que el Wi-Fi esté activado y conectado a una red.</span
+              >
+            </div>
+
+            <div class="instruction-item">
+              <!-- Icono: enchufe / cable de red -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4" />
+              </svg>
+              <span data-i18n="tip2"
+                >Asegúrate de que el cable de red esté bien conectado.</span
+              >
+            </div>
+
+            <div class="instruction-item">
+              <!-- Icono: botón de encendido -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0" />
+              </svg>
+              <span data-i18n="tip3"
+                >Intenta reiniciar tu router y tu dispositivo.</span
+              >
+            </div>
+
+            <div class="instruction-item">
+              <!-- Icono: flecha de reintentar -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6" />
+              </svg>
+              <span data-i18n="tip4"
+                >La aplicación intentará reconectar automáticamente.</span
+              >
+            </div>
+          </div>
+
+          <div class="contact-info" data-i18n="copyright">
+            © 2026 Smart Pizarra. Todos los derechos reservados.
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- /#scaler /#stage -->
+
+    <script>
+      // Todo dentro de una IIFE para no crear globales por accidente.
+      // Lo que la app necesita se publica en window.*
+      (function () {
+        "use strict";
+
+        /* ==================================================================
+           1. CONFIGURACIÓN
+           ================================================================== */
+
+        /** Esta pantalla: su tamaño se lee de "smartpizarra.connection.scale". */
+        var THIS_PAGE = "connection";
+
+        /**
+         * Claves de localStorage. Deben ser IGUALES a CONFIG.settings de
+         * loading.html (que las crea con sus valores por defecto).
+         */
+        var KEYS = {
+          orientation: "smartpizarra.orientation", // GLOBAL
+          language: "smartpizarra.language", // GLOBAL
+          ownScale: "smartpizarra." + THIS_PAGE + ".scale", // tamaño de esta pantalla
+          appScale: "smartpizarra.scale", // escala para la app (solo JSON)
+          league: "smartpizarra.league",
+          version: "smartpizarra.version",
+          url: "smartpizarra.url",
+          email: "smartpizarra.email",
+          deviceId: "smartpizarra.deviceId",
+        };
+
+        /** Orientaciones permitidas (grados). */
+        var ORIENTATIONS = [0, 90, 180, 270];
+
+        /** Límites de las escalas (%), iguales a loading.html. */
+        var SCALE_LIMITS = { min: 10, max: 300 };
+
+        /** Fracción de la pantalla (girada) que ocupa la tarjeta con escala 100 %. */
+        var FIT_RATIO = 0.9;
+
+        /** Cada cuántos ms se vuelve a leer localStorage y el tamaño de la ventana. */
+        var WATCH_MS = 1000;
+
+        /**
+         * Ligas de cada opción (para "leagues" en los JSON). Deben ser IGUALES
+         * a LEAGUE_OPTIONS de loading.html. "todos" = "" (sin filtro).
+         */
+        var LEAGUE_OPTIONS = {
+          mlb: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+          nba: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK",
+          nflnhl: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
+          todos: "",
+        };
+
+        /**
+         * Textos por idioma. Las claves de idioma (es, en) deben ser IGUALES a
+         * I18N de loading.html. Para agregar un idioma: un diccionario aquí
+         * con TODAS las claves (y en loading.html / config.html).
+         */
+        var I18N = {
+          es: {
+            title: "Sin Conexión - Smart Pizarra",
+            message1: "No se ha detectado una conexión a internet activa.",
+            message2: "Algunas funciones pueden estar limitadas.",
+            "status.checking": "VERIFICANDO CONEXIÓN…",
+            "status.offline": "SIN CONEXIÓN A INTERNET",
+            "status.online": "CONEXIÓN RECUPERADA",
+            tip1: "Verifica que el Wi-Fi esté activado y conectado a una red.",
+            tip2: "Asegúrate de que el cable de red esté bien conectado.",
+            tip3: "Intenta reiniciar tu router y tu dispositivo.",
+            tip4: "La aplicación intentará reconectar automáticamente.",
+            copyright: "© 2026 Smart Pizarra. Todos los derechos reservados.",
+            version: "Versión: ",
+            id: "ID: ",
+          },
+          en: {
+            title: "No Connection - Smart Pizarra",
+            message1: "No active internet connection was detected.",
+            message2: "Some features may be limited.",
+            "status.checking": "CHECKING CONNECTION…",
+            "status.offline": "NO INTERNET CONNECTION",
+            "status.online": "CONNECTION RESTORED",
+            tip1: "Check that Wi-Fi is turned on and connected to a network.",
+            tip2: "Make sure the network cable is properly connected.",
+            tip3: "Try restarting your router and your device.",
+            tip4: "The app will try to reconnect automatically.",
+            copyright: "© 2026 Smart Pizarra. All rights reserved.",
+            version: "Version: ",
+            id: "ID: ",
+          },
+        };
+
+        /** Idioma con el que se MUESTRA si la clave aún no existe (no se guarda;
+            igual que DEFAULT_LANGUAGE de loading.html). */
+        var DISPLAY_LANGUAGE = "en";
+
+        /** Configuración de la verificación de internet (igual que example3.html). */
+        var CONNECTION_CONFIG = {
+          // Cada endpoint responde un JSON conocido (con CORS) que se LEE y se VALIDA:
+          // un portal cautivo o el router no cuentan como internet. Los de IP
+          // (1.1.1.1 / 8.8.8.8) no dependen del DNS local. Basta con UNO válido.
+          endpoints: [
+            {
+              url: "https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json",
+              type: "dns",
+            },
+            {
+              url: "https://8.8.8.8/resolve?name=example.com&type=A",
+              type: "dns",
+            },
+            {
+              url: "https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json",
+              type: "dns",
+            },
+            {
+              url: "https://dns.google/resolve?name=example.com&type=A",
+              type: "dns",
+            },
+            { url: "https://api.ipify.org/?format=json", type: "ip" },
+          ],
+          timeoutMs: 5000, // tiempo máximo de espera por verificación
+          onlineIntervalMs: 30000, // frecuencia de verificación cuando hay internet
+          offlineIntervalMs: 5000, // frecuencia inicial cuando no hay internet
+          maxOfflineIntervalMs: 15000, // tope del retroceso (backoff) sin internet
+          retryIntervalMs: 3000, // reintento rápido tras un fallo estando online
+          failuresToOffline: 2, // fallos seguidos para declarar "offline"
+          successesToOnline: 1, // éxitos seguidos para declarar "online"
+        };
+
+        /* ==================================================================
+           2. SETTINGS (solo lectura de localStorage)
+           ================================================================== */
+
+        /**
+         * Lee un valor de localStorage.
+         * @param {string} key
+         * @returns {string|null} null si no existe o el WebView no permite localStorage.
+         */
+        function readStorage(key) {
+          try {
+            return window.localStorage.getItem(key);
+          } catch (e) {
+            console.log("No se pudo leer localStorage:", e);
+            return null;
+          }
+        }
+
+        /** @returns {string|null} Texto sin espacios sobrantes, o null si falta o está vacío. */
+        function readText(key) {
+          var raw = readStorage(key);
+          var text = raw === null ? "" : String(raw).trim();
+          return text !== "" ? text : null;
+        }
+
+        /** @returns {number|null} 0/90/180/270 (360 => 0, -90 => 270), o null. */
+        function readOrientation() {
+          var degrees = parseInt(readStorage(KEYS.orientation), 10);
+          if (isNaN(degrees)) return null;
+          degrees = ((degrees % 360) + 360) % 360;
+          return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
+        }
+
+        /** @returns {number|null} Escala (%) entera dentro de SCALE_LIMITS, o null. */
+        function readScale(key) {
+          var percent = parseInt(readStorage(key), 10);
+          return percent >= SCALE_LIMITS.min && percent <= SCALE_LIMITS.max
+            ? percent
+            : null;
+        }
+
+        /** @returns {string|null} Clave de I18N guardada, o null. */
+        function readLanguage() {
+          var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
+        }
+
+        /** @returns {string|null} Clave de LEAGUE_OPTIONS guardada, o null. */
+        function readLeague() {
+          var option = (readStorage(KEYS.league) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, option)
+            ? option
+            : null;
+        }
+
+        /**
+         * Agrega a un mensaje los settings leídos AHORA de localStorage
+         * (null en los que no existen). Mismos nombres que loading.html.
+         * @param {object} msg
+         * @returns {object} El mismo mensaje, completado.
+         */
+        function withSettings(msg) {
+          var league = readLeague();
+          var appScale = readScale(KEYS.appScale);
+          msg.version = readText(KEYS.version);
+          msg.url = readText(KEYS.url);
+          msg.email = readText(KEYS.email);
+          msg.deviceId = readText(KEYS.deviceId);
+          msg.league = league;
+          msg.leagues = league === null ? null : LEAGUE_OPTIONS[league];
+          msg.orientation = readOrientation(); // global
+          msg.language = readLanguage(); // global
+          msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
+          return msg;
+        }
+
+        /* ==================================================================
+           3. COMUNICACIÓN CON LA APP (Kodular / App Inventor)
+           ================================================================== */
+
+        /**
+         * Envía un texto a la app probando 4 métodos, del más específico al
+         * más general; usa el primero disponible.
+         * En Kodular el bloque "WebViewer.WebViewStringChange" recibe el texto.
+         * @param {string} message Texto a enviar (normalmente un JSON).
+         */
+        function sendToAppInventor(message) {
+          try {
+            if (window.AppInventor && window.AppInventor.setWebViewString) {
+              window.AppInventor.setWebViewString(message); // Kodular / App Inventor
+            } else if (window.android && window.android.onReceiveValue) {
+              window.android.onReceiveValue(message); // Android (versiones nuevas)
+            } else if (
+              window.androidInterface &&
+              window.androidInterface.onReceiveValue
+            ) {
+              window.androidInterface.onReceiveValue(message); // Interface estándar
+            } else {
+              window.postMessage(message, "*"); // Navegador normal (pruebas)
+            }
+          } catch (e) {
+            console.log("Error enviando a AppInventor:", e);
+          }
+          console.log("Enviado a AppInventor:", message);
+        }
+
+        /**
+         * Envía un mensaje de esta pantalla con los settings agregados.
+         * @param {object} fields origin/action/status... (ver contrato de salida).
+         */
+        function report(fields) {
+          fields.origin = "connection_status"; // de dónde proviene la información
+          sendToAppInventor(JSON.stringify(withSettings(fields)));
+        }
+
+        /* ==================================================================
+           4. VERIFICACIÓN DE INTERNET
+           navigator.onLine solo dice si hay una red (un Wi-Fi sin salida a
+           internet daría "true"), por eso se consultan servidores públicos y
+           se valida que su respuesta sea la esperada.
+           ================================================================== */
+
+        /**
+         * Comprueba que el contenido recibido sea el del servidor real (y no
+         * una página del router o de un hotel).
+         * @param {string} type "dns" | "ip"
+         * @param {string} text Cuerpo de la respuesta.
+         * @returns {boolean}
+         */
+        function validateResponse(type, text) {
+          try {
+            var data = JSON.parse(text);
+            if (type === "dns") {
+              return (
+                !!data &&
+                data.Status === 0 &&
+                Array.isArray(data.Answer) &&
+                data.Answer.length > 0
+              );
+            }
+            if (type === "ip") {
+              return (
+                !!data &&
+                typeof data.ip === "string" &&
+                /^[0-9a-fA-F:.]{7,45}$/.test(data.ip)
+              );
+            }
+          } catch (e) {
+            /* respuesta no JSON = no es internet real */
+          }
+          return false;
+        }
+
+        /**
+         * Prueba UN servidor.
+         * @param {{url:string, type:string}} ep
+         * @param {number} timeoutMs
+         * @returns {Promise<boolean>} true solo si respondió 200 Y el contenido es el esperado.
+         */
+        function pingEndpoint(ep, timeoutMs) {
+          return new Promise(function (resolve) {
+            var done = false;
+            var xhr = null;
+            var timer = setTimeout(function () {
+              finish(false);
+            }, timeoutMs);
+
+            // Termina una sola vez (respuesta, error o tiempo agotado)
+            function finish(ok) {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              if (!ok && xhr) {
+                try {
+                  xhr.abort();
+                } catch (e) {
+                  /* ignorar */
+                }
+              }
+              resolve(ok);
+            }
+
+            try {
+              var sep = ep.url.indexOf("?") === -1 ? "?" : "&";
+              // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+              var pad = Math.random().toString(36).slice(2, 12);
+              xhr = new XMLHttpRequest();
+              xhr.open("GET", ep.url + sep + "random_padding=" + pad, true);
+              xhr.timeout = timeoutMs;
+              if (ep.type === "dns")
+                xhr.setRequestHeader("Accept", "application/dns-json");
+              xhr.onload = function () {
+                finish(
+                  xhr.status === 200 &&
+                    validateResponse(ep.type, xhr.responseText),
+                );
+              };
+              xhr.onerror = function () {
+                finish(false);
+              };
+              xhr.ontimeout = function () {
+                finish(false);
+              };
+              xhr.onabort = function () {
+                finish(false);
+              };
+              xhr.send();
+            } catch (e) {
+              finish(false);
+            }
+          });
+        }
+
+        /**
+         * Prueba todos los servidores en paralelo; basta con que uno sea válido.
+         * @returns {Promise<boolean>} true si hay internet.
+         */
+        function probeInternet() {
+          var eps = CONNECTION_CONFIG.endpoints;
+          return new Promise(function (resolve) {
+            var pending = eps.length;
+            var resolved = false;
+            if (!pending) {
+              resolve(false);
+              return;
+            }
+            eps.forEach(function (ep) {
+              pingEndpoint(ep, CONNECTION_CONFIG.timeoutMs).then(function (ok) {
+                if (resolved) return;
+                if (ok) {
+                  resolved = true;
+                  resolve(true);
+                } else if (--pending === 0) {
+                  resolved = true;
+                  resolve(false);
+                }
+              });
+            });
+          });
+        }
+
+        /* ==================================================================
+           5. ORIENTACIÓN Y AJUSTE A PANTALLA (igual que loading/config)
+            - #stage se gira desde su esquina superior izquierda y se
+              desplaza para volver a cubrir la pantalla; con 90/270 ancho
+              y alto se intercambian.
+            - #scaler se escala para que la tarjeta ocupe FIT_RATIO del
+              escenario; la escala guardada multiplica ese ajuste.
+            - Calcula también cuánto puede desplazarse la tarjeta (anti-
+              quemado) sin salirse de la pantalla: driftX / driftY.
+           ================================================================== */
+        var layoutManager = {
+          stage: null,
+          scaler: null,
+          card: null,
+          orientation: 0, // grados aplicados ahora
+          scale: 100, // escala (%) aplicada ahora
+          driftX: 0, // desplazamiento máximo permitido (px de la tarjeta)
+          driftY: 0,
+          _lastState: "", // "orientación|escala|ventana|tarjeta" aplicado por última vez
+
+          /** Busca los elementos. Llamar una vez al iniciar. */
+          init: function () {
+            this.stage = document.getElementById("stage");
+            this.scaler = document.getElementById("scaler");
+            this.card = document.getElementById("card");
+          },
+
+          /**
+           * Aplica orientación y escala solo si cambió algo (settings, tamaño
+           * de la ventana o de la tarjeta). Con la ventana 0x0 no aplica.
+           * @param {number|null} orientation 0/90/180/270 (null => 0).
+           * @param {number|null} scale       % sobre el ajuste (null => 100).
+           */
+          apply: function (orientation, scale) {
+            this.orientation = orientation === null ? 0 : orientation;
+            this.scale = scale === null ? 100 : scale;
+            var width =
+              window.innerWidth || document.documentElement.clientWidth;
+            var height =
+              window.innerHeight || document.documentElement.clientHeight;
+            if (!width || !height) return;
+            var cardWidth = this.card.offsetWidth;
+            var cardHeight = this.card.offsetHeight;
+            var state =
+              this.orientation + "|" + this.scale + "|" + width + "x" + height +
+              "|" + cardWidth + "x" + cardHeight;
+            if (state === this._lastState) return;
+            this._lastState = state;
+
+            var stageWidth = width;
+            var stageHeight = height;
+            var transform = "none";
+            if (this.orientation === 90) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(" + width + "px, 0px) rotate(90deg)";
+            } else if (this.orientation === 180) {
+              transform =
+                "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            } else if (this.orientation === 270) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(0px, " + height + "px) rotate(270deg)";
+            }
+            this.stage.style.width = stageWidth + "px";
+            this.stage.style.height = stageHeight + "px";
+            this.stage.style.transformOrigin = "0 0";
+            this.stage.style.transform = transform;
+
+            // Ajuste a pantalla: offsetWidth/Height miden la tarjeta SIN transformaciones
+            var zoom = 1;
+            if (cardWidth > 0 && cardHeight > 0) {
+              zoom =
+                (Math.min(
+                  (stageWidth * FIT_RATIO) / cardWidth,
+                  (stageHeight * FIT_RATIO) / cardHeight,
+                ) *
+                  this.scale) /
+                100;
+            }
+            this.scaler.style.transform = "scale(" + zoom.toFixed(4) + ")";
+
+            // Margen libre a cada lado, en px de la tarjeta (antes del zoom):
+            // el desplazamiento anti-quemado nunca la saca de la pantalla
+            this.driftX = Math.max(0, (stageWidth / zoom - cardWidth) / 2);
+            this.driftY = Math.max(0, (stageHeight / zoom - cardHeight) / 2);
+          },
+        };
+
+        /* ==================================================================
+           6. TEXTOS (idioma) Y DATOS DE LA CABECERA
+           ================================================================== */
+
+        /** Idioma cuyos textos están puestos ahora (evita retocar el DOM). */
+        var appliedLanguage = null;
+
+        /** @returns {object} Diccionario del idioma guardado (o DISPLAY_LANGUAGE). */
+        function dict() {
+          return I18N[readLanguage() || DISPLAY_LANGUAGE];
+        }
+
+        /** @returns {string} Texto traducido de una clave de I18N. */
+        function t(key) {
+          return dict()[key];
+        }
+
+        /**
+         * Traduce los textos fijos (data-i18n), el título y lang si el idioma
+         * guardado cambió.
+         * @returns {boolean} true si se tradujo (cambió el idioma).
+         */
+        function applyLanguage() {
+          var language = readLanguage() || DISPLAY_LANGUAGE;
+          if (language === appliedLanguage) return false;
+          appliedLanguage = language;
+          document.documentElement.lang = language;
+          document.title = t("title");
+          var nodes = document.querySelectorAll("[data-i18n]");
+          for (var i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = t(nodes[i].getAttribute("data-i18n"));
+          }
+          return true;
+        }
+
+        /**
+         * Escribe un texto solo si cambió (textContent: sin riesgo de XSS).
+         * @param {string} id
+         * @param {string} text
+         */
+        function setText(id, text) {
+          var node = document.getElementById(id);
+          if (node && node.textContent !== text) node.textContent = text;
+        }
+
+        /** Muestra versión, web, email e id leídos de localStorage. */
+        function renderInfo() {
+          var version = readText(KEYS.version);
+          var url = readText(KEYS.url);
+          var email = readText(KEYS.email);
+          var deviceId = readText(KEYS.deviceId);
+          setText("versionText", version ? t("version") + version : "");
+          setText("websiteUrl", url || "");
+          setText("emailContact", email || "");
+          setText("idNumber", deviceId ? t("id") + deviceId : "");
+        }
+
+        /**
+         * Vuelve a leer los settings y aplica lo que haya cambiado:
+         * idioma, datos, orientación y tamaño. Barato si nada cambió.
+         */
+        function refresh() {
+          if (applyLanguage()) noConnectionScreen.updateUI();
+          renderInfo();
+          layoutManager.apply(readOrientation(), readScale(KEYS.ownScale));
+        }
+
+        /* ==================================================================
+           7. LÓGICA PRINCIPAL DE LA PANTALLA
+           Ciclo de una verificación:
+             runCheck() -> probeInternet() -> applyResult() -> setStatus()
+                        -> (si cambió) updateUI() + reportStatus()
+                        -> scheduleNext() programa la siguiente
+           ================================================================== */
+        var noConnectionScreen = {
+          isInitialized: false,
+          status: "unknown", // "unknown" | "online" | "offline"
+          failures: 0, // fallos seguidos (histéresis)
+          successes: 0, // éxitos seguidos (histéresis)
+          currentCheck: null, // Promise de la verificación en curso
+          pendingImmediate: false, // una verificación manual espera el resultado en curso
+          timer: null, // temporizador de la próxima verificación
+          offlineDelay: CONNECTION_CONFIG.offlineIntervalMs, // espera actual sin internet
+          lastLatency: 0, // ms de la última verificación
+          reportCount: 0, // mensajes de estado enviados (evita duplicados)
+
+          /** Arranca (una vez): avisa a la app, escucha la red y verifica. */
+          init: function () {
+            if (this.isInitialized) return;
+            report({ action: "info", status: "", internetStatus: "" });
+            this.setupConnectionListeners();
+            this.runCheck(false);
+            this.isInitialized = true;
+            console.log("Página de Sin Conexión inicializada");
+          },
+
+          /**
+           * Ejecuta una verificación real (sin solapes).
+           * @param {boolean} forceReport true = sin histéresis y enviar el
+           *        resultado aunque el estado no haya cambiado.
+           * @returns {Promise<boolean>} true si hay internet.
+           */
+          runCheck: function (forceReport) {
+            var self = this;
+            if (this.currentCheck) {
+              if (forceReport) {
+                this.pendingImmediate = true;
+                var countBefore = this.reportCount;
+                this.currentCheck.then(function () {
+                  if (self.reportCount === countBefore) self.reportStatus();
+                });
+              }
+              return this.currentCheck;
+            }
+
+            clearTimeout(this.timer);
+            var started = Date.now();
+            var reportsBefore = this.reportCount;
+
+            this.currentCheck = probeInternet().then(function (ok) {
+              self.currentCheck = null;
+              self.lastLatency = Date.now() - started;
+              var immediate = !!forceReport || self.pendingImmediate;
+              self.pendingImmediate = false;
+              self.applyResult(ok, immediate);
+              // Si el estado cambió, applyResult ya lo reportó; si no, se reporta aquí
+              if (forceReport && self.reportCount === reportsBefore)
+                self.reportStatus();
+              self.scheduleNext();
+              return self.status === "online";
+            });
+            return this.currentCheck;
+          },
+
+          /**
+           * Decide el nuevo estado. Histéresis: un fallo aislado no declara
+           * "offline" (hacen falta failuresToOffline seguidos).
+           * @param {boolean} ok
+           * @param {boolean} immediate true = sin histéresis.
+           */
+          applyResult: function (ok, immediate) {
+            var prev = this.status;
+            if (ok) {
+              this.failures = 0;
+              this.successes++;
+              if (
+                prev === "unknown" ||
+                immediate ||
+                (prev !== "online" &&
+                  this.successes >= CONNECTION_CONFIG.successesToOnline)
+              ) {
+                this.setStatus("online");
+              }
+            } else {
+              this.successes = 0;
+              this.failures++;
+              if (
+                prev === "unknown" ||
+                immediate ||
+                (prev === "online" &&
+                  this.failures >= CONNECTION_CONFIG.failuresToOffline)
+              ) {
+                this.setStatus("offline");
+              }
+            }
+          },
+
+          /**
+           * Cambia el estado; si es distinto, actualiza la píldora y avisa a la app.
+           * @param {string} newStatus "online" | "offline"
+           */
+          setStatus: function (newStatus) {
+            if (this.status === newStatus) return;
+            this.status = newStatus;
+            if (newStatus === "offline") {
+              this.offlineDelay = CONNECTION_CONFIG.offlineIntervalMs;
+            }
+            this.updateUI();
+            this.reportStatus();
+            console.log("Estado de conexión:", newStatus);
+          },
+
+          /** Envía el estado actual a la app (ver contrato de salida). */
+          reportStatus: function () {
+            if (this.status === "unknown") return;
+            this.reportCount++;
+            report({
+              action: "connection",
+              internetStatus: this.status, // estado REAL de internet
+              status: this.status, // igual que internetStatus (compatibilidad)
+              latency: this.lastLatency,
+              localNetwork: navigator.onLine, // hay red local aunque no haya internet
+              checkedAt: new Date().toISOString(),
+            });
+          },
+
+          /** Actualiza el color y el texto (traducido) de la píldora. */
+          updateUI: function () {
+            var box = document.getElementById("connectionStatus");
+            box.className =
+              "connection-status " +
+              (this.status === "online"
+                ? "online"
+                : this.status === "offline"
+                  ? ""
+                  : "checking");
+            setText(
+              "statusText",
+              t(
+                this.status === "online"
+                  ? "status.online"
+                  : this.status === "offline"
+                    ? "status.offline"
+                    : "status.checking",
+              ),
+            );
+          },
+
+          /**
+           * Programa la próxima verificación:
+           *  - online: cada onlineIntervalMs (o retryIntervalMs tras un fallo).
+           *  - offline: desde offlineIntervalMs, x1.5 hasta maxOfflineIntervalMs.
+           */
+          scheduleNext: function () {
+            var self = this;
+            var delay;
+            if (this.status === "online") {
+              delay =
+                this.failures > 0
+                  ? CONNECTION_CONFIG.retryIntervalMs
+                  : CONNECTION_CONFIG.onlineIntervalMs;
+            } else {
+              delay = this.offlineDelay;
+              this.offlineDelay = Math.min(
+                Math.round(this.offlineDelay * 1.5),
+                CONNECTION_CONFIG.maxOfflineIntervalMs,
+              );
+            }
+            clearTimeout(this.timer);
+            this.timer = setTimeout(function () {
+              self.runCheck(false);
+            }, delay);
+          },
+
+          /**
+           * Escucha eventos que indican un posible cambio de red. Ninguno
+           * cambia el estado directamente: solo disparan una verificación real.
+           */
+          setupConnectionListeners: function () {
+            var self = this;
+            window.addEventListener("online", function () {
+              self.offlineDelay = CONNECTION_CONFIG.offlineIntervalMs;
+              self.runCheck(false);
+            });
+            window.addEventListener("offline", function () {
+              self.runCheck(false);
+            });
+            document.addEventListener("visibilitychange", function () {
+              if (!document.hidden) self.runCheck(false);
+            });
+            if (navigator.connection && navigator.connection.addEventListener) {
+              navigator.connection.addEventListener("change", function () {
+                self.runCheck(false);
+              });
+            }
+          },
+        };
+
+        /* ==================================================================
+           8. PROTECCIÓN ANTI-QUEMADO (esta pantalla puede quedarse horas)
+           Iconos flotantes + 3 técnicas: desplazamiento de la tarjeta,
+           rotación de colores y atenuación variable del brillo.
+           ================================================================== */
+
+        var MAX_X = 120; // desplazamiento horizontal máximo deseado (px)
+        var MAX_Y = 80; // desplazamiento vertical máximo deseado (px)
+        var DRIFT_MS = 40000; // cada cuánto se elige nueva posición (= transición CSS)
+        var COLOR_MS = 60000; // cada cuánto cambian los colores de acento
+        var DIM_MS = 300000; // cada cuánto alterna la atenuación (5 min)
+        var DIM_LOW = 0.15; // atenuación mínima
+        var DIM_HIGH = 0.35; // atenuación máxima
+
+        /** Crea los iconos flotantes de fondo (una sola vez). */
+        function createFloatingIcons() {
+          var container = document.getElementById("floating-icons-container");
+          // Dibujos SVG de 24x24. Para agregar uno: añadir una línea.
+          var iconPaths = [
+            // Wi-Fi
+            '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.5a10.5 10.5 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1"/>',
+            // Wi-Fi sin señal (tachado)
+            '<path d="M2 2l20 20M8.5 16a5.5 5.5 0 0 1 7 0M5 12.5a10.5 10.5 0 0 1 5-2.9M2 8.8a15 15 0 0 1 4.2-2.7M14.5 9.7a10.5 10.5 0 0 1 4.5 2.8M10.7 5.1A15 15 0 0 1 22 8.8"/><circle cx="12" cy="19.5" r="1"/>',
+            // Barras de señal
+            '<path d="M4 20v-4M9 20v-8M14 20v-12M19 20V4"/>',
+            // Router
+            '<rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 17.5h.01M10 17.5h.01M7 10a7 7 0 0 1 10 0M9.5 12a3.5 3.5 0 0 1 5 0"/>',
+            // Cable de red (enchufe)
+            '<path d="M8 2v4M16 2v4M5 6h14v6a7 7 0 0 1-14 0zM12 19v3"/>',
+            // Globo (internet)
+            '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
+            // Nube sin conexión
+            '<path d="M2 2l20 20M17.5 19H7a5 5 0 0 1-1.5-9.8M9.5 5.4A6.5 6.5 0 0 1 18 10h.5a4.5 4.5 0 0 1 3 7.9"/>',
+            // Enlace roto
+            '<path d="M9 17H7a5 5 0 0 1 0-10h2M15 7h2a5 5 0 0 1 4 8M8 12h3M3 3l18 18"/>',
+            // Red de equipos / servidores
+            '<rect x="9" y="3" width="6" height="5"/><rect x="2" y="16" width="6" height="5"/><rect x="16" y="16" width="6" height="5"/><path d="M12 8v4M5 16v-4h14v4"/>',
+            // Antena
+            '<path d="M12 12v10M8 22h8M8.5 8.5a5 5 0 0 1 7 0M5.6 5.6a9 9 0 0 1 12.8 0"/><circle cx="12" cy="11" r="1"/>',
+          ];
+          var animations = ["float", "float2", "float3"]; // recorridos del CSS
+          var total = 12; // pocos iconos = mejor rendimiento en TV box
+          var frag = document.createDocumentFragment();
+          var wrapper = document.createElement("div"); // convierte texto SVG en elemento
+
+          for (var i = 0; i < total; i++) {
+            wrapper.innerHTML =
+              '<svg class="floating-icon icon-' + ((i % 6) + 1) +
+              '" viewBox="0 0 24 24">' + iconPaths[i % iconPaths.length] +
+              "</svg>";
+            var icon = wrapper.firstChild;
+            var anim = animations[Math.floor(Math.random() * animations.length)];
+            var duration = 18 + Math.random() * 25; // 18 a 43 s por vuelta
+            var delay = -Math.random() * duration; // cada icono arranca en otro punto
+            icon.style.left = Math.random() * 95 + "%";
+            icon.style.top = Math.random() * 95 + "%";
+            icon.style.opacity = (0.3 + Math.random() * 0.4).toFixed(2);
+            icon.style.animation =
+              anim + " " + duration.toFixed(1) + "s ease-in-out " +
+              delay.toFixed(1) + "s infinite";
+            frag.appendChild(icon);
+          }
+          container.appendChild(frag);
+        }
+
+        /**
+         * 1) Desplazamiento (pixel shift): la tarjeta viaja despacio a una
+         *    posición al azar, limitada por el margen libre (driftX/Y) para
+         *    que nunca se salga de la pantalla.
+         */
+        function drift() {
+          var maxX = Math.min(MAX_X, layoutManager.driftX);
+          var maxY = Math.min(MAX_Y, layoutManager.driftY);
+          var x = (Math.random() * 2 - 1) * maxX;
+          var y = (Math.random() * 2 - 1) * maxY;
+          layoutManager.card.style.transform =
+            "translate3d(" + x.toFixed(1) + "px," + y.toFixed(1) + "px,0)";
+        }
+
+        /** 2) Rotación lenta de colores de acento y logo (15° de tono cada vez). */
+        var colorStep = 0;
+        function shiftColors() {
+          colorStep = (colorStep + 15) % 360;
+          var root = document.documentElement.style;
+          root.setProperty("--accent", "hsl(" + ((187 + colorStep) % 360) + ", 100%, 38%)");
+          root.setProperty("--logo-a", "hsl(" + ((4 + colorStep) % 360) + ", 60%, 42%)");
+          root.setProperty("--logo-b", "hsl(" + ((33 + colorStep) % 360) + ", 70%, 46%)");
+        }
+
+        /** Arranca las 3 técnicas anti-quemado. */
+        function startBurnInProtection() {
+          setInterval(drift, DRIFT_MS);
+          setInterval(shiftColors, COLOR_MS);
+          // 3) Atenuación variable del brillo (alterna entre DIM_LOW y DIM_HIGH)
+          var dimmer = document.getElementById("dimmer");
+          var dimHigh = false;
+          setInterval(function () {
+            dimHigh = !dimHigh;
+            dimmer.style.opacity = dimHigh ? DIM_HIGH : DIM_LOW;
+          }, DIM_MS);
+        }
+
+        /* ==================================================================
+           9. API PÚBLICA (Kodular: RunJavaScript) E INICIO
+           ================================================================== */
+
+        // Fuerza una verificación real; el resultado se envía como JSON.
+        // Devuelve el último estado conocido (true = online).
+        window.checkConnection = function () {
+          noConnectionScreen.runCheck(true);
+          return noConnectionScreen.status === "online";
+        };
+
+        // Versión asíncrona: Promise<boolean> con el resultado real.
+        window.checkConnectionAsync = function () {
+          return noConnectionScreen.runCheck(true);
+        };
+
+        /** Arranca la pantalla (una vez, con el HTML listo). */
+        function init() {
+          layoutManager.init();
+          applyLanguage(); // textos en el idioma guardado antes de medir la tarjeta
+          noConnectionScreen.updateUI();
+          refresh(); // orientación, tamaño y datos desde localStorage
+          createFloatingIcons();
+          drift();
+          startBurnInProtection();
+
+          // Releer settings: cambio de tamaño, al mostrarse, si otra página
+          // los cambia y cada WATCH_MS (el WebView puede arrancar en 0x0)
+          window.addEventListener("resize", refresh);
+          window.addEventListener("orientationchange", refresh);
+          window.addEventListener("load", refresh);
+          window.addEventListener("pageshow", refresh);
+          window.addEventListener("storage", refresh);
+          document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) refresh();
+          });
+          setInterval(refresh, WATCH_MS);
+
+          noConnectionScreen.init();
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>
