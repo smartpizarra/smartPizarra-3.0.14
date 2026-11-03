@@ -1,0 +1,1801 @@
+<!doctype html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA DE IDENTIFICACIÓN (ID + CÓDIGO QR)
+  PARA ANDROID WEBVIEW
+=====================================================================
+  Adaptada de example4.html a este proyecto, con las optimizaciones de
+  connection.html.
+
+  QUE HACE
+  Muestra el ID único del dispositivo y un código QR con ese ID, para
+  que otro equipo lo escanee y vincule la TV box. La página:
+    - Lee el ID de localStorage ("smartpizarra.deviceId", lo crea
+      loading.html). Ya no se pide a la app.
+    - Dibuja el QR y envía a la app un token codificado del ID.
+    - Vigila internet: sin conexión muestra un aviso (conservando el ID
+      y su QR) e informa a la app solo al perder y al recuperar internet.
+    - Vigila que el QR siga visible (algunas GPU de TV box lo borran) y
+      lo vuelve a dibujar si desaparece.
+    - Protege la pantalla contra el quemado (puede quedarse horas).
+
+  SETTINGS (localStorage) - SOLO SE LEEN, ESTA PÁGINA NO ESCRIBE NADA
+  Los crea loading.html con sus valores por defecto (CONFIG.settings y
+  PAGES). config.html no tiene ninguna opción para esta pantalla.
+    "smartpizarra.deviceId"            ID del dispositivo => contenido del QR
+    "smartpizarra.orientation"         0/90/180/270  GLOBAL: gira la página
+    "smartpizarra.language"            es | en       GLOBAL: idioma de los textos
+    "smartpizarra.fingerprint.scale"   10 a 300 (%)  tamaño de ESTA pantalla
+                                                     (100 % = 90 % de la pantalla)
+    "smartpizarra.version" / ".url" / ".email"      se muestran
+    "smartpizarra.league" / "smartpizarra.scale"    solo viajan en los JSON
+  Para cambiar el tamaño: updateSettings('{"page":"fingerprint","scale":95}')
+  en loading.html, o su default en PAGES de loading.html.
+  Se vuelven a leer cada 1 s, al mostrarse y con el evento "storage"
+  (si cambia el ID, se vuelve a dibujar el QR).
+
+  RENDIMIENTO (medido en el TV box, igual que connection.html)
+  - Cada fotograma que cambia algo cuesta casi lo mismo, se mueva un
+    icono o todo: una animación CSS continua (60 fps) ~60-100 % de CPU.
+    Por eso NO hay animaciones CSS continuas (ni latido del logo, ni
+    deriva de textos, ni pulso del estado, ni giro del spinner). Lo que se
+    mueve (iconos, spinner, fondo) avanza en UN reloj JS a 3 fps
+    (TICK_MS), detenido con la app en segundo plano.
+  - IMPORTANTE (de example4.html): el QR y sus contenedores NO se animan
+    con transform (en las GPU de TV box el canvas del QR se borraba). El
+    desplazamiento anti-quemado de la tarjeta usa left/top, una vez por
+    minuto.
+  - Sin @media por ancho: con la página girada el ancho físico no es el
+    del contenido. El tamaño lo ajusta layoutManager (responsive).
+  - JavaScript ES5 (var / function) + Promise. Iconos SVG integrados.
+  - Única dependencia externa: la librería del QR (qrcode.js). Se busca
+    primero una copia local "qrcode.min.js" junto a este HTML y, si no
+    existe, se descarga del CDN (sin copia local y sin internet NO se
+    puede dibujar el QR: se reintenta cada 5 s).
+
+  CONTRATO DE SALIDA: mensajes enviados a la app (mismos que example4.html)
+    QR generado (token = ID codificado, ver encryptDeviceId):
+      {"origin":"fingerPrint","action":"qr_generated","status":"success","token":"WVhCdz...", ...}
+    Error al generar el QR (se reintenta solo cada 5 s):
+      {"origin":"fingerPrint","action":"qr_error","status":"failed","token":"", ...}
+    Cambio de conexión (solo al perder y al recuperar internet, y cuando
+    la app llama a checkConnection/checkConnectionAsync):
+      {"origin":"loading","action":"connection","status":"offline",
+       "internetStatus":"offline","latency":0,"localNetwork":true,
+       "checkedAt":"2026-11-02T17:41:11.909Z", ...}
+      ("origin":"loading" se conserva de example4.html por compatibilidad
+      con los bloques de la app.)
+    "..." = TODOS llevan "internetStatus" ("" mientras la primera
+    verificación no ha terminado) y los settings leídos de localStorage
+    (null si no existen): "version","url","email","deviceId","league",
+    "leagues","orientation","language","scale" (escala para la app, factor).
+  Ya no se envían "info" ni "id_empty": el ID no se pide a la app.
+
+  FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
+    refreshQR()             Vuelve a dibujar el QR del ID actual.
+    checkConnection()       Fuerza una verificación de internet y envía el
+                            resultado. Devuelve el último estado conocido.
+    checkConnectionAsync()  Igual, pero devuelve Promise<boolean>.
+    wakeScreen()            Quita la atenuación de pantalla (anti-quemado).
+  updateData(), setCode() y requestIdAgain() de example4.html ya no
+  existen: los datos y el ID se leen de localStorage (se cambian con
+  updateSettings() de loading.html; el ID no cambia).
+
+  ARQUITECTURA (bloque <script>, en este orden)
+    1. Configuración       Claves, I18N, endpoints, tiempos.
+    2. Settings            Lectura de localStorage y armado de los JSON.
+    3. Comunicación        sendToAppInventor(), send(), sendConnectionStatus().
+    4. Token               encryptDeviceId().
+    5. Librería QR         loadQRLib() (local o CDN).
+    6. Textos y UI         applyLanguage(), renderInfo(), renderState().
+    7. Código QR           Dibujar, vigilar y reintentar.
+    8. Conexión            Verificación de internet con histéresis.
+    9. layoutManager       Gira y ajusta a pantalla (igual que connection.html).
+   10. Movimiento          Reloj único (tick): iconos, spinner y fondo;
+                           desplazamiento de la tarjeta, color y atenuación.
+   11. API pública e inicio.
+
+  COMO PROBAR EN UN NAVEGADOR DE PC
+    Abrir antes loading.html en el mismo navegador (crea el ID y los settings).
+    Consola (F12):
+      window.AppInventor = { setWebViewString: function (m) { console.log(m); } };
+      refreshQR();
+    Para probar sin internet: DevTools -> Network -> "Offline".
+
+  ARCHIVOS RELACIONADOS
+    loading.html     Crea el ID y los settings (defaults).
+    connection.html  Mismo método de verificación, layout y movimiento.
+    example4.html    Versión original de esta pantalla (referencia).
+=====================================================================
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Identificación - Smart Pizarra</title>
+    <!-- preconnect: abre la conexión con el CDN antes de pedir qrcode.js -->
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
+    <style>
+      /* ==============================================================
+         1. BASE: reinicio de estilos, colores globales y fondo
+         ============================================================== */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --accent: hsl(187, 100%, 38%); /* sitio web (rota despacio: anti-quemado) */
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #1a237e;
+      }
+
+      body {
+        font-family: "Segoe UI", Roboto, Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #1a237e 0%, #311b92 100%);
+        color: white;
+        position: relative;
+        user-select: none;
+      }
+
+      /* ==============================================================
+         2. ESCENARIO Y AJUSTE A PANTALLA (rotación y tamaño)
+         Los dimensiona y transforma layoutManager desde JavaScript.
+         ============================================================== */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1;
+      }
+
+      /* #scaler: el JS lo escala para que la tarjeta ocupe FIT_RATIO de la
+         pantalla (escala fija: solo cambia al girar o cambiar el tamaño) */
+      #scaler {
+        position: relative;
+        z-index: 20;
+        display: flex;
+        justify-content: center;
+        flex-shrink: 0;
+        transform-origin: 50% 50%;
+      }
+
+      /* Variación del color de fondo (anti-quemado): su opacidad la cambia
+         tick() cada 4 s. Sin animación CSS (ver RENDIMIENTO). */
+      .bg-shift {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(
+          135deg,
+          hsl(220, 70%, 15%) 0%,
+          hsl(260, 65%, 18%) 100%
+        );
+        opacity: 0;
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      /* ==============================================================
+         3. TARJETA PRINCIPAL (logo, título y datos de la app)
+         IMPORTANTE: la tarjeta, .device-info y .qr-container NO se animan
+         con transform (el canvas del QR se borraba en las GPU de TV box).
+         El desplazamiento anti-quemado de esta tarjeta usa left/top.
+         ============================================================== */
+      .device-id-container {
+        text-align: center;
+        width: 500px;
+        position: relative;
+        left: 0;
+        top: 0;
+        background: rgba(30, 40, 100, 0.85);
+        padding: 40px 30px;
+        border-radius: 20px;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(100, 150, 255, 0.3);
+      }
+
+      /* Logo "SP": naranja mientras espera; verde (clase .success) con el QR listo */
+      .logo {
+        width: 100px;
+        height: 100px;
+        margin: 0 auto 25px;
+        border-radius: 20px;
+        background: linear-gradient(45deg, #ff9800, #ff5722);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        box-shadow: 0 10px 30px rgba(255, 152, 0, 0.4);
+      }
+      .logo.success {
+        background: linear-gradient(45deg, #4caf50, #8bc34a);
+      }
+      .logo-icon {
+        font-size: 40px;
+        font-weight: bold;
+      }
+
+      h1 {
+        font-size: 2.5rem;
+        margin-bottom: 5px;
+        text-shadow: 0 2px 15px rgba(0, 0, 0, 0.4);
+        color: #e8eaf6; /* blanco suavizado: menos desgaste que #fff fijo */
+      }
+
+      /* --- Datos leídos de localStorage (renderInfo). Vacíos no ocupan espacio --- */
+      .info:empty {
+        display: none;
+      }
+      .version {
+        font-size: 1.1rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-bottom: 10px;
+        font-style: italic;
+      }
+      .website {
+        font-size: 1.2rem;
+        color: var(--accent);
+        margin-bottom: 10px;
+        font-weight: 300;
+        letter-spacing: 1px;
+      }
+      .email-contact {
+        font-size: 1rem;
+        color: rgba(255, 255, 255, 0.7);
+        margin-bottom: 20px;
+      }
+
+      /* ==============================================================
+         4. BLOQUE DEL DISPOSITIVO: ID, código QR y estado
+         ============================================================== */
+
+      /* Caja que agrupa ID + QR + estado (NO animar: contiene el QR) */
+      .device-info {
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        padding: 25px;
+        margin: 25px 0;
+        border: 1px solid rgba(100, 150, 255, 0.3);
+      }
+
+      /* Texto con el ID del dispositivo (o el aviso de espera) */
+      .device-id-display {
+        font-size: 1.8rem;
+        font-family: "Courier New", monospace;
+        background: rgba(0, 0, 0, 0.3);
+        padding: 15px;
+        border-radius: 10px;
+        margin: 20px 0;
+        word-break: break-all; /* los ID largos se parten en varias líneas */
+        color: #4fc3f7;
+        border: 2px solid rgba(79, 195, 247, 0.3);
+        min-height: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .device-id-display.waiting {
+        color: #ff9800;
+        font-size: 1.3rem;
+      }
+
+      /* Marco del QR (NO animar: contiene el QR) */
+      .qr-container {
+        margin: 30px 0;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 15px;
+        min-height: 250px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* Cuadro blanco donde se dibuja el QR */
+      #qr-code {
+        width: 200px;
+        height: 200px;
+        margin: 0 auto;
+        background: white;
+        padding: 10px;
+        border-radius: 10px;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* Contenedor que el JS vacía y rellena (spinner, QR o "Error QR") */
+      .qr-wrapper {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: white;
+      }
+
+      /* Caja creada por renderQR() donde qrcode.js dibuja */
+      .qr-box {
+        width: 100%;
+        height: 100%;
+      }
+      .qr-box canvas,
+      .qr-box img {
+        max-width: 100%;
+        height: auto;
+        image-rendering: pixelated; /* bordes nítidos al escalar (mejor lectura) */
+      }
+
+      .qr-error {
+        color: #f44336;
+        text-align: center;
+        padding: 20px;
+      }
+
+      /* Spinner en CSS puro. Lo gira tick() a 3 fps (sin animación CSS) */
+      .loading-qr {
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        border: 6px solid rgba(255, 152, 0, 0.25);
+        border-top-color: #ff9800;
+      }
+
+      /* ==============================================================
+         5. INSTRUCCIONES, MENSAJE DE ESTADO Y PIE DE PÁGINA
+         ============================================================== */
+      .instructions {
+        margin-top: 25px;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.08);
+        border-radius: 15px;
+        text-align: left;
+        font-size: 1rem;
+        line-height: 1.6;
+        color: rgba(255, 255, 255, 0.8);
+      }
+      .instruction-item {
+        margin: 10px 0;
+        display: flex;
+        align-items: center;
+      }
+      .instruction-icon {
+        margin-right: 12px;
+        width: 22px;
+        height: 22px;
+        min-width: 22px;
+        stroke: #4fc3f7;
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      /* Mensaje de estado bajo el QR: naranja = esperando; verde (.success) = QR listo */
+      .status-message {
+        font-size: 1.2rem;
+        color: #ff9800;
+        margin-top: 15px;
+        padding: 10px;
+        background: rgba(255, 152, 0, 0.1);
+        border-radius: 10px;
+        border: 1px solid rgba(255, 152, 0, 0.3);
+      }
+      .status-message.success {
+        color: #4caf50;
+        background: rgba(76, 175, 80, 0.1);
+        border-color: rgba(76, 175, 80, 0.3);
+      }
+
+      .contact-info {
+        margin-top: 20px;
+        padding: 15px;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 10px;
+        font-size: 0.9em;
+        color: rgba(255, 255, 255, 0.7);
+        text-align: center;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      /* ==============================================================
+         6. PROTECCIÓN ANTI-QUEMADO: atenuación en reposo
+         Una sola transición de 4 s al atenuar o despertar (no continua).
+         ============================================================== */
+      #dim-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: #000;
+        opacity: 0;
+        transition: opacity 4s ease-in-out;
+        pointer-events: none;
+        z-index: 50;
+      }
+      body.dimmed #dim-overlay {
+        opacity: 0.45;
+      }
+
+      /* ==============================================================
+         7. ICONOS FLOTANTES DE FONDO (los crea y mueve el JavaScript)
+         ============================================================== */
+      #floating-icons-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 1;
+      }
+      .floating-icon {
+        position: absolute;
+        width: 34px;
+        height: 34px;
+        will-change: transform; /* capa propia en GPU: moverlo no repinta el resto */
+        stroke: currentColor; /* el color lo da la clase .icon-N */
+        fill: none;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .icon-1 {
+        color: #4caf50;
+      }
+      .icon-2 {
+        color: #8bc34a;
+      }
+      .icon-3 {
+        color: #66ff99;
+      }
+      .icon-4 {
+        color: #66ffff;
+      }
+      .icon-5 {
+        color: #4fc3f7;
+      }
+      .icon-6 {
+        color: #6699ff;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Variación del color de fondo (detrás de todo; su opacidad la cambia tick()) -->
+    <div class="bg-shift" id="bgShift"></div>
+
+    <!-- #stage  => se rota según la orientación global
+         #scaler => ajusta la tarjeta a la pantalla y aplica su escala -->
+    <div id="stage">
+      <!-- Iconos flotantes (rotan con el escenario, pero no se escalan) -->
+      <div id="floating-icons-container"></div>
+      <div id="scaler">
+        <!-- TARJETA PRINCIPAL -->
+        <div class="device-id-container" id="card">
+          <!-- Logo: el JS le agrega la clase "success" (verde) cuando el QR está listo -->
+          <div class="logo" id="logo">
+            <div class="logo-icon">SP</div>
+          </div>
+
+          <h1>Smart Pizarra</h1>
+
+          <!-- Los llena renderInfo() desde localStorage; vacíos no se muestran -->
+          <div class="info version" id="versionText"></div>
+          <div class="info website" id="websiteUrl"></div>
+          <div class="info email-contact" id="emailContact"></div>
+
+          <div class="device-info">
+            <!-- ID del dispositivo (lo escribe renderState) -->
+            <div class="device-id-display waiting" id="device-id"></div>
+
+            <!-- Código QR: #qr-wrapper muestra el spinner, el QR o "Error QR" -->
+            <div class="qr-container">
+              <div id="qr-code">
+                <div class="qr-wrapper" id="qr-wrapper">
+                  <div class="loading-qr"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Mensaje de estado (lo escribe renderState) -->
+            <div class="status-message" id="connection-status"></div>
+          </div>
+
+          <!-- Instrucciones. Cada icono es un SVG de 24x24 dibujado con trazos.
+               Textos con data-i18n: los traduce applyLanguage() (I18N) -->
+          <div class="instructions">
+            <div class="instruction-item">
+              <!-- Icono: información -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" />
+                <path d="M12 16v-5M12 8h.01" />
+              </svg>
+              <span data-i18n="tip1">Identificación única de tu dispositivo.</span>
+            </div>
+            <div class="instruction-item">
+              <!-- Icono: código QR -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
+                <path d="M14 14h3v3h-3zM20 14v1M14 20h1M18 18h3v3" />
+              </svg>
+              <span data-i18n="tip2"
+                >Escanea el código QR para vincular el dispositivo.</span
+              >
+            </div>
+            <div class="instruction-item">
+              <!-- Icono: teléfono móvil -->
+              <svg class="instruction-icon" viewBox="0 0 24 24">
+                <rect x="6" y="2" width="12" height="20" rx="2" />
+                <path d="M11 18h2" />
+              </svg>
+              <span data-i18n="tip3"
+                >La aplicación genera el código QR automáticamente.</span
+              >
+            </div>
+          </div>
+
+          <div class="contact-info" data-i18n="copyright">
+            © 2026 Smart Pizarra. Todos los derechos reservados.
+          </div>
+        </div>
+      </div>
+      <!-- /#scaler -->
+    </div>
+    <!-- /#stage -->
+
+    <!-- Atenuación anti-quemado: fuera del escenario para cubrir siempre toda la pantalla -->
+    <div id="dim-overlay"></div>
+
+    <script>
+      // Todo dentro de una IIFE para no crear globales por accidente.
+      // Lo que la app necesita se publica en window.*
+      (function () {
+        "use strict";
+
+        /* ==================================================================
+           1. CONFIGURACIÓN
+           ================================================================== */
+
+        /** Esta pantalla: su tamaño se lee de "smartpizarra.fingerprint.scale". */
+        var THIS_PAGE = "fingerprint";
+
+        /** Claves de localStorage. Deben ser IGUALES a CONFIG.settings de loading.html. */
+        var KEYS = {
+          orientation: "smartpizarra.orientation", // GLOBAL
+          language: "smartpizarra.language", // GLOBAL
+          ownScale: "smartpizarra." + THIS_PAGE + ".scale", // tamaño de esta pantalla
+          appScale: "smartpizarra.scale", // escala para la app (solo JSON)
+          league: "smartpizarra.league",
+          version: "smartpizarra.version",
+          url: "smartpizarra.url",
+          email: "smartpizarra.email",
+          deviceId: "smartpizarra.deviceId", // contenido del QR
+        };
+
+        var ORIENTATIONS = [0, 90, 180, 270];
+        var SCALE_LIMITS = { min: 10, max: 300 }; // iguales a loading.html
+        var FIT_RATIO = 0.9; // fracción de la pantalla (girada) que ocupa la tarjeta
+        var WATCH_MS = 1000; // cada cuánto se vuelven a leer los settings
+
+        /** Ligas de cada opción ("leagues" en los JSON). IGUALES a loading.html. */
+        var LEAGUE_OPTIONS = {
+          mlb: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+          nba: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK",
+          nflnhl: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
+          todos: "",
+        };
+
+        /** Textos por idioma (claves es/en IGUALES a I18N de loading.html). */
+        var I18N = {
+          es: {
+            title: "Identificación - Smart Pizarra",
+            tip1: "Identificación única de tu dispositivo.",
+            tip2: "Escanea el código QR para vincular el dispositivo.",
+            tip3: "La aplicación genera el código QR automáticamente.",
+            copyright: "© 2026 Smart Pizarra. Todos los derechos reservados.",
+            version: "Versión: ",
+            "id.waiting": "Esperando el ID del dispositivo…",
+            "status.waiting": "Esperando identificación del dispositivo…",
+            "status.generating": "Generando código QR…",
+            "status.ok": "Código QR generado correctamente.",
+            "status.offline": "Sin conexión a internet. Esperando reconexión…",
+            "status.error": "No se pudo generar el código QR. Reintentando…",
+            "qr.error": "Error QR",
+          },
+          en: {
+            title: "Identification - Smart Pizarra",
+            tip1: "Unique identification of your device.",
+            tip2: "Scan the QR code to link the device.",
+            tip3: "The app generates the QR code automatically.",
+            copyright: "© 2026 Smart Pizarra. All rights reserved.",
+            version: "Version: ",
+            "id.waiting": "Waiting for the device ID…",
+            "status.waiting": "Waiting for device identification…",
+            "status.generating": "Generating QR code…",
+            "status.ok": "QR code generated successfully.",
+            "status.offline": "No internet connection. Waiting to reconnect…",
+            "status.error": "The QR code could not be generated. Retrying…",
+            "qr.error": "QR error",
+          },
+        };
+
+        /** Idioma con el que se MUESTRA si la clave aún no existe (no se guarda). */
+        var DISPLAY_LANGUAGE = "en";
+
+        // Primero una copia local (poner qrcode.min.js junto a este HTML en los
+        // assets de Kodular para que funcione sin internet) y luego el CDN.
+        var QR_LIB_URLS = [
+          "qrcode.min.js",
+          "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js",
+        ];
+
+        // Verificación de internet (mismo método que connection.html)
+        var CONNECTION_CONFIG = {
+          // Cada endpoint responde un JSON conocido (con CORS) que se LEE y se VALIDA:
+          // un portal cautivo o el router no cuentan como internet. Basta con UNO válido.
+          endpoints: [
+            {
+              url: "https://1.1.1.1/dns-query?name=example.com&type=A&ct=application/dns-json",
+              type: "dns",
+            },
+            {
+              url: "https://8.8.8.8/resolve?name=example.com&type=A",
+              type: "dns",
+            },
+            {
+              url: "https://cloudflare-dns.com/dns-query?name=example.com&type=A&ct=application/dns-json",
+              type: "dns",
+            },
+            {
+              url: "https://dns.google/resolve?name=example.com&type=A",
+              type: "dns",
+            },
+            { url: "https://api.ipify.org/?format=json", type: "ip" },
+          ],
+          timeoutMs: 5000, // tiempo máximo de espera por verificación
+          onlineIntervalMs: 30000, // con internet (example4: 10 s; 30 s = menos trabajo, igual que connection.html)
+          offlineIntervalMs: 5000, // sin internet
+          retryIntervalMs: 3000, // reintento rápido tras un fallo estando online
+          failuresToOffline: 2, // fallos seguidos para declarar "offline"
+        };
+
+        var QR_WATCHDOG_MS = 30000; // cada cuánto se comprueba que el QR siga visible
+        var QR_RETRY_MS = 5000; // espera antes de reintentar si el QR falló
+
+        /* ==================================================================
+           2. SETTINGS (solo lectura de localStorage)
+           ================================================================== */
+
+        /** @returns {string|null} Valor de localStorage, o null si no existe o falla. */
+        function readStorage(key) {
+          try {
+            return window.localStorage.getItem(key);
+          } catch (e) {
+            console.log("No se pudo leer localStorage:", e);
+            return null;
+          }
+        }
+
+        /** @returns {string|null} Texto sin espacios sobrantes, o null si falta o está vacío. */
+        function readText(key) {
+          var raw = readStorage(key);
+          var text = raw === null ? "" : String(raw).trim();
+          return text !== "" ? text : null;
+        }
+
+        /** @returns {number|null} 0/90/180/270 (360 => 0, -90 => 270), o null. */
+        function readOrientation() {
+          var degrees = parseInt(readStorage(KEYS.orientation), 10);
+          if (isNaN(degrees)) return null;
+          degrees = ((degrees % 360) + 360) % 360;
+          return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
+        }
+
+        /** @returns {number|null} Escala (%) entera dentro de SCALE_LIMITS, o null. */
+        function readScale(key) {
+          var percent = parseInt(readStorage(key), 10);
+          return percent >= SCALE_LIMITS.min && percent <= SCALE_LIMITS.max
+            ? percent
+            : null;
+        }
+
+        /** @returns {string|null} Clave de I18N guardada, o null. */
+        function readLanguage() {
+          var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
+        }
+
+        /** @returns {string|null} Clave de LEAGUE_OPTIONS guardada, o null. */
+        function readLeague() {
+          var option = (readStorage(KEYS.league) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, option)
+            ? option
+            : null;
+        }
+
+        /**
+         * Agrega a un mensaje los settings leídos AHORA de localStorage
+         * (null en los que no existen). Mismos nombres que loading.html.
+         * @param {object} msg
+         * @returns {object} El mismo mensaje, completado.
+         */
+        function withSettings(msg) {
+          var league = readLeague();
+          var appScale = readScale(KEYS.appScale);
+          msg.version = readText(KEYS.version);
+          msg.url = readText(KEYS.url);
+          msg.email = readText(KEYS.email);
+          msg.deviceId = readText(KEYS.deviceId);
+          msg.league = league;
+          msg.leagues = league === null ? null : LEAGUE_OPTIONS[league];
+          msg.orientation = readOrientation(); // global
+          msg.language = readLanguage(); // global
+          msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
+          return msg;
+        }
+
+        /* ==================================================================
+           ESTADO
+           ================================================================== */
+        var deviceId = null; // ID mostrado ahora (null = aún no existe en localStorage)
+        var isOnline = true; // false solo cuando se confirmó "offline"
+        var internetStatus = "unknown"; // 'unknown' | 'online' | 'offline'
+        var qrState = "waiting"; // 'waiting' | 'generating' | 'ok' | 'error'
+        var currentCheck = null; // Promise de la verificación en curso
+        var checkTimer = null; // temporizador de la próxima verificación
+        var failures = 0; // fallos de verificación seguidos (histéresis)
+        var lastLatency = 0; // ms que tardó la última verificación
+        var qrCodeInstance = null; // objeto QRCode actual (para poder borrarlo)
+        var qrWatchdogTimer = null; // vigilancia periódica del QR
+        var qrRetryTimer = null; // reintento tras un error del QR
+
+        // Referencias DOM cacheadas. Se llenan en init().
+        var el = {};
+
+        /* ==================================================================
+           3. COMUNICACIÓN CON LA APP (Kodular / App Inventor)
+           ================================================================== */
+
+        /**
+         * Envía un texto a la app probando 4 métodos, del más específico al
+         * más general; usa el primero disponible.
+         * @param {string} message Texto a enviar (normalmente un JSON).
+         */
+        function sendToAppInventor(message) {
+          try {
+            if (window.AppInventor && window.AppInventor.setWebViewString) {
+              window.AppInventor.setWebViewString(message); // Kodular / App Inventor
+            } else if (window.android && window.android.onReceiveValue) {
+              window.android.onReceiveValue(message); // Android (versiones nuevas)
+            } else if (
+              window.androidInterface &&
+              window.androidInterface.onReceiveValue
+            ) {
+              window.androidInterface.onReceiveValue(message); // Interface estándar
+            } else {
+              window.postMessage(message, "*"); // Navegador normal (pruebas)
+            }
+          } catch (e) {
+            console.log("Error enviando a AppInventor:", e);
+          }
+          console.log("Enviado a AppInventor:", message);
+        }
+
+        /**
+         * Envía un mensaje de esta pantalla (origin "fingerPrint").
+         * @param {string} action  'qr_generated' | 'qr_error'
+         * @param {string} status  'success' | 'failed'
+         * @param {string} token   Token del QR ("" si falló).
+         */
+        function send(action, status, token) {
+          sendToAppInventor(
+            JSON.stringify(
+              withSettings({
+                origin: "fingerPrint",
+                action: action,
+                status: status,
+                internetStatus:
+                  internetStatus === "unknown" ? "" : internetStatus,
+                token: token,
+              }),
+            ),
+          );
+        }
+
+        /** Envía el estado de la conexión (origin "loading", igual que example4.html). */
+        function sendConnectionStatus() {
+          sendToAppInventor(
+            JSON.stringify(
+              withSettings({
+                origin: "loading",
+                action: "connection",
+                status: internetStatus, // igual que internetStatus (compatibilidad)
+                internetStatus: internetStatus, // estado REAL de internet
+                latency: lastLatency,
+                localNetwork: navigator.onLine, // hay red local aunque no haya internet
+                checkedAt: new Date().toISOString(),
+              }),
+            ),
+          );
+        }
+
+        /* ==================================================================
+           4. TOKEN (ID codificado que se envía a la app junto con el QR)
+           ================================================================== */
+
+        /** Base64 seguro para UTF-8 (para IDs ASCII da lo mismo que btoa). */
+        function b64(str) {
+          return btoa(unescape(encodeURIComponent(str)));
+        }
+
+        /**
+         * Genera el token del ID (igual que example4.html). NO es cifrado
+         * fuerte: Base64 con marca de tiempo y valor aleatorio.
+         *   token = Base64( Base64("app") : Base64(id) : timestamp36 : aleatorio6 )
+         * Si cambias este formato, actualiza también a quien lo decodifica.
+         * @param {string} id
+         * @returns {string} Token; si algo falla devuelve el ID sin codificar.
+         */
+        function encryptDeviceId(id) {
+          try {
+            var timestamp = Date.now().toString(36);
+            var randomStr = Math.random().toString(36).substring(2, 8);
+            return b64(b64("app") + ":" + b64(id) + ":" + timestamp + ":" + randomStr);
+          } catch (e) {
+            console.error("Error al encriptar deviceId:", e);
+            return id;
+          }
+        }
+
+        /* ==================================================================
+           5. CARGA DE LA LIBRERÍA QR (qrcode.js)
+           ================================================================== */
+        var qrLibPromise = null; // carga en curso (evita descargarla dos veces)
+
+        /**
+         * Inserta un <script> y espera a que cargue.
+         * @param {string} src
+         * @returns {Promise<void>} Se rechaza si no se pudo cargar.
+         */
+        function loadScript(src) {
+          return new Promise(function (resolve, reject) {
+            var s = document.createElement("script");
+            s.src = src;
+            s.async = true;
+            s.onload = resolve;
+            s.onerror = function () {
+              s.parentNode.removeChild(s);
+              reject(new Error("No se pudo cargar " + src));
+            };
+            document.head.appendChild(s);
+          });
+        }
+
+        /**
+         * Asegura que la librería QR esté cargada, probando QR_LIB_URLS en
+         * orden (local primero). Si todas fallan se puede reintentar más tarde.
+         * @returns {Promise<void>}
+         */
+        function loadQRLib() {
+          if (window.QRCode) return Promise.resolve();
+          if (qrLibPromise) return qrLibPromise;
+          qrLibPromise = QR_LIB_URLS.reduce(function (chain, url) {
+            return chain.catch(function () {
+              return loadScript(url).then(function () {
+                if (!window.QRCode) throw new Error("QRCode no definido en " + url);
+              });
+            });
+          }, Promise.reject()).catch(function (err) {
+            qrLibPromise = null; // permitir reintento más tarde
+            throw err;
+          });
+          return qrLibPromise;
+        }
+
+        /* ==================================================================
+           6. TEXTOS (idioma) Y UI
+           ================================================================== */
+
+        var appliedLanguage = null; // idioma cuyos textos están puestos ahora
+
+        /** @returns {string} Texto traducido (idioma guardado o DISPLAY_LANGUAGE). */
+        function t(key) {
+          return I18N[readLanguage() || DISPLAY_LANGUAGE][key];
+        }
+
+        /**
+         * Traduce los textos fijos (data-i18n), el título y lang si cambió el idioma.
+         * @returns {boolean} true si se tradujo.
+         */
+        function applyLanguage() {
+          var language = readLanguage() || DISPLAY_LANGUAGE;
+          if (language === appliedLanguage) return false;
+          appliedLanguage = language;
+          document.documentElement.lang = language;
+          document.title = t("title");
+          var nodes = document.querySelectorAll("[data-i18n]");
+          for (var i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = t(nodes[i].getAttribute("data-i18n"));
+          }
+          return true;
+        }
+
+        /** Escribe un texto solo si cambió (textContent: sin riesgo de XSS). */
+        function setText(node, text) {
+          if (node.textContent !== text) node.textContent = text;
+        }
+
+        /** Muestra versión, web y email leídos de localStorage. */
+        function renderInfo() {
+          var version = readText(KEYS.version);
+          setText(el.version, version ? t("version") + version : "");
+          setText(el.website, readText(KEYS.url) || "");
+          setText(el.email, readText(KEYS.email) || "");
+        }
+
+        /**
+         * Refleja el estado (ID, QR e internet) en el recuadro del ID, el
+         * mensaje y el logo. Solo toca el DOM si algo cambió.
+         */
+        function renderState() {
+          setText(el.deviceId, deviceId || t("id.waiting"));
+          el.deviceId.classList.toggle("waiting", !deviceId);
+          var key;
+          if (!isOnline) key = "status.offline";
+          else if (!deviceId) key = "status.waiting";
+          else key = "status." + (qrState === "ok" ? "ok" : qrState);
+          setText(el.status, t(key));
+          var success = isOnline && qrState === "ok";
+          el.status.classList.toggle("success", success);
+          el.logo.classList.toggle("success", success);
+          var err = el.qrWrapper.querySelector(".qr-error");
+          if (err) setText(err, t("qr.error"));
+        }
+
+        /** Muestra el spinner en el lugar del QR. */
+        function showQRLoading() {
+          el.qrWrapper.innerHTML = '<div class="loading-qr"></div>';
+        }
+
+        /* ==================================================================
+           7. CÓDIGO QR (dibujar, vigilar y reintentar)
+           Flujo: generateQRCode() -> loadQRLib() -> renderQR()
+                  -> startQRWatchdog()   (o onQRError() si algo falla)
+           ================================================================== */
+
+        /** Detiene la vigilancia y el reintento del QR. */
+        function stopQRTimers() {
+          clearInterval(qrWatchdogTimer);
+          clearTimeout(qrRetryTimer);
+          qrWatchdogTimer = null;
+          qrRetryTimer = null;
+        }
+
+        /**
+         * Dibuja el QR: carga la librería si hace falta y luego lo dibuja.
+         * @param {string} text Contenido del QR (el ID del dispositivo).
+         */
+        function generateQRCode(text) {
+          stopQRTimers();
+          qrState = "generating";
+          renderState();
+          loadQRLib()
+            .then(function () {
+              renderQR(text);
+            })
+            .catch(function (err) {
+              onQRError(text, err);
+            });
+        }
+
+        /**
+         * Dibuja el QR, avisa a la app con el token y arranca la vigilancia.
+         * @param {string} text
+         */
+        function renderQR(text) {
+          if (text !== deviceId) return; // llegó otro ID mientras cargaba la librería
+          if (qrCodeInstance) {
+            try {
+              qrCodeInstance.clear();
+            } catch (e) {
+              /* ignorar */
+            }
+            qrCodeInstance = null;
+          }
+          el.qrWrapper.innerHTML = "";
+          var box = document.createElement("div");
+          box.className = "qr-box";
+          el.qrWrapper.appendChild(box);
+          try {
+            qrCodeInstance = new QRCode(box, {
+              text: text,
+              width: 180, // tamaño en px (el CSS lo ajusta al recuadro)
+              height: 180,
+              colorDark: "#1a237e", // color de los módulos
+              colorLight: "#ffffff", // color de fondo
+              correctLevel: QRCode.CorrectLevel.Q, // corrección de errores alta (~25%)
+            });
+          } catch (err) {
+            onQRError(text, err);
+            return;
+          }
+          showAsImage(box);
+          qrState = "ok";
+          send("qr_generated", "success", encryptDeviceId(text));
+          renderState();
+          startQRWatchdog(box, text);
+        }
+
+        /**
+         * Muestra el QR como imagen PNG en lugar del canvas. En el TV box
+         * qrcode.js deja el canvas visible (no llega a cambiarlo por su <img>),
+         * y algunas GPU no muestran el canvas (se vio el recuadro en blanco
+         * con el QR dibujado). Una imagen normal se muestra siempre.
+         * Si la conversión falla se deja el canvas.
+         * @param {HTMLElement} box Caja donde qrcode.js dibujó.
+         */
+        function showAsImage(box) {
+          var canvas = box.querySelector("canvas");
+          var img = box.querySelector("img");
+          if (!canvas || !img) return;
+          try {
+            img.src = canvas.toDataURL("image/png");
+            img.style.display = "block";
+            canvas.style.display = "none";
+          } catch (e) {
+            console.log("QR: se mantiene el canvas:", e);
+          }
+        }
+
+        /**
+         * Cada QR_WATCHDOG_MS comprueba que el QR siga visible; si
+         * desapareció (algunas GPU de TV box borran el canvas), lo regenera.
+         */
+        function startQRWatchdog(box, text) {
+          qrWatchdogTimer = setInterval(function () {
+            if (!deviceId || !isOnline) return;
+            if (!isQRVisible(box)) {
+              console.log("QR no visible, regenerando...");
+              generateQRCode(text);
+            }
+          }, QR_WATCHDOG_MS);
+        }
+
+        /**
+         * Comprueba si el QR se sigue viendo (qrcode.js muestra un <img> o un <canvas>).
+         * @param {HTMLElement} box
+         * @returns {boolean}
+         */
+        function isQRVisible(box) {
+          if (!document.body.contains(box)) return false;
+          var img = box.querySelector("img");
+          if (img && img.style.display !== "none" && img.complete && img.naturalWidth > 0)
+            return true;
+          var canvas = box.querySelector("canvas");
+          if (canvas && canvas.style.display !== "none" && canvas.width > 0) {
+            var ctx = canvas.getContext("2d");
+            // El primer píxel es colorLight (blanco opaco); alfa 0 = canvas borrado
+            return !ctx || ctx.getImageData(0, 0, 1, 1).data[3] !== 0;
+          }
+          return false;
+        }
+
+        /**
+         * Al recuperar internet: si el QR sigue en pantalla solo reanuda su
+         * vigilancia (sin enviar nada); si desapareció, lo vuelve a dibujar.
+         */
+        function resumeQR() {
+          var box = el.qrWrapper.querySelector(".qr-box");
+          if (box && qrState === "ok" && isQRVisible(box)) {
+            stopQRTimers();
+            startQRWatchdog(box, deviceId);
+          } else {
+            generateQRCode(deviceId);
+          }
+        }
+
+        /**
+         * Muestra "Error QR", avisa a la app y reintenta en QR_RETRY_MS.
+         * @param {string} text
+         * @param {Error} err
+         */
+        function onQRError(text, err) {
+          console.error("Error generando QR:", err);
+          qrState = "error";
+          el.qrWrapper.innerHTML = '<div class="qr-error"></div>';
+          send("qr_error", "failed", "");
+          renderState();
+          clearTimeout(qrRetryTimer);
+          qrRetryTimer = setTimeout(function () {
+            if (deviceId === text) generateQRCode(text);
+          }, QR_RETRY_MS);
+        }
+
+        /**
+         * Lee el ID de localStorage; si cambió (o apareció), lo muestra y
+         * dibuja su QR. Se llama al iniciar y en cada refresh().
+         */
+        function syncDeviceId() {
+          var id = readText(KEYS.deviceId);
+          if (id === deviceId) return;
+          deviceId = id;
+          stopQRTimers();
+          if (!deviceId) {
+            qrState = "waiting";
+            showQRLoading();
+            renderState();
+            return;
+          }
+          console.log("ID del dispositivo:", deviceId);
+          wakeScreen();
+          showQRLoading();
+          generateQRCode(deviceId);
+        }
+
+        /* ==================================================================
+           8. CONEXIÓN A INTERNET (mismo método que connection.html)
+           Ciclo: runCheck() -> probeInternet() -> applyResult()
+                  -> setOnline() -> handleOnlineStatus()/handleOfflineStatus()
+                  -> scheduleNextCheck()
+           ================================================================== */
+
+        /** Comprueba que la respuesta sea la del servidor real. */
+        function validateResponse(type, text) {
+          try {
+            var data = JSON.parse(text);
+            if (type === "dns") {
+              return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+            }
+            if (type === "ip") {
+              return !!data && typeof data.ip === "string" && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+            }
+          } catch (e) {
+            /* respuesta no JSON = no es internet real */
+          }
+          return false;
+        }
+
+        /**
+         * Prueba UN servidor.
+         * @returns {Promise<boolean>} true solo si respondió 200 Y el contenido es el esperado.
+         */
+        function pingEndpoint(ep, timeoutMs) {
+          return new Promise(function (resolve) {
+            var done = false;
+            var xhr = null;
+            var timer = setTimeout(function () {
+              finish(false);
+            }, timeoutMs);
+
+            // Termina una sola vez (respuesta, error o tiempo agotado)
+            function finish(ok) {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              if (!ok && xhr) {
+                try {
+                  xhr.abort();
+                } catch (e) {
+                  /* ignorar */
+                }
+              }
+              resolve(ok);
+            }
+
+            try {
+              var sep = ep.url.indexOf("?") === -1 ? "?" : "&";
+              // Parámetro aleatorio para evitar respuestas en caché (falso "online")
+              var pad = Math.random().toString(36).slice(2, 12);
+              xhr = new XMLHttpRequest();
+              xhr.open("GET", ep.url + sep + "random_padding=" + pad, true);
+              xhr.timeout = timeoutMs;
+              if (ep.type === "dns") xhr.setRequestHeader("Accept", "application/dns-json");
+              xhr.onload = function () {
+                finish(xhr.status === 200 && validateResponse(ep.type, xhr.responseText));
+              };
+              xhr.onerror = function () {
+                finish(false);
+              };
+              xhr.ontimeout = function () {
+                finish(false);
+              };
+              xhr.onabort = function () {
+                finish(false);
+              };
+              xhr.send();
+            } catch (e) {
+              finish(false);
+            }
+          });
+        }
+
+        /**
+         * Prueba todos los servidores en paralelo; basta con que uno sea válido.
+         * @returns {Promise<boolean>}
+         */
+        function probeInternet() {
+          var eps = CONNECTION_CONFIG.endpoints;
+          return new Promise(function (resolve) {
+            var pending = eps.length;
+            var resolved = false;
+            if (!pending) {
+              resolve(false);
+              return;
+            }
+            eps.forEach(function (ep) {
+              pingEndpoint(ep, CONNECTION_CONFIG.timeoutMs).then(function (ok) {
+                if (resolved) return;
+                if (ok) {
+                  resolved = true;
+                  resolve(true);
+                } else if (--pending === 0) {
+                  resolved = true;
+                  resolve(false);
+                }
+              });
+            });
+          });
+        }
+
+        /**
+         * Modo "sin internet": detiene la vigilancia del QR, avisa a la app UNA
+         * vez y muestra el aviso. El ID y su QR se conservan.
+         */
+        function handleOfflineStatus() {
+          isOnline = false;
+          internetStatus = "offline";
+          stopQRTimers();
+          sendConnectionStatus();
+          renderState();
+        }
+
+        /**
+         * Modo "con internet". Solo avisa a la app si se RECUPERÓ la conexión
+         * (venía de "offline"). Si ya hay ID, reanuda (o rehace) el QR.
+         */
+        function handleOnlineStatus() {
+          var wasOffline = internetStatus === "offline";
+          isOnline = true;
+          internetStatus = "online";
+          if (wasOffline) sendConnectionStatus();
+          if (deviceId && (wasOffline || qrState === "error")) resumeQR();
+          renderState();
+        }
+
+        /** Cambia al estado indicado solo si es distinto al actual. */
+        function setOnline(online) {
+          var next = online ? "online" : "offline";
+          if (next === internetStatus) return;
+          if (online) handleOnlineStatus();
+          else handleOfflineStatus();
+        }
+
+        /**
+         * Histéresis: un fallo aislado no declara "offline"; un éxito sí declara "online".
+         * @param {boolean} ok
+         * @param {boolean} immediate true = sin histéresis (verificación manual).
+         */
+        function applyResult(ok, immediate) {
+          if (ok) {
+            failures = 0;
+            setOnline(true);
+          } else {
+            failures++;
+            if (
+              immediate ||
+              internetStatus !== "online" ||
+              failures >= CONNECTION_CONFIG.failuresToOffline
+            ) {
+              setOnline(false);
+            }
+          }
+        }
+
+        /** Programa la próxima verificación según el estado. */
+        function scheduleNextCheck() {
+          var delay;
+          if (internetStatus === "online") {
+            delay =
+              failures > 0
+                ? CONNECTION_CONFIG.retryIntervalMs
+                : CONNECTION_CONFIG.onlineIntervalMs;
+          } else {
+            delay = CONNECTION_CONFIG.offlineIntervalMs;
+          }
+          clearTimeout(checkTimer);
+          checkTimer = setTimeout(function () {
+            runCheck(false);
+          }, delay);
+        }
+
+        /**
+         * Ejecuta una verificación real (sin solapes).
+         * forceReport = true: sin histéresis y el resultado siempre se envía.
+         * @returns {Promise<boolean>}
+         */
+        function runCheck(forceReport) {
+          if (currentCheck) {
+            if (forceReport) {
+              return currentCheck.then(function (online) {
+                sendConnectionStatus();
+                return online;
+              });
+            }
+            return currentCheck;
+          }
+          clearTimeout(checkTimer);
+
+          // Sin red local (Wi-Fi/cable desconectado) no hace falta consultar servidores
+          if (!navigator.onLine) {
+            lastLatency = 0;
+            var before = internetStatus;
+            applyResult(false, true);
+            if (forceReport && before === internetStatus) sendConnectionStatus();
+            scheduleNextCheck();
+            return Promise.resolve(false);
+          }
+
+          var started = Date.now();
+          currentCheck = probeInternet().then(function (ok) {
+            currentCheck = null;
+            lastLatency = Date.now() - started;
+            var before = internetStatus;
+            applyResult(ok, !!forceReport);
+            // Si el estado cambió ya se reportó; si no, se reporta aquí
+            if (forceReport && before === internetStatus) sendConnectionStatus();
+            scheduleNextCheck();
+            return internetStatus === "online";
+          });
+          return currentCheck;
+        }
+
+        /** Escucha los eventos de red y hace la primera verificación. */
+        function startConnectionMonitoring() {
+          window.addEventListener("online", function () {
+            runCheck(false);
+          });
+          window.addEventListener("offline", function () {
+            runCheck(false);
+          });
+          document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) runCheck(false);
+          });
+          if (navigator.connection && navigator.connection.addEventListener) {
+            navigator.connection.addEventListener("change", function () {
+              runCheck(false);
+            });
+          }
+          runCheck(false);
+        }
+
+        /* ==================================================================
+           9. ORIENTACIÓN Y AJUSTE A PANTALLA (igual que connection.html)
+           #scaler queda con una escala FIJA (solo cambia al girar o cambiar
+           el tamaño): no se anima, así no afecta al QR.
+           ================================================================== */
+        var layoutManager = {
+          stage: null,
+          scaler: null,
+          card: null,
+          orientation: 0,
+          scale: 100,
+          driftX: 0, // margen libre a cada lado (px de la tarjeta) para el pixel shift
+          driftY: 0,
+          _lastState: "",
+
+          /** Busca los elementos. */
+          init: function () {
+            this.stage = document.getElementById("stage");
+            this.scaler = document.getElementById("scaler");
+            this.card = document.getElementById("card");
+          },
+
+          /**
+           * Aplica orientación y escala solo si cambió algo. Con la ventana 0x0 no aplica.
+           * @param {number|null} orientation 0/90/180/270 (null => 0).
+           * @param {number|null} scale       % sobre el ajuste (null => 100).
+           */
+          apply: function (orientation, scale) {
+            this.orientation = orientation === null ? 0 : orientation;
+            this.scale = scale === null ? 100 : scale;
+            var width = window.innerWidth || document.documentElement.clientWidth;
+            var height = window.innerHeight || document.documentElement.clientHeight;
+            if (!width || !height) return;
+            var cardWidth = this.card.offsetWidth;
+            var cardHeight = this.card.offsetHeight;
+            var state =
+              this.orientation + "|" + this.scale + "|" + width + "x" + height +
+              "|" + cardWidth + "x" + cardHeight;
+            if (state === this._lastState) return;
+            this._lastState = state;
+
+            var stageWidth = width;
+            var stageHeight = height;
+            var transform = "none";
+            if (this.orientation === 90) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(" + width + "px, 0px) rotate(90deg)";
+            } else if (this.orientation === 180) {
+              transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            } else if (this.orientation === 270) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(0px, " + height + "px) rotate(270deg)";
+            }
+            this.stage.style.width = stageWidth + "px";
+            this.stage.style.height = stageHeight + "px";
+            this.stage.style.transformOrigin = "0 0";
+            this.stage.style.transform = transform;
+
+            // Ajuste a pantalla: offsetWidth/Height miden la tarjeta SIN transformaciones
+            var zoom = 1;
+            if (cardWidth > 0 && cardHeight > 0) {
+              zoom =
+                (Math.min(
+                  (stageWidth * FIT_RATIO) / cardWidth,
+                  (stageHeight * FIT_RATIO) / cardHeight,
+                ) *
+                  this.scale) /
+                100;
+            }
+            this.scaler.style.transform = "scale(" + zoom.toFixed(4) + ")";
+            this.driftX = Math.max(0, (stageWidth / zoom - cardWidth) / 2);
+            this.driftY = Math.max(0, (stageHeight / zoom - cardHeight) / 2);
+          },
+        };
+
+        /**
+         * Vuelve a leer los settings y aplica lo que cambió: idioma, datos,
+         * ID (QR), orientación y tamaño. Barato si nada cambió.
+         */
+        function refresh() {
+          if (applyLanguage()) renderState();
+          renderInfo();
+          syncDeviceId();
+          layoutManager.apply(readOrientation(), readScale(KEYS.ownScale));
+        }
+
+        /* ==================================================================
+           10. MOVIMIENTO Y PROTECCIÓN ANTI-QUEMADO
+           Igual que connection.html: NO hay animaciones CSS continuas; lo que
+           se mueve (iconos, spinner, fondo) avanza en UN reloj JS (TICK_MS),
+           detenido con la app en segundo plano.
+           La tarjeta (contiene el QR) se desplaza con left/top una vez por
+           minuto: nunca con transform (ver RENDIMIENTO).
+           ================================================================== */
+
+        /**
+         * Un paso del reloj (ms) = fotogramas por segundo: es lo que más
+         * influye en la CPU (medido en el TV box: 8 fps ~37 %, 4 fps ~20 %,
+         * 3 fps ~13 %). Velocidades y tiempos en px/s y ms: se adaptan solos.
+         */
+        var TICK_MS = 333;
+
+        /** @returns {number} Pasos del reloj que caben en "ms" (mínimo 1). */
+        function ticks(ms) {
+          return Math.max(1, Math.round(ms / TICK_MS));
+        }
+
+        /** @returns {number} px por paso para una velocidad en px/s. */
+        function perTick(pxPerSecond) {
+          return (pxPerSecond * TICK_MS) / 1000;
+        }
+
+        var PIXEL_SHIFT_MS = 60000; // cada cuánto se desplaza la tarjeta (left/top)
+        var PIXEL_SHIFT_RANGE = 30; // desplazamiento máximo (px, ±), limitado al margen libre
+        var DIM_AFTER_MS = 5 * 60000; // atenuar tras 5 min sin actividad
+        var ACCENT_SHIFT_MS = 60000; // cada cuánto cambia el color del sitio web
+        var BG_EVERY = ticks(4000); // pasos entre cambios del fondo (capa de pantalla completa)
+        var BG_STEP = 0.05; // cambio de opacidad del fondo por actualización (0 a 1 en ~80 s)
+        var SPIN_STEP = 45; // grados que gira el spinner por paso
+
+        /**
+         * Dibujos SVG de 24x24 (solo trazos) de los iconos flotantes:
+         * identificación, seguridad y códigos. Para agregar uno: una línea.
+         */
+        var ICON_PATHS = [
+          // Código de barras
+          '<path d="M3 5v14M6 5v14M10 5v14M13 5v14M17 5v14M21 5v14M8 5v14M19 5v14" stroke-width="1.5"/>',
+          // Código QR
+          '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v1M14 20h1M18 18h3v3"/>',
+          // Credencial / tarjeta de identidad
+          '<rect x="2" y="5" width="20" height="14" rx="2"/><circle cx="8" cy="11" r="2"/><path d="M5 16a3 3 0 0 1 6 0M14 10h5M14 14h4"/>',
+          // Llave
+          '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3L21 2M17 6l3 3M14 9l2 2"/>',
+          // Huella digital
+          '<path d="M12 11v4M8 7.5a5 5 0 0 1 8 4V14M6 11a6 6 0 0 1 .5-2.5M5 16a12 12 0 0 0 1-5M18 12v1a12 12 0 0 1-1 5M9 21a9 9 0 0 0 2-7v-3a1 1 0 0 1 2 0"/>',
+          // Usuario verificado
+          '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 11l2 2 4-4"/>',
+          // Candado
+          '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+          // Escudo (verificado)
+          '<path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+          // Chip / microprocesador
+          '<rect x="6" y="6" width="12" height="12" rx="1"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+          // Escáner (marco de lectura)
+          '<path d="M3 7V3h4M17 3h4v4M21 17v4h-4M7 21H3v-4M3 12h18"/>',
+        ];
+
+        var ICON_SIZE = 34; // igual que .floating-icon en el CSS
+        var ICON_COUNT = 12; // cantidad de iconos (casi no influye en la CPU)
+
+        /** Movimiento errático de los iconos (igual que connection.html). */
+        var ICON_MOTION = {
+          maxSpeed: perTick(32), // marcha normal (32 px/s)
+          dashSpeed: perTick(110), // acelerón (110 px/s)
+          turnChance: perTick(1), // cambios de dirección: ~1 por segundo
+          dashChance: perTick(0.16), // acelerones: ~1 cada 6 s
+          pauseChance: perTick(0.08), // pausas: ~1 cada 12 s
+          maxPauseTicks: ticks(2000), // pausa máxima (2 s)
+          maxRotate: 45, // giro máximo a cada lado (grados)
+          turnRate: perTick(32), // giro máximo (grados/s)
+          friction: Math.pow(0.92, TICK_MS / 125), // frenado tras un acelerón
+        };
+
+        /** @returns {number} Número al azar entre min y max. */
+        function rand(min, max) {
+          return min + Math.random() * (max - min);
+        }
+
+        var icons = []; // iconos creados (estado de movimiento en icon._m)
+
+        /** Crea los iconos flotantes de fondo (una sola vez). */
+        function createFloatingIcons() {
+          var container = document.getElementById("floating-icons-container");
+          var frag = document.createDocumentFragment();
+          var wrapper = document.createElement("div"); // convierte texto SVG en elemento
+          var order = ICON_PATHS.slice().sort(function () {
+            return Math.random() - 0.5;
+          });
+          for (var i = 0; i < ICON_COUNT; i++) {
+            wrapper.innerHTML =
+              '<svg class="floating-icon icon-' + ((i % 6) + 1) +
+              '" viewBox="0 0 24 24">' + order[i % order.length] + "</svg>";
+            var icon = wrapper.firstChild;
+            var leftPct = rand(0, 95);
+            var topPct = rand(0, 95);
+            icon.style.left = leftPct + "%";
+            icon.style.top = topPct + "%";
+            icon.style.opacity = rand(0.3, 0.7).toFixed(2);
+            icon._m = {
+              leftPct: leftPct, topPct: topPct, x: 0, y: 0,
+              vx: rand(-2, 2), vy: rand(-2, 2), rot: 0, vr: 0, pause: 0,
+            };
+            frag.appendChild(icon);
+            icons.push(icon);
+          }
+          container.appendChild(frag);
+        }
+
+        /**
+         * Avanza un paso un icono: velocidad que cambia al azar, acelerones,
+         * pausas, giro y rebote en los bordes. Sin scale(): cambiar el tamaño
+         * redibuja el SVG en cada paso (duplicaba la CPU).
+         */
+        function stepIcon(icon, areaW, areaH) {
+          var m = icon._m;
+          var k = ICON_MOTION;
+          if (m.pause > 0) {
+            m.pause--;
+            return;
+          }
+          if (Math.random() < k.pauseChance) {
+            m.pause = Math.round(rand(3, k.maxPauseTicks));
+            return;
+          }
+          if (Math.random() < k.dashChance) {
+            var angle = rand(0, Math.PI * 2);
+            m.vx = Math.cos(angle) * k.dashSpeed;
+            m.vy = Math.sin(angle) * k.dashSpeed;
+          } else if (Math.random() < k.turnChance) {
+            m.vx = rand(-k.maxSpeed, k.maxSpeed);
+            m.vy = rand(-k.maxSpeed, k.maxSpeed);
+            m.vr = rand(-k.turnRate, k.turnRate);
+          } else {
+            m.vx *= k.friction;
+            m.vy *= k.friction;
+          }
+          // Punto de partida en px desde su % (los SVG no tienen offsetLeft)
+          var left = (m.leftPct / 100) * areaW;
+          var top = (m.topPct / 100) * areaH;
+          var minX = -left;
+          var maxX = Math.max(minX, areaW - ICON_SIZE - left);
+          var minY = -top;
+          var maxY = Math.max(minY, areaH - ICON_SIZE - top);
+          m.x += m.vx;
+          m.y += m.vy;
+          if (m.x < minX || m.x > maxX) {
+            m.vx = -m.vx;
+            m.x = Math.min(maxX, Math.max(minX, m.x));
+          }
+          if (m.y < minY || m.y > maxY) {
+            m.vy = -m.vy;
+            m.y = Math.min(maxY, Math.max(minY, m.y));
+          }
+          m.rot = Math.min(k.maxRotate, Math.max(-k.maxRotate, m.rot + m.vr));
+          icon.style.transform =
+            "translate3d(" + m.x.toFixed(1) + "px," + m.y.toFixed(1) +
+            "px,0) rotate(" + m.rot.toFixed(1) + "deg)";
+        }
+
+        var motion = { timer: null, tick: 0, spin: 0, bg: { value: 0, dir: 1 } };
+
+        /** Un paso del reloj: iconos, spinner (si se ve) y fondo. */
+        function tick() {
+          motion.tick++;
+          var areaW = el.iconArea.offsetWidth;
+          var areaH = el.iconArea.offsetHeight;
+          for (var i = 0; i < icons.length; i++) stepIcon(icons[i], areaW, areaH);
+
+          // Spinner: solo existe mientras se espera o se genera el QR
+          var spinner = el.qrWrapper.firstChild;
+          if (spinner && spinner.className === "loading-qr") {
+            motion.spin = (motion.spin + SPIN_STEP) % 360;
+            spinner.style.transform = "rotate(" + motion.spin + "deg)";
+          }
+
+          // Fondo: su capa sube y baja de opacidad (pantalla completa: cada 4 s)
+          if (motion.tick % BG_EVERY !== 0) return;
+          var b = motion.bg;
+          b.value += BG_STEP * b.dir;
+          if (b.value >= 1 || b.value <= 0) {
+            b.value = Math.min(1, Math.max(0, b.value));
+            b.dir = -b.dir;
+          }
+          el.bgShift.style.opacity = b.value.toFixed(3);
+        }
+
+        /** Arranca el reloj (si no está ya en marcha). */
+        function startMotion() {
+          if (motion.timer === null) motion.timer = setInterval(tick, TICK_MS);
+        }
+
+        /** Detiene el reloj (app en segundo plano: no se gasta CPU). */
+        function stopMotion() {
+          clearInterval(motion.timer);
+          motion.timer = null;
+        }
+
+        /**
+         * "Pixel shift": mueve la tarjeta unos píxeles cada minuto (left/top,
+         * NO transform: no toca las capas de GPU que contienen el QR). Se
+         * limita al margen libre para que nunca salga de la pantalla.
+         */
+        function pixelShift() {
+          var rx = Math.min(PIXEL_SHIFT_RANGE, layoutManager.driftX);
+          var ry = Math.min(PIXEL_SHIFT_RANGE, layoutManager.driftY);
+          el.card.style.left = Math.round(rand(-rx, rx)) + "px";
+          el.card.style.top = Math.round(rand(-ry, ry)) + "px";
+        }
+
+        /** Rotación lenta del color de acento (sitio web): 15° de tono cada vez. */
+        var colorStep = 0;
+        function shiftAccent() {
+          colorStep = (colorStep + 15) % 360;
+          document.documentElement.style.setProperty(
+            "--accent",
+            "hsl(" + ((187 + colorStep) % 360) + ", 100%, 38%)",
+          );
+        }
+
+        /**
+         * Atenúa la pantalla tras DIM_AFTER_MS sin actividad; se reactiva con
+         * el control remoto, un toque o un ID nuevo.
+         */
+        var dimTimer = null;
+        function wakeScreen() {
+          document.body.classList.remove("dimmed");
+          clearTimeout(dimTimer);
+          dimTimer = setTimeout(function () {
+            document.body.classList.add("dimmed");
+          }, DIM_AFTER_MS);
+        }
+
+        /** Arranca el movimiento y la protección anti-quemado. */
+        function startBurnInProtection() {
+          el.iconArea = document.getElementById("floating-icons-container");
+          el.bgShift = document.getElementById("bgShift");
+          createFloatingIcons();
+          setInterval(pixelShift, PIXEL_SHIFT_MS);
+          setInterval(shiftAccent, ACCENT_SHIFT_MS);
+          ["keydown", "touchstart", "mousedown"].forEach(function (evt) {
+            window.addEventListener(evt, wakeScreen, { passive: true });
+          });
+          wakeScreen();
+          document.addEventListener("visibilitychange", function () {
+            if (document.hidden) stopMotion();
+            else startMotion();
+          });
+          if (!document.hidden) startMotion();
+        }
+
+        /* ==================================================================
+           11. API PÚBLICA (Kodular: RunJavaScript) E INICIO
+           ================================================================== */
+        window.wakeScreen = wakeScreen;
+
+        /** Vuelve a dibujar el QR del ID actual. */
+        window.refreshQR = function () {
+          if (deviceId) generateQRCode(deviceId);
+        };
+
+        // Fuerza una verificación real y envía el resultado a la app.
+        // Devuelve el último estado conocido ('online' | 'offline' | 'unknown').
+        window.checkConnection = function () {
+          runCheck(true);
+          return internetStatus;
+        };
+
+        // Versión asíncrona: Promise<boolean> con el resultado real.
+        window.checkConnectionAsync = function () {
+          return runCheck(true);
+        };
+
+        /** Arranca la pantalla (una vez, con el HTML listo). */
+        function init() {
+          el.card = document.getElementById("card");
+          el.deviceId = document.getElementById("device-id");
+          el.status = document.getElementById("connection-status");
+          el.qrWrapper = document.getElementById("qr-wrapper");
+          el.logo = document.getElementById("logo");
+          el.website = document.getElementById("websiteUrl");
+          el.version = document.getElementById("versionText");
+          el.email = document.getElementById("emailContact");
+
+          layoutManager.init();
+          applyLanguage(); // textos en el idioma guardado antes de medir la tarjeta
+          renderState();
+          // Precargar la librería QR mientras tanto
+          loadQRLib().catch(function (e) {
+            console.log(e.message);
+          });
+          startBurnInProtection();
+          refresh(); // orientación, tamaño, datos e ID (dibuja el QR) desde localStorage
+
+          // Releer settings: cambio de tamaño, al mostrarse, si otra página
+          // los cambia y cada WATCH_MS (el WebView puede arrancar en 0x0)
+          window.addEventListener("resize", refresh);
+          window.addEventListener("orientationchange", refresh);
+          window.addEventListener("load", refresh);
+          window.addEventListener("pageshow", refresh);
+          window.addEventListener("storage", refresh);
+          document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) refresh();
+          });
+          setInterval(refresh, WATCH_MS);
+
+          startConnectionMonitoring();
+          window.addEventListener("beforeunload", stopQRTimers);
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>
