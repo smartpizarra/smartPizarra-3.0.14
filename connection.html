@@ -38,14 +38,15 @@
   - Las animaciones mueven solo transform u opacity.
   - JavaScript ES5 (var / function) + Promise.
 
-  CONTRATO DE SALIDA: mensajes enviados a la app
-    Al iniciar (una vez):
-      {"origin":"connection_status","action":"info","status":"","internetStatus":"", ...}
-    Cada vez que cambia el estado (o cuando se pide con checkConnection):
+  CONTRATO DE SALIDA: UN SOLO tipo de mensaje, cuando se RESTABLECE la conexión
+    Se envía solo al pasar a "online" (desde "sin conexión" o en la primera
+    verificación, porque la app abre esta pantalla cuando no hay internet).
+    No se envía nada al abrir, ni al perder la conexión, ni mientras sigue online.
+    checkConnection() solo envía si el resultado es "online".
       {"origin":"connection_status","action":"connection",
        "internetStatus":"online","status":"online","latency":94,
        "localNetwork":true,"checkedAt":"2026-11-02T17:41:11.909Z", ...}
-        internetStatus  "online" | "offline"  -> estado REAL de internet
+        internetStatus  siempre "online"
         status          igual que internetStatus (compatibilidad)
         latency         ms que tardó la última verificación
         localNetwork    true si hay Wi-Fi/cable aunque no haya internet
@@ -56,7 +57,7 @@
       "orientation","language","scale" (escala para la app, factor % / 100)
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
-    checkConnection()        Fuerza una verificación y envía el resultado.
+    checkConnection()        Fuerza una verificación; envía el JSON solo si hay internet.
                              Devuelve el último estado conocido (true/false).
     checkConnectionAsync()   Igual, pero devuelve Promise<boolean>.
   updateData() de example3.html ya no existe: versión, web, email, id y
@@ -1115,7 +1116,7 @@
            7. LÓGICA PRINCIPAL DE LA PANTALLA
            Ciclo de una verificación:
              runCheck() -> probeInternet() -> applyResult() -> setStatus()
-                        -> (si cambió) updateUI() + reportStatus()
+                        -> (si cambió) updateUI() + reportStatus() (solo online)
                         -> scheduleNext() programa la siguiente
            ================================================================== */
         var noConnectionScreen = {
@@ -1130,10 +1131,9 @@
           lastLatency: 0, // ms de la última verificación
           reportCount: 0, // mensajes de estado enviados (evita duplicados)
 
-          /** Arranca (una vez): avisa a la app, escucha la red y verifica. */
+          /** Arranca (una vez): escucha la red y verifica. No envía nada. */
           init: function () {
             if (this.isInitialized) return;
-            report({ action: "info", status: "", internetStatus: "" });
             this.setupConnectionListeners();
             this.runCheck(false);
             this.isInitialized = true;
@@ -1226,9 +1226,12 @@
             console.log("Estado de conexión:", newStatus);
           },
 
-          /** Envía el estado actual a la app (ver contrato de salida). */
+          /**
+           * Envía el JSON a la app SOLO si hay internet (conexión restablecida).
+           * Perder la conexión o seguir sin ella no envía nada.
+           */
           reportStatus: function () {
-            if (this.status === "unknown") return;
+            if (this.status !== "online") return;
             this.reportCount++;
             report({
               action: "connection",
