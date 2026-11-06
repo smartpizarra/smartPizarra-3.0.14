@@ -18,8 +18,8 @@
     - Vigila que el QR siga visible (algunas GPU de TV box lo borran) y
       lo vuelve a dibujar si desaparece.
     - Protege la pantalla contra el quemado (puede quedarse horas).
-    - Registra el equipo en smartpizarra.org y espera a que lo autorices
-      desde el panel (https://smartpizarra.org/admin/, escaneando este QR
+    - Registra el equipo en smartpizarra.cloud y espera a que lo autorices
+      desde el panel (https://smartpizarra.cloud/admin/, escaneando este QR
       o buscando el ID). Al autorizarlo guarda la bandera
       "smartpizarra.authorized" = "1" y avisa a la app (ver sección 8b).
 
@@ -103,7 +103,7 @@
     6. Textos y UI         applyLanguage(), renderInfo(), renderState().
     7. Código QR           Dibujar, vigilar y reintentar.
     8. Conexión            Verificación de internet con histéresis.
-    8b. Autorización       Registro y consulta en smartpizarra.org (bandera).
+    8b. Autorización       Registro y consulta en smartpizarra.cloud (bandera).
     9. layoutManager       Gira y ajusta a pantalla (igual que connection.html).
    10. Movimiento          Reloj único (tick): iconos, spinner y fondo;
                            desplazamiento de la tarjeta, color y atenuación.
@@ -143,7 +143,11 @@
       }
 
       :root {
-        --accent: hsl(187, 100%, 38%); /* sitio web (rota despacio: anti-quemado) */
+        --accent: hsl(
+          187,
+          100%,
+          38%
+        ); /* sitio web (rota despacio: anti-quemado) */
       }
 
       html,
@@ -557,7 +561,7 @@
             <!-- Mensaje de estado (lo escribe renderState) -->
             <div class="status-message" id="connection-status"></div>
 
-            <!-- Autorización en smartpizarra.org (la escribe renderAuth) -->
+            <!-- Autorización en smartpizarra.cloud (la escribe renderAuth) -->
             <div class="auth-status idle" id="auth-status"></div>
           </div>
 
@@ -570,7 +574,9 @@
                 <circle cx="12" cy="12" r="10" />
                 <path d="M12 16v-5M12 8h.01" />
               </svg>
-              <span data-i18n="tip1">Identificación única de tu dispositivo.</span>
+              <span data-i18n="tip1"
+                >Identificación única de tu dispositivo.</span
+              >
             </div>
             <div class="instruction-item">
               <!-- Icono: código QR -->
@@ -669,10 +675,12 @@
             "auth.idle": "Preparando el registro del dispositivo…",
             "auth.checking": "Verificando autorización…",
             "auth.pending": "Pendiente de autorización por el administrador.",
-            "auth.authorized": "Dispositivo autorizado ✓",
-            "auth.revoked": "Autorización revocada. Contacta con el administrador.",
+            "auth.authorized": "Dispositivo Registrado ✓",
+            "auth.revoked":
+              "Autorización revocada. Contacta con el administrador.",
             "auth.error": "No se pudo contactar con el servidor. Reintentando…",
-            "auth.conflict": "Este ID ya está registrado con otra clave. Contacta con el administrador.",
+            "auth.conflict":
+              "Este ID ya está registrado con otra clave. Contacta con el administrador.",
           },
           en: {
             title: "Identification - Smart Pizarra",
@@ -691,10 +699,11 @@
             "auth.idle": "Preparing device registration…",
             "auth.checking": "Checking authorization…",
             "auth.pending": "Waiting for administrator authorization.",
-            "auth.authorized": "Device authorized ✓",
+            "auth.authorized": "Registered Device ✓",
             "auth.revoked": "Authorization revoked. Contact the administrator.",
             "auth.error": "Could not reach the server. Retrying…",
-            "auth.conflict": "This ID is already registered with another key. Contact the administrator.",
+            "auth.conflict":
+              "This ID is already registered with another key. Contact the administrator.",
           },
         };
 
@@ -810,7 +819,7 @@
           msg.orientation = readOrientation(); // global
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
-          msg.authorized = readStorage(KEYS.authorized) === "1"; // autorizado en smartpizarra.org
+          msg.authorized = readStorage(KEYS.authorized) === "1"; // autorizado en smartpizarra.cloud
           return msg;
         }
 
@@ -920,7 +929,9 @@
           try {
             var timestamp = Date.now().toString(36);
             var randomStr = Math.random().toString(36).substring(2, 8);
-            return b64(b64("app") + ":" + b64(id) + ":" + timestamp + ":" + randomStr);
+            return b64(
+              b64("app") + ":" + b64(id) + ":" + timestamp + ":" + randomStr,
+            );
           } catch (e) {
             console.error("Error al encriptar deviceId:", e);
             return id;
@@ -962,7 +973,8 @@
           qrLibPromise = QR_LIB_URLS.reduce(function (chain, url) {
             return chain.catch(function () {
               return loadScript(url).then(function () {
-                if (!window.QRCode) throw new Error("QRCode no definido en " + url);
+                if (!window.QRCode)
+                  throw new Error("QRCode no definido en " + url);
               });
             });
           }, Promise.reject()).catch(function (err) {
@@ -1149,7 +1161,12 @@
         function isQRVisible(box) {
           if (!document.body.contains(box)) return false;
           var img = box.querySelector("img");
-          if (img && img.style.display !== "none" && img.complete && img.naturalWidth > 0)
+          if (
+            img &&
+            img.style.display !== "none" &&
+            img.complete &&
+            img.naturalWidth > 0
+          )
             return true;
           var canvas = box.querySelector("canvas");
           if (canvas && canvas.style.display !== "none" && canvas.width > 0) {
@@ -1224,10 +1241,19 @@
           try {
             var data = JSON.parse(text);
             if (type === "dns") {
-              return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+              return (
+                !!data &&
+                data.Status === 0 &&
+                Array.isArray(data.Answer) &&
+                data.Answer.length > 0
+              );
             }
             if (type === "ip") {
-              return !!data && typeof data.ip === "string" && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+              return (
+                !!data &&
+                typeof data.ip === "string" &&
+                /^[0-9a-fA-F:.]{7,45}$/.test(data.ip)
+              );
             }
           } catch (e) {
             /* respuesta no JSON = no es internet real */
@@ -1269,9 +1295,13 @@
               xhr = new XMLHttpRequest();
               xhr.open("GET", ep.url + sep + "random_padding=" + pad, true);
               xhr.timeout = timeoutMs;
-              if (ep.type === "dns") xhr.setRequestHeader("Accept", "application/dns-json");
+              if (ep.type === "dns")
+                xhr.setRequestHeader("Accept", "application/dns-json");
               xhr.onload = function () {
-                finish(xhr.status === 200 && validateResponse(ep.type, xhr.responseText));
+                finish(
+                  xhr.status === 200 &&
+                    validateResponse(ep.type, xhr.responseText),
+                );
               };
               xhr.onerror = function () {
                 finish(false);
@@ -1411,7 +1441,8 @@
             lastLatency = 0;
             var before = internetStatus;
             applyResult(false, true);
-            if (forceReport && before === internetStatus) sendConnectionStatus();
+            if (forceReport && before === internetStatus)
+              sendConnectionStatus();
             scheduleNextCheck();
             return Promise.resolve(false);
           }
@@ -1423,7 +1454,8 @@
             var before = internetStatus;
             applyResult(ok, !!forceReport);
             // Si el estado cambió ya se reportó; si no, se reporta aquí
-            if (forceReport && before === internetStatus) sendConnectionStatus();
+            if (forceReport && before === internetStatus)
+              sendConnectionStatus();
             scheduleNextCheck();
             return internetStatus === "online";
           });
@@ -1450,7 +1482,7 @@
         }
 
         /* ==================================================================
-           8b. AUTORIZACIÓN EN smartpizarra.org
+           8b. AUTORIZACIÓN EN smartpizarra.cloud
            Pregunta a api/device.php (deviceId + secreto) si el equipo está
            autorizado; si es nuevo, el servidor lo registra como pendiente.
            Mientras está pendiente pregunta cada AUTH_PENDING_MS, así la TV
@@ -1504,7 +1536,10 @@
               xhr.open("POST", apiUrl, true);
               xhr.timeout = AUTH_TIMEOUT_MS;
               // form-urlencoded: el WebView no hace la verificación previa CORS
-              xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+              xhr.setRequestHeader(
+                "Content-Type",
+                "application/x-www-form-urlencoded",
+              );
               xhr.onload = function () {
                 try {
                   var res = JSON.parse(xhr.responseText);
@@ -1521,9 +1556,12 @@
                 resolve(null);
               };
               xhr.send(
-                "deviceId=" + encodeURIComponent(id) +
-                  "&secret=" + encodeURIComponent(secret) +
-                  "&version=" + encodeURIComponent(readText(KEYS.version) || ""),
+                "deviceId=" +
+                  encodeURIComponent(id) +
+                  "&secret=" +
+                  encodeURIComponent(secret) +
+                  "&version=" +
+                  encodeURIComponent(readText(KEYS.version) || ""),
               );
             } catch (e) {
               resolve(null);
@@ -1541,7 +1579,11 @@
           var before = readAuthorized();
           writeStorage(KEYS.authorized, authorized ? "1" : "0");
           if (before !== authorized) {
-            send(authorized ? "authorized" : "unauthorized", authorized ? "success" : authState, "");
+            send(
+              authorized ? "authorized" : "unauthorized",
+              authorized ? "success" : authState,
+              "",
+            );
           }
         }
 
@@ -1580,7 +1622,12 @@
           return requestAuth(apiUrl, deviceId, secret).then(function (res) {
             authBusy = false;
             if (res && res.ok === true) {
-              authState = res.authorized === true ? "authorized" : res.status === "revoked" ? "revoked" : "pending";
+              authState =
+                res.authorized === true
+                  ? "authorized"
+                  : res.status === "revoked"
+                    ? "revoked"
+                    : "pending";
               setAuthorizedFlag(res.authorized === true);
             } else if (res && res.httpStatus === 403) {
               // El ID existe en el servidor con otro secreto: se resuelve
@@ -1633,14 +1680,25 @@
           apply: function (orientation, scale) {
             this.orientation = orientation === null ? 0 : orientation;
             this.scale = scale === null ? 100 : scale;
-            var width = window.innerWidth || document.documentElement.clientWidth;
-            var height = window.innerHeight || document.documentElement.clientHeight;
+            var width =
+              window.innerWidth || document.documentElement.clientWidth;
+            var height =
+              window.innerHeight || document.documentElement.clientHeight;
             if (!width || !height) return;
             var cardWidth = this.card.offsetWidth;
             var cardHeight = this.card.offsetHeight;
             var state =
-              this.orientation + "|" + this.scale + "|" + width + "x" + height +
-              "|" + cardWidth + "x" + cardHeight;
+              this.orientation +
+              "|" +
+              this.scale +
+              "|" +
+              width +
+              "x" +
+              height +
+              "|" +
+              cardWidth +
+              "x" +
+              cardHeight;
             if (state === this._lastState) return;
             this._lastState = state;
 
@@ -1652,7 +1710,8 @@
               stageHeight = width;
               transform = "translate(" + width + "px, 0px) rotate(90deg)";
             } else if (this.orientation === 180) {
-              transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+              transform =
+                "translate(" + width + "px, " + height + "px) rotate(180deg)";
             } else if (this.orientation === 270) {
               stageWidth = height;
               stageHeight = width;
@@ -1692,7 +1751,8 @@
           renderInfo();
           syncDeviceId();
           // Si el ID/secreto aparecen después (loading.html aún no se había abierto)
-          if (authState === "idle" && deviceId && readText(KEYS.deviceSecret)) checkAuthorization();
+          if (authState === "idle" && deviceId && readText(KEYS.deviceSecret))
+            checkAuthorization();
           layoutManager.apply(readOrientation(), readScale(KEYS.ownScale));
         }
 
@@ -1790,8 +1850,11 @@
           });
           for (var i = 0; i < ICON_COUNT; i++) {
             wrapper.innerHTML =
-              '<svg class="floating-icon icon-' + ((i % 6) + 1) +
-              '" viewBox="0 0 24 24">' + order[i % order.length] + "</svg>";
+              '<svg class="floating-icon icon-' +
+              ((i % 6) + 1) +
+              '" viewBox="0 0 24 24">' +
+              order[i % order.length] +
+              "</svg>";
             var icon = wrapper.firstChild;
             var leftPct = rand(0, 95);
             var topPct = rand(0, 95);
@@ -1799,8 +1862,15 @@
             icon.style.top = topPct + "%";
             icon.style.opacity = rand(0.3, 0.7).toFixed(2);
             icon._m = {
-              leftPct: leftPct, topPct: topPct, x: 0, y: 0,
-              vx: rand(-2, 2), vy: rand(-2, 2), rot: 0, vr: 0, pause: 0,
+              leftPct: leftPct,
+              topPct: topPct,
+              x: 0,
+              y: 0,
+              vx: rand(-2, 2),
+              vy: rand(-2, 2),
+              rot: 0,
+              vr: 0,
+              pause: 0,
             };
             frag.appendChild(icon);
             icons.push(icon);
@@ -1855,18 +1925,29 @@
           }
           m.rot = Math.min(k.maxRotate, Math.max(-k.maxRotate, m.rot + m.vr));
           icon.style.transform =
-            "translate3d(" + m.x.toFixed(1) + "px," + m.y.toFixed(1) +
-            "px,0) rotate(" + m.rot.toFixed(1) + "deg)";
+            "translate3d(" +
+            m.x.toFixed(1) +
+            "px," +
+            m.y.toFixed(1) +
+            "px,0) rotate(" +
+            m.rot.toFixed(1) +
+            "deg)";
         }
 
-        var motion = { timer: null, tick: 0, spin: 0, bg: { value: 0, dir: 1 } };
+        var motion = {
+          timer: null,
+          tick: 0,
+          spin: 0,
+          bg: { value: 0, dir: 1 },
+        };
 
         /** Un paso del reloj: iconos, spinner (si se ve) y fondo. */
         function tick() {
           motion.tick++;
           var areaW = el.iconArea.offsetWidth;
           var areaH = el.iconArea.offsetHeight;
-          for (var i = 0; i < icons.length; i++) stepIcon(icons[i], areaW, areaH);
+          for (var i = 0; i < icons.length; i++)
+            stepIcon(icons[i], areaW, areaH);
 
           // Spinner: solo existe mientras se espera o se genera el QR
           var spinner = el.qrWrapper.firstChild;
@@ -1972,7 +2053,7 @@
           return runCheck(true);
         };
 
-        // Consulta ya la autorización en smartpizarra.org.
+        // Consulta ya la autorización en smartpizarra.cloud.
         // Promise<boolean> con la bandera guardada tras la consulta.
         window.checkAuthorization = checkAuthorization;
 

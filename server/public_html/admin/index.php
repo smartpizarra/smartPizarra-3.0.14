@@ -2,7 +2,7 @@
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
- *  URL: https://smartpizarra.org/admin/
+ *  URL: https://smartpizarra.cloud/admin/
  * =====================================================================
  *  - Entrar con el usuario y la contraseña de private/config.php.
  *  - Ver los equipos registrados (pendientes primero), buscar por ID o

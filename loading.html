@@ -30,10 +30,10 @@
                                                                    NO es el tamaño de una pantalla)
     smartpizarra.version / url / email / deviceId / league
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
-    smartpizarra.apiUrl                  URL                  https://smartpizarra.org/api/device.php
+    smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
     smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
 
-  AUTORIZACIÓN EN smartpizarra.org (ver server/README.md)
+  AUTORIZACIÓN EN smartpizarra.cloud (ver server/README.md)
   Al arrancar consulta api/device.php con deviceId + deviceSecret (si el
   equipo es nuevo queda registrado como pendiente) y guarda la bandera
   "smartpizarra.authorized". Así una revocación se detecta en el siguiente
@@ -452,7 +452,7 @@
 
         /**
          * Genera el SECRETO del dispositivo: 64 caracteres hex (32 bytes).
-         * Junto con el ID identifica al equipo ante smartpizarra.org: el ID
+         * Junto con el ID identifica al equipo ante smartpizarra.cloud: el ID
          * se ve en pantalla y en el QR, el secreto nunca se muestra.
          * Se crea una sola vez (como el ID) y no cambia.
          * @returns {string}
@@ -488,9 +488,9 @@
          */
         const PAGES = Object.freeze({
           loading: { scale: 80 }, // esta página
-          config: { scale: 80 }, // config.html
-          connection: { scale: 80 }, // connection.html (pantalla "sin conexión")
-          fingerprint: { scale: 80 }, // fingerprint.html (ID + código QR)
+          config: { scale: 98 }, // config.html
+          connection: { scale: 100 }, // connection.html (pantalla "sin conexión")
+          fingerprint: { scale: 100 }, // fingerprint.html (ID + código QR)
         });
 
         /**
@@ -661,9 +661,12 @@
             /** API de registro/autorización de equipos en el hosting. */
             apiUrl: {
               key: "smartpizarra.apiUrl",
-              defaultValue: "https://smartpizarra.org/api/device.php",
+              defaultValue: "https://smartpizarra.cloud/api/device.php",
               parse: function (raw) {
                 const v = raw === null ? "" : String(raw).trim();
+                // Migración: el dominio antiguo (smartpizarra.org) se descarta
+                // para que los equipos ya configurados pasen a smartpizarra.cloud.
+                if (/\/\/(www\.)?smartpizarra\.org(\/|$)/i.test(v)) return null;
                 return /^https?:\/\/\S+$/.test(v) ? v : null;
               },
             },
@@ -1539,7 +1542,7 @@
 
         /* ==================================================================
            CLASE AuthClient
-           Responsabilidad: preguntar a smartpizarra.org si este equipo está
+           Responsabilidad: preguntar a smartpizarra.cloud si este equipo está
            autorizado (y registrarlo como pendiente si es nuevo). Mismo
            protocolo que fingerprint.html: POST form-urlencoded (sin
            verificación previa CORS) con deviceId + secret + version.
@@ -1722,7 +1725,7 @@
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas
               scale: v.appScale / 100, // escala para la app (factor), la edita config.html
-              authorized: v.authorized === "1", // autorizado en smartpizarra.org
+              authorized: v.authorized === "1", // autorizado en smartpizarra.cloud
               // Tamaño de CADA pantalla, como factor (80 % => 0.8)
               pages: {},
             };

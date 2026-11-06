@@ -2,7 +2,7 @@
 /*
  * =====================================================================
  *  SMART PIZARRA - API DE DISPOSITIVOS
- *  URL: https://smartpizarra.org/api/device.php
+ *  URL: https://smartpizarra.cloud/api/device.php
  * =====================================================================
  *  La llaman fingerprint.html y loading.html desde la TV box.
  *

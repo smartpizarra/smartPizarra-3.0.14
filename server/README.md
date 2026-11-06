@@ -1,6 +1,6 @@
 # Smart Pizarra · registro y autorización de dispositivos
 
-Servidor para `https://smartpizarra.org/` (Hostinger, PHP 8.1 o superior + MySQL).
+Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
 
 ## Cómo funciona
 
@@ -8,7 +8,7 @@ Servidor para `https://smartpizarra.org/` (Hostinger, PHP 8.1 o superior + MySQL
 2. `fingerprint.html` (y `loading.html` al arrancar) llaman a `api/device.php` con ID + secreto:
    - Un equipo nuevo queda registrado como **pendiente**.
    - Mientras está pendiente, `fingerprint.html` pregunta cada 10 s.
-3. Entras en `https://smartpizarra.org/admin/`, **escaneas el QR** de la TV con el móvil (botón *Escanear QR*) o buscas el ID, y pulsas **Autorizar**.
+3. Entras en `https://smartpizarra.cloud/admin/`, **escaneas el QR** de la TV con el móvil (botón *Escanear QR*) o buscas el ID, y pulsas **Autorizar**.
 4. En unos segundos la TV muestra *Dispositivo autorizado ✓*, guarda `smartpizarra.authorized = "1"` y envía a la app `{"origin":"fingerPrint","action":"authorized",...}`.
 5. Si pulsas **Revocar**, la TV pone la bandera en `"0"`. Lo detecta en el siguiente arranque (`loading.html`) o, con `fingerprint.html` abierta, en un máximo de 30 min.
 
@@ -44,7 +44,7 @@ server/
    `config.php` no va a git.
 5. **Subir archivos.** Usa el *Administrador de archivos* de Hostinger, con esta estructura:
    ```
-   domains/smartpizarra.org/
+   domains/smartpizarra.cloud/
      private/       <- lib.php, config.php, .htaccess
      public_html/
        api/         <- device.php
@@ -52,7 +52,7 @@ server/
    ```
    La carpeta `private/` va **al lado** de `public_html`, no dentro.
 6. **PHP.** Comprueba en hPanel (*Avanzado → Configuración de PHP*) que la versión es 8.1 o superior.
-7. **Comprobar.** Abre `https://smartpizarra.org/admin/` y entra. Después abre `fingerprint.html` en la TV: el equipo debe aparecer en *Pendientes*.
+7. **Comprobar.** Abre `https://smartpizarra.cloud/admin/` y entra. Después abre `fingerprint.html` en la TV: el equipo debe aparecer en *Pendientes*.
 
 ## Notas
 
