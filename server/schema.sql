@@ -11,15 +11,17 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   device_id     VARCHAR(32)  NOT NULL,          -- "SP-XXXX-XXXX-XXXX" (localStorage smartpizarra.deviceId)
   secret_hash   CHAR(64)     NOT NULL,          -- SHA-256 del secreto del equipo (nunca el secreto)
   status        VARCHAR(10)  NOT NULL DEFAULT 'pending', -- pending | authorized | revoked
-  label         VARCHAR(100) NULL,              -- nombre libre puesto desde el panel
+  label         VARCHAR(100) NULL,              -- ALIAS libre puesto desde el panel
   app_version   VARCHAR(20)  NULL,              -- versión que informó el equipo
   last_ip       VARCHAR(45)  NULL,              -- última IP pública vista
-  created_at    DATETIME     NOT NULL,          -- primer registro (UTC)
-  last_seen_at  DATETIME     NOT NULL,          -- última consulta del equipo (UTC)
+  created_at    DATETIME     NOT NULL,          -- fecha de registro en la base (UTC)
+  last_seen_at  DATETIME     NOT NULL,          -- última consulta de las páginas HTML (UTC)
+  online_at     DATETIME     NULL,              -- última señal "online" de la app nativa Kodular (api/ping.php, UTC)
   status_at     DATETIME     NULL,              -- último cambio de estado desde el panel (UTC)
   PRIMARY KEY (device_id),
   KEY idx_status (status),
-  KEY idx_last_seen (last_seen_at)
+  KEY idx_last_seen (last_seen_at),
+  KEY idx_online (online_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Contadores para limitar abusos (registros nuevos e intentos de login

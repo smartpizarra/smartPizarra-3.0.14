@@ -164,6 +164,19 @@ final class DeviceRepository
         )->execute([Database::now(), $version, $ip, $id]);
     }
 
+    /**
+     * Señal "online" de la app nativa Kodular (api/ping.php).
+     * Solo toca online_at (y la IP/versión): last_seen_at sigue siendo la
+     * última consulta de las páginas HTML.
+     */
+    public static function markOnline(string $id, ?string $version, string $ip): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_devices SET online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
+             WHERE device_id = ?'
+        )->execute([Database::now(), $version, $ip, $id]);
+    }
+
     /** Cambia el estado desde el panel. */
     public static function setStatus(string $id, string $status): bool
     {
@@ -177,6 +190,7 @@ final class DeviceRepository
         return $stmt->rowCount() > 0;
     }
 
+    /** Guarda el alias del equipo ("" lo borra). Máx. 100 caracteres. */
     public static function setLabel(string $id, string $label): void
     {
         Database::pdo()->prepare('UPDATE sp_devices SET label = ? WHERE device_id = ?')
@@ -191,7 +205,7 @@ final class DeviceRepository
     /**
      * Lista para el panel.
      * @param string|null $status Filtro de estado (null = todos).
-     * @param string      $search Texto a buscar en el ID o el nombre.
+     * @param string      $search Texto a buscar en el ID o el alias.
      * @return array<int,array<string,mixed>>
      */
     public static function search(?string $status, string $search): array

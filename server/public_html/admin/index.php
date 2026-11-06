@@ -8,9 +8,13 @@
  *  - Ver los equipos registrados (pendientes primero), buscar por ID o
  *    nombre, o ESCANEAR el QR que muestra fingerprint.html con la cámara
  *    del móvil (el QR contiene el ID).
- *  - Autorizar, revocar, poner nombre o eliminar un equipo. El equipo se
+ *  - Autorizar, revocar, poner un ALIAS o eliminar un equipo. El equipo se
  *    entera en su próxima consulta (fingerprint.html la hace cada pocos
  *    segundos mientras espera; loading.html al arrancar la app).
+ *  - Cada equipo muestra su fecha de registro en la base y si la app
+ *    nativa está "En línea" (señal de api/ping.php en los últimos
+ *    online_timeout_seconds) o hace cuánto envió la última señal. Los
+ *    tiempos se recalculan solos cada 30 s sin recargar la página.
  *
  *  Seguridad: sesión con cookie segura, token CSRF en cada formulario,
  *  límite de intentos de login por IP, consultas preparadas, salida
@@ -74,16 +78,24 @@ function redirectWith(string $message, string $query = ''): never
     exit;
 }
 
-/** Fecha UTC de la base => texto legible ("hace 5 min", o la fecha). */
+/** Fecha UTC de la base ("Y-m-d H:i:s") => segundos unix (0 si no hay). */
+function utcTs(?string $utc): int
+{
+    return $utc ? (int) strtotime($utc . ' UTC') : 0;
+}
+
+/**
+ * Fecha UTC => texto relativo ("hace 5 min", "hace 3 d").
+ * El mismo cálculo existe en JavaScript (agoText) para refrescarlo.
+ */
 function ago(?string $utc): string
 {
     if (!$utc) {
         return '—';
     }
-    $t = strtotime($utc . ' UTC');
-    $d = time() - $t;
+    $d = max(0, time() - utcTs($utc));
     if ($d < 60) {
-        return 'hace ' . max(0, $d) . ' s';
+        return 'hace ' . $d . ' s';
     }
     if ($d < 3600) {
         return 'hace ' . intdiv($d, 60) . ' min';
@@ -91,10 +103,52 @@ function ago(?string $utc): string
     if ($d < 86400) {
         return 'hace ' . intdiv($d, 3600) . ' h';
     }
-    return gmdate('d/m/Y', $t);
+    return 'hace ' . intdiv($d, 86400) . ' d';
+}
+
+/** Texto relativo que el script del panel recalcula cada 30 s. */
+function agoTag(?string $utc): string
+{
+    if (!$utc) {
+        return '—';
+    }
+    return '<span data-ago="' . utcTs($utc) . '">' . h(ago($utc)) . '</span>';
+}
+
+/**
+ * Fecha y hora completas. El servidor la escribe en UTC y el script del
+ * panel la pasa a la hora local del navegador.
+ */
+function dateTag(?string $utc): string
+{
+    if (!$utc) {
+        return '—';
+    }
+    $t = utcTs($utc);
+    return '<time datetime="' . gmdate('Y-m-d\TH:i:s\Z', $t) . '" data-ts="' . $t . '">'
+        . h(gmdate('d/m/Y H:i', $t)) . ' UTC</time>';
+}
+
+/**
+ * Estado de la app nativa según su última señal (api/ping.php).
+ * @param int $timeout Segundos sin señal para considerarla desconectada.
+ * @return string HTML: "En línea · hace X", "Desconectado · hace X" o "Sin señal de la app".
+ */
+function onlineTag(?string $utc, int $timeout): string
+{
+    if (!$utc) {
+        return '<span class="online never">Sin señal de la app</span>';
+    }
+    $t = utcTs($utc);
+    $on = time() - $t < $timeout;
+    return '<span class="online ' . ($on ? 'on' : 'off') . '" data-online="' . $t . '">'
+        . ($on ? 'En línea · ' : 'Desconectado · ')
+        . '<span data-ago="' . $t . '">' . h(ago($utc)) . '</span></span>';
 }
 
 $config = AppConfig::get();
+// Segundos sin señal de la app para considerarla desconectada (mín. 30)
+$onlineTimeout = max(30, (int) ($config['online_timeout_seconds'] ?? 180));
 $loggedIn = !empty($_SESSION['admin']);
 $error = '';
 
@@ -153,7 +207,7 @@ try {
                     redirectWith("$id vuelve a pendiente.", $back);
                 case 'label':
                     DeviceRepository::setLabel($id, trim((string) ($_POST['label'] ?? '')));
-                    redirectWith("Nombre de $id guardado.", $back);
+                    redirectWith("Alias de $id guardado.", $back);
                 case 'delete':
                     DeviceRepository::delete($id);
                     redirectWith("$id eliminado. Si el equipo vuelve a consultar, se registrará como pendiente.", $back);
@@ -248,6 +302,12 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
     .actions form { margin: 0; }
     .label-form { display: flex; gap: 6px; flex: 1 1 220px; }
     .label-form input { padding: 7px 10px; }
+    .alias { font-weight: 600; font-size: 1.05rem; margin-right: 8px; }
+    /* Estado de la app nativa: punto de color + texto */
+    .online { font-size: .85rem; white-space: nowrap; }
+    .online::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      margin-right: 6px; background: currentColor; vertical-align: middle; }
+    .online.on { color: var(--ok); } .online.off { color: var(--bad); } .online.never { color: var(--muted); }
     .empty { color: var(--muted); text-align: center; padding: 24px; }
     /* Escáner de QR (pantalla completa) */
     #scanner { position: fixed; inset: 0; background: #000; display: none; flex-direction: column;
@@ -282,7 +342,7 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
   <?php if ($error): ?><div class="card error"><?= h($error) ?></div><?php endif; ?>
 
   <form class="tools" method="get">
-    <input type="search" name="q" value="<?= h($q) ?>" placeholder="Buscar por ID (SP-...) o nombre" aria-label="Buscar">
+    <input type="search" name="q" value="<?= h($q) ?>" placeholder="Buscar por ID (SP-...) o alias" aria-label="Buscar">
     <button type="submit">Buscar</button>
     <button type="button" id="scanBtn" class="primary">Escanear QR</button>
   </form>
@@ -304,12 +364,17 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
   <?php foreach ($devices as $d): $id = $d['device_id']; $st = $d['status']; ?>
     <section class="card device">
       <div class="device-head">
-        <span class="device-id"><?= h($id) ?></span>
+        <span>
+          <?= $d['label'] ? '<span class="alias">' . h($d['label']) . '</span>' : '' ?>
+          <span class="device-id"><?= h($id) ?></span>
+        </span>
         <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
       </div>
       <div class="meta">
-        <?= $d['label'] ? '<strong>' . h($d['label']) . '</strong> · ' : '' ?>
-        Última conexión <?= h(ago($d['last_seen_at'])) ?> · Alta <?= h(ago($d['created_at'])) ?>
+        <!-- Señal de la app nativa (api/ping.php) -->
+        <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
+        Registrado el <?= dateTag($d['created_at']) ?>
+        · Última consulta de las páginas <?= agoTag($d['last_seen_at']) ?>
         <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
         <?= $d['last_ip'] ? ' · IP ' . h($d['last_ip']) : '' ?>
       </div>
@@ -326,7 +391,7 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
         <?php endif; ?>
         <form method="post" class="label-form"><?= csrfField() ?><input type="hidden" name="action" value="label">
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
-          <input type="text" name="label" value="<?= h($d['label']) ?>" maxlength="100" placeholder="Nombre (p. ej. Local Centro)" aria-label="Nombre">
+          <input type="text" name="label" value="<?= h($d['label']) ?>" maxlength="100" placeholder="Alias (p. ej. Local Centro)" aria-label="Alias">
           <button type="submit">Guardar</button></form>
         <form method="post" data-confirm="¿Eliminar <?= h($id) ?>? Si vuelve a conectarse quedará pendiente."><?= csrfField() ?><input type="hidden" name="action" value="delete">
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
@@ -351,6 +416,41 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
         if (!window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
       });
     });
+
+    /*
+     * Tiempos del panel:
+     *  - <time data-ts> => fecha y hora LOCAL del navegador (el servidor la da en UTC).
+     *  - [data-ago]     => "hace X", recalculado cada 30 s (mismo cálculo que ago() en PHP).
+     *  - [data-online]  => En línea / Desconectado según ONLINE_TIMEOUT (segundos).
+     * SKEW corrige la diferencia entre el reloj del móvil y el del servidor.
+     */
+    var ONLINE_TIMEOUT = <?= (int) $onlineTimeout ?>;
+    var SKEW = <?= time() ?> - Math.floor(Date.now() / 1000);
+    function nowTs() { return Math.floor(Date.now() / 1000) + SKEW; }
+    function agoText(ts) {
+      var d = Math.max(0, nowTs() - ts);
+      if (d < 60) return "hace " + d + " s";
+      if (d < 3600) return "hace " + Math.floor(d / 60) + " min";
+      if (d < 86400) return "hace " + Math.floor(d / 3600) + " h";
+      return "hace " + Math.floor(d / 86400) + " d";
+    }
+    function pad(n) { return (n < 10 ? "0" : "") + n; }
+    document.querySelectorAll("time[data-ts]").forEach(function (el) {
+      var dt = new Date(+el.getAttribute("data-ts") * 1000);
+      el.textContent = pad(dt.getDate()) + "/" + pad(dt.getMonth() + 1) + "/" + dt.getFullYear()
+        + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
+    });
+    function refreshTimes() {
+      document.querySelectorAll("[data-ago]").forEach(function (el) {
+        el.textContent = agoText(+el.getAttribute("data-ago"));
+      });
+      document.querySelectorAll("[data-online]").forEach(function (el) {
+        var on = nowTs() - (+el.getAttribute("data-online")) < ONLINE_TIMEOUT;
+        el.className = "online " + (on ? "on" : "off");
+        el.firstChild.nodeValue = on ? "En línea · " : "Desconectado · "; // nodo de texto inicial
+      });
+    }
+    setInterval(refreshTimes, 30000);
 
     /*
      * Escáner de QR. El QR de fingerprint.html contiene el ID (SP-XXXX-XXXX-XXXX).

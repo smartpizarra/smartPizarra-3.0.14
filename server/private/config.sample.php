@@ -35,6 +35,12 @@ return [
     'login_fails_per_ip'       => 10, // intentos fallidos de login por IP...
     'login_window_seconds'     => 900, // ...en esta ventana (15 min)
 
+    // Señal "online" de la app nativa Kodular (api/ping.php).
+    // El panel muestra "En línea" si la última señal llegó hace menos de
+    // estos segundos; si no, "Desconectado · hace X". Ponlo en unas 2-3
+    // veces el intervalo del Clock de la app (p. ej. Clock 60 s => 180).
+    'online_timeout_seconds' => 180,
+
     // Si el sitio va detrás de un proxy/CDN que pone la IP real en una
     // cabecera, indícala aquí (p. ej. 'HTTP_CF_CONNECTING_IP'). Si no, null.
     'client_ip_header' => null,
