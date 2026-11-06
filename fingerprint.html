@@ -18,8 +18,12 @@
     - Vigila que el QR siga visible (algunas GPU de TV box lo borran) y
       lo vuelve a dibujar si desaparece.
     - Protege la pantalla contra el quemado (puede quedarse horas).
+    - Registra el equipo en smartpizarra.org y espera a que lo autorices
+      desde el panel (https://smartpizarra.org/admin/, escaneando este QR
+      o buscando el ID). Al autorizarlo guarda la bandera
+      "smartpizarra.authorized" = "1" y avisa a la app (ver sección 8b).
 
-  SETTINGS (localStorage) - SOLO SE LEEN, ESTA PÁGINA NO ESCRIBE NADA
+  SETTINGS (localStorage) - SOLO SE LEEN, salvo "smartpizarra.authorized"
   Los crea loading.html con sus valores por defecto (CONFIG.settings y
   PAGES). config.html no tiene ninguna opción para esta pantalla.
     "smartpizarra.deviceId"            ID del dispositivo => contenido del QR
@@ -29,6 +33,9 @@
                                                      (100 % = 90 % de la pantalla)
     "smartpizarra.version" / ".url" / ".email"      se muestran
     "smartpizarra.league" / "smartpizarra.scale"    solo viajan en los JSON
+    "smartpizarra.deviceSecret" / ".apiUrl"         para consultar la autorización
+    "smartpizarra.authorized"          "1" | "0"     ÚNICA clave que ESCRIBE esta
+                                                    página, con lo que diga el servidor
   Para cambiar el tamaño: updateSettings('{"page":"fingerprint","scale":95}')
   en loading.html, o su default en PAGES de loading.html.
   Se vuelven a leer cada 1 s, al mostrarse y con el evento "storage"
@@ -69,6 +76,10 @@
     verificación no ha terminado) y los settings leídos de localStorage
     (null si no existen): "version","url","email","deviceId","league",
     "leagues","orientation","language","scale" (escala para la app, factor).
+    Autorización (solo cuando la bandera CAMBIA):
+      {"origin":"fingerPrint","action":"authorized","status":"success","token":"", ...}
+      {"origin":"fingerPrint","action":"unauthorized","status":"revoked|pending|conflict","token":"", ...}
+    TODOS los mensajes llevan además "authorized": true | false.
   Ya no se envían "info" ni "id_empty": el ID no se pide a la app.
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
@@ -77,6 +88,8 @@
                             resultado. Devuelve el último estado conocido.
     checkConnectionAsync()  Igual, pero devuelve Promise<boolean>.
     wakeScreen()            Quita la atenuación de pantalla (anti-quemado).
+    checkAuthorization()    Consulta ya la autorización. Promise<boolean>.
+    isAuthorized()          Bandera guardada ahora (true/false), sin consultar.
   updateData(), setCode() y requestIdAgain() de example4.html ya no
   existen: los datos y el ID se leen de localStorage (se cambian con
   updateSettings() de loading.html; el ID no cambia).
@@ -90,6 +103,7 @@
     6. Textos y UI         applyLanguage(), renderInfo(), renderState().
     7. Código QR           Dibujar, vigilar y reintentar.
     8. Conexión            Verificación de internet con histéresis.
+    8b. Autorización       Registro y consulta en smartpizarra.org (bandera).
     9. layoutManager       Gira y ajusta a pantalla (igual que connection.html).
    10. Movimiento          Reloj único (tick): iconos, spinner y fondo;
                            desplazamiento de la tarjeta, color y atenuación.
@@ -404,6 +418,30 @@
         border-color: rgba(76, 175, 80, 0.3);
       }
 
+      /* Estado de la autorización (renderAuth): amarillo pendiente, verde
+         autorizado, rojo revocado/conflicto, gris resto */
+      .auth-status {
+        font-size: 1.05rem;
+        margin-top: 10px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        color: rgba(255, 255, 255, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+      }
+      .auth-status.pending {
+        color: #ffc107;
+        border-color: rgba(255, 193, 7, 0.4);
+      }
+      .auth-status.authorized {
+        color: #4caf50;
+        border-color: rgba(76, 175, 80, 0.4);
+      }
+      .auth-status.revoked,
+      .auth-status.conflict {
+        color: #f44336;
+        border-color: rgba(244, 67, 54, 0.4);
+      }
+
       .contact-info {
         margin-top: 20px;
         padding: 15px;
@@ -518,6 +556,9 @@
 
             <!-- Mensaje de estado (lo escribe renderState) -->
             <div class="status-message" id="connection-status"></div>
+
+            <!-- Autorización en smartpizarra.org (la escribe renderAuth) -->
+            <div class="auth-status idle" id="auth-status"></div>
           </div>
 
           <!-- Instrucciones. Cada icono es un SVG de 24x24 dibujado con trazos.
@@ -591,6 +632,9 @@
           url: "smartpizarra.url",
           email: "smartpizarra.email",
           deviceId: "smartpizarra.deviceId", // contenido del QR
+          deviceSecret: "smartpizarra.deviceSecret", // secreto (solo viaja a la API)
+          apiUrl: "smartpizarra.apiUrl", // API de autorización en el hosting
+          authorized: "smartpizarra.authorized", // bandera "1"/"0" (la ESCRIBE esta página)
         };
 
         var ORIENTATIONS = [0, 90, 180, 270];
@@ -622,6 +666,13 @@
             "status.offline": "Sin conexión a internet. Esperando reconexión…",
             "status.error": "No se pudo generar el código QR. Reintentando…",
             "qr.error": "Error QR",
+            "auth.idle": "Preparando el registro del dispositivo…",
+            "auth.checking": "Verificando autorización…",
+            "auth.pending": "Pendiente de autorización por el administrador.",
+            "auth.authorized": "Dispositivo autorizado ✓",
+            "auth.revoked": "Autorización revocada. Contacta con el administrador.",
+            "auth.error": "No se pudo contactar con el servidor. Reintentando…",
+            "auth.conflict": "Este ID ya está registrado con otra clave. Contacta con el administrador.",
           },
           en: {
             title: "Identification - Smart Pizarra",
@@ -637,6 +688,13 @@
             "status.offline": "No internet connection. Waiting to reconnect…",
             "status.error": "The QR code could not be generated. Retrying…",
             "qr.error": "QR error",
+            "auth.idle": "Preparing device registration…",
+            "auth.checking": "Checking authorization…",
+            "auth.pending": "Waiting for administrator authorization.",
+            "auth.authorized": "Device authorized ✓",
+            "auth.revoked": "Authorization revoked. Contact the administrator.",
+            "auth.error": "Could not reach the server. Retrying…",
+            "auth.conflict": "This ID is already registered with another key. Contact the administrator.",
           },
         };
 
@@ -752,6 +810,7 @@
           msg.orientation = readOrientation(); // global
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
+          msg.authorized = readStorage(KEYS.authorized) === "1"; // autorizado en smartpizarra.org
           return msg;
         }
 
@@ -1280,6 +1339,7 @@
           internetStatus = "online";
           if (wasOffline) sendConnectionStatus();
           if (deviceId && (wasOffline || qrState === "error")) resumeQR();
+          if (wasOffline || authState === "error") checkAuthorization();
           renderState();
         }
 
@@ -1390,6 +1450,160 @@
         }
 
         /* ==================================================================
+           8b. AUTORIZACIÓN EN smartpizarra.org
+           Pregunta a api/device.php (deviceId + secreto) si el equipo está
+           autorizado; si es nuevo, el servidor lo registra como pendiente.
+           Mientras está pendiente pregunta cada AUTH_PENDING_MS, así la TV
+           se entera en segundos cuando lo autorizas desde el panel; ya
+           autorizado, cada AUTH_RECHECK_MS (para detectar una revocación).
+           Guarda la bandera "smartpizarra.authorized" ("1" / "0") con lo
+           que diga el servidor y avisa a la app SOLO cuando la bandera
+           cambia. Sin respuesta del servidor la bandera no se toca.
+           ================================================================== */
+
+        var AUTH_PENDING_MS = 10000; // pendiente: consultar cada 10 s
+        var AUTH_RECHECK_MS = 30 * 60 * 1000; // autorizado: cada 30 min
+        var AUTH_ERROR_MS = 30000; // sin respuesta del servidor: cada 30 s
+        var AUTH_TIMEOUT_MS = 8000; // espera máxima de una consulta
+
+        // 'idle' (sin datos) | 'checking' | 'pending' | 'authorized' |
+        // 'revoked' | 'error' (sin respuesta) | 'conflict' (ID con otro secreto)
+        var authState = "idle";
+        var authTimer = null; // próxima consulta
+        var authBusy = false; // hay una consulta en curso
+
+        /**
+         * Escribe en localStorage (solo la bandera de autorización: el resto
+         * de settings los escribe loading.html).
+         * @returns {boolean} true si se guardó.
+         */
+        function writeStorage(key, value) {
+          try {
+            window.localStorage.setItem(key, value);
+            return window.localStorage.getItem(key) === value;
+          } catch (e) {
+            console.log("No se pudo escribir localStorage:", e);
+            return false;
+          }
+        }
+
+        /** @returns {boolean} Bandera de autorización guardada. */
+        function readAuthorized() {
+          return readStorage(KEYS.authorized) === "1";
+        }
+
+        /**
+         * Una consulta al servidor.
+         * @returns {Promise<object|null>} JSON de la API (con "httpStatus"), o
+         *          null si no hubo respuesta válida.
+         */
+        function requestAuth(apiUrl, id, secret) {
+          return new Promise(function (resolve) {
+            try {
+              var xhr = new XMLHttpRequest();
+              xhr.open("POST", apiUrl, true);
+              xhr.timeout = AUTH_TIMEOUT_MS;
+              // form-urlencoded: el WebView no hace la verificación previa CORS
+              xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+              xhr.onload = function () {
+                try {
+                  var res = JSON.parse(xhr.responseText);
+                  res.httpStatus = xhr.status;
+                  resolve(res);
+                } catch (e) {
+                  resolve(null); // no es la API (portal cautivo, error del hosting)
+                }
+              };
+              xhr.onerror = function () {
+                resolve(null);
+              };
+              xhr.ontimeout = function () {
+                resolve(null);
+              };
+              xhr.send(
+                "deviceId=" + encodeURIComponent(id) +
+                  "&secret=" + encodeURIComponent(secret) +
+                  "&version=" + encodeURIComponent(readText(KEYS.version) || ""),
+              );
+            } catch (e) {
+              resolve(null);
+            }
+          });
+        }
+
+        /**
+         * Guarda la bandera y avisa a la app si cambió:
+         *   {"origin":"fingerPrint","action":"authorized","status":"success",...}
+         *   {"origin":"fingerPrint","action":"unauthorized","status":"<estado>",...}
+         * @param {boolean} authorized
+         */
+        function setAuthorizedFlag(authorized) {
+          var before = readAuthorized();
+          writeStorage(KEYS.authorized, authorized ? "1" : "0");
+          if (before !== authorized) {
+            send(authorized ? "authorized" : "unauthorized", authorized ? "success" : authState, "");
+          }
+        }
+
+        /** Programa la próxima consulta según el estado. */
+        function scheduleAuth() {
+          clearTimeout(authTimer);
+          var delay =
+            authState === "authorized"
+              ? AUTH_RECHECK_MS
+              : authState === "pending" || authState === "revoked"
+                ? AUTH_PENDING_MS
+                : AUTH_ERROR_MS;
+          authTimer = setTimeout(checkAuthorization, delay);
+        }
+
+        /**
+         * Consulta la autorización ahora (si hay ID, secreto y API, y hay
+         * internet). Sin solapes.
+         * @returns {Promise<boolean>} Bandera tras la consulta.
+         */
+        function checkAuthorization() {
+          var apiUrl = readText(KEYS.apiUrl);
+          var secret = readText(KEYS.deviceSecret);
+          if (!deviceId || !secret || !apiUrl) {
+            authState = "idle"; // falta abrir loading.html (crea secreto y API)
+            renderAuth();
+            return Promise.resolve(readAuthorized());
+          }
+          if (authBusy || !isOnline) return Promise.resolve(readAuthorized());
+          authBusy = true;
+          clearTimeout(authTimer);
+          if (authState === "idle" || authState === "error") {
+            authState = "checking";
+            renderAuth();
+          }
+          return requestAuth(apiUrl, deviceId, secret).then(function (res) {
+            authBusy = false;
+            if (res && res.ok === true) {
+              authState = res.authorized === true ? "authorized" : res.status === "revoked" ? "revoked" : "pending";
+              setAuthorizedFlag(res.authorized === true);
+            } else if (res && res.httpStatus === 403) {
+              // El ID existe en el servidor con otro secreto: se resuelve
+              // eliminándolo en el panel. Por seguridad, sin autorización.
+              authState = "conflict";
+              setAuthorizedFlag(false);
+            } else {
+              authState = "error"; // sin respuesta: la bandera no cambia
+            }
+            renderAuth();
+            scheduleAuth();
+            return readAuthorized();
+          });
+        }
+
+        /** Muestra el estado de la autorización (solo toca el DOM si cambia). */
+        function renderAuth() {
+          var key = authState === "idle" ? "auth.idle" : "auth." + authState;
+          setText(el.auth, t(key));
+          el.auth.className = "auth-status " + authState;
+        }
+
+        /* ==================================================================
            9. ORIENTACIÓN Y AJUSTE A PANTALLA (igual que connection.html)
            #scaler queda con una escala FIJA (solo cambia al girar o cambiar
            el tamaño): no se anima, así no afecta al QR.
@@ -1471,9 +1685,14 @@
          * ID (QR), orientación y tamaño. Barato si nada cambió.
          */
         function refresh() {
-          if (applyLanguage()) renderState();
+          if (applyLanguage()) {
+            renderState();
+            renderAuth();
+          }
           renderInfo();
           syncDeviceId();
+          // Si el ID/secreto aparecen después (loading.html aún no se había abierto)
+          if (authState === "idle" && deviceId && readText(KEYS.deviceSecret)) checkAuthorization();
           layoutManager.apply(readOrientation(), readScale(KEYS.ownScale));
         }
 
@@ -1753,6 +1972,13 @@
           return runCheck(true);
         };
 
+        // Consulta ya la autorización en smartpizarra.org.
+        // Promise<boolean> con la bandera guardada tras la consulta.
+        window.checkAuthorization = checkAuthorization;
+
+        // Bandera guardada ahora (sin consultar al servidor).
+        window.isAuthorized = readAuthorized;
+
         /** Arranca la pantalla (una vez, con el HTML listo). */
         function init() {
           el.card = document.getElementById("card");
@@ -1763,10 +1989,12 @@
           el.website = document.getElementById("websiteUrl");
           el.version = document.getElementById("versionText");
           el.email = document.getElementById("emailContact");
+          el.auth = document.getElementById("auth-status");
 
           layoutManager.init();
           applyLanguage(); // textos en el idioma guardado antes de medir la tarjeta
           renderState();
+          renderAuth();
           // Precargar la librería QR mientras tanto
           loadQRLib().catch(function (e) {
             console.log(e.message);
@@ -1787,6 +2015,7 @@
           setInterval(refresh, WATCH_MS);
 
           startConnectionMonitoring();
+          checkAuthorization(); // registra el equipo / consulta si está autorizado
           window.addEventListener("beforeunload", stopQRTimers);
         }
 

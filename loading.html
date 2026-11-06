@@ -19,11 +19,33 @@
     clave                                valores              defecto
     smartpizarra.orientation             0 | 90 | 180 | 270   90  (GLOBAL: todas las pantallas)
     smartpizarra.loading.scale           10 a 300 (%)         85
-    smartpizarra.config.scale            10 a 300 (%)         100
+    smartpizarra.config.scale            10 a 300 (%)         90
+    smartpizarra.connection.scale        10 a 300 (%)         85
+    smartpizarra.fingerprint.scale       10 a 300 (%)         85
     (cada pantalla tiene escala propia: ver PAGES)
-    smartpizarra.language                es | en              es  (GLOBAL: idioma de todas
+    smartpizarra.language                es | en              en  (GLOBAL: idioma de todas
                                                                    las pantallas; ver I18N)
+    smartpizarra.scale                   10 a 300 (%)         100 (escala para la app: solo
+                                                                   se guarda, la edita config.html;
+                                                                   NO es el tamaño de una pantalla)
     smartpizarra.version / url / email / deviceId / league
+    smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
+    smartpizarra.apiUrl                  URL                  https://smartpizarra.org/api/device.php
+    smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
+
+  AUTORIZACIÓN EN smartpizarra.org (ver server/README.md)
+  Al arrancar consulta api/device.php con deviceId + deviceSecret (si el
+  equipo es nuevo queda registrado como pendiente) y guarda la bandera
+  "smartpizarra.authorized". Así una revocación se detecta en el siguiente
+  arranque. Sin respuesta del servidor la bandera no cambia. El JSON a la
+  app lleva "authorized": true | false.
+
+  CAMBIAR UN VALOR POR DEFECTO EN ESTE ARCHIVO
+  Si se edita un default (ej. version "3.0.14" => "3.0.16"), al abrir esta
+  página el nuevo default REEMPLAZA el valor guardado y lo ven todas las
+  páginas. Los defaults que NO se editaron conservan el valor guardado
+  (lo elegido en config.html o con updateSettings). Los defaults usados
+  se anotan en "smartpizarra.defaults". deviceId nunca se reemplaza.
 
   Si otra página los modifica, esta los vuelve a leer al recibir el
   evento "storage", al volver a mostrarse o al cambiar el tamaño.
@@ -367,8 +389,8 @@
             </div>
             <div class="step" id="step4">
               <span class="step-check">&#10003;</span>
-              <span data-i18n="step4">Carga completa</span><span
-                class="dots"
+              <span data-i18n="step4">Carga completa</span
+              ><span class="dots"
                 ><span>.</span><span>.</span><span>.</span></span
               >
             </div>
@@ -429,6 +451,29 @@
         }
 
         /**
+         * Genera el SECRETO del dispositivo: 64 caracteres hex (32 bytes).
+         * Junto con el ID identifica al equipo ante smartpizarra.org: el ID
+         * se ve en pantalla y en el QR, el secreto nunca se muestra.
+         * Se crea una sola vez (como el ID) y no cambia.
+         * @returns {string}
+         */
+        function generateDeviceSecret() {
+          const bytes = new Uint8Array(32);
+          if (window.crypto && window.crypto.getRandomValues) {
+            window.crypto.getRandomValues(bytes);
+          } else {
+            for (let i = 0; i < bytes.length; i++) {
+              bytes[i] = Math.floor(Math.random() * 256);
+            }
+          }
+          let hex = "";
+          for (let i = 0; i < bytes.length; i++) {
+            hex += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+          }
+          return hex;
+        }
+
+        /**
          * Orientación GLOBAL por defecto (una sola para todas las pantallas).
          * Clave: "smartpizarra.orientation". Es el único default del proyecto:
          * config.html no tiene defaults.
@@ -438,11 +483,14 @@
         /**
          * Pantallas con escala PROPIA y su valor por defecto.
          * Claves: "smartpizarra.<pantalla>.scale".
-         * Para agregar una pantalla: añadirla aquí y en PAGES de config.html.
+         * Para agregar una pantalla: añadirla aquí (la pantalla lee su
+         * clave "smartpizarra.<pantalla>.scale"; config.html no las usa).
          */
         const PAGES = Object.freeze({
-          loading: { scale: 85 }, // esta página
-          config: { scale: 100 }, // config.html
+          loading: { scale: 80 }, // esta página
+          config: { scale: 80 }, // config.html
+          connection: { scale: 80 }, // connection.html (pantalla "sin conexión")
+          fingerprint: { scale: 80 }, // fingerprint.html (ID + código QR)
         });
 
         /**
@@ -543,7 +591,14 @@
         });
 
         /** Idioma GLOBAL por defecto (lo crea esta página si no existe). */
-        const DEFAULT_LANGUAGE = "es";
+        const DEFAULT_LANGUAGE = "en";
+
+        /**
+         * Clave donde se anotan los valores por defecto usados la última vez
+         * ({clave: default}). Sirve para detectar que se editó un default en
+         * este archivo y solo entonces aplicarlo (ver SettingsStore.init).
+         */
+        const DEFAULTS_KEY = "smartpizarra.defaults";
 
         /* ==================================================================
            CONFIG - valores ajustables de la animación
@@ -594,6 +649,46 @@
               defaultValue: generateDeviceId,
               parse: parseText,
             },
+            /** Secreto del dispositivo (no se muestra; no se cambia nunca). */
+            deviceSecret: {
+              key: "smartpizarra.deviceSecret",
+              defaultValue: generateDeviceSecret,
+              parse: function (raw) {
+                const v = raw === null ? "" : String(raw).trim().toLowerCase();
+                return /^[0-9a-f]{64}$/.test(v) ? v : null;
+              },
+            },
+            /** API de registro/autorización de equipos en el hosting. */
+            apiUrl: {
+              key: "smartpizarra.apiUrl",
+              defaultValue: "https://smartpizarra.org/api/device.php",
+              parse: function (raw) {
+                const v = raw === null ? "" : String(raw).trim();
+                return /^https?:\/\/\S+$/.test(v) ? v : null;
+              },
+            },
+            /**
+             * Bandera de autorización: "1" autorizado, "0" no. La escriben
+             * esta página (al arrancar) y fingerprint.html con lo que diga
+             * el servidor; sin respuesta del servidor se conserva.
+             */
+            authorized: {
+              key: "smartpizarra.authorized",
+              defaultValue: "0",
+              parse: function (raw) {
+                return raw === "1" || raw === "0" ? raw : null;
+              },
+            },
+            /**
+             * Escala para la app (%): SOLO un valor que usa un proceso de
+             * Kodular; se cambia en el panel "Escala" de config.html. NO es
+             * el tamaño de ninguna pantalla (eso es "<pantalla>.scale").
+             */
+            appScale: {
+              key: "smartpizarra.scale",
+              defaultValue: 60,
+              parse: parseScale,
+            },
             /** Idioma GLOBAL de todas las pantallas (clave de I18N). */
             language: {
               key: "smartpizarra.language",
@@ -624,7 +719,9 @@
           }),
 
           /**
-           * Settings que puede modificar updateSettings() (deviceId NO: es fijo).
+           * Settings que puede modificar updateSettings() (deviceId,
+           * deviceSecret, apiUrl y authorized NO: los fija esta página o el
+           * servidor).
            * Incluye la orientación global y "<pantalla>.scale" de cada PAGES.
            */
           editableSettings: [
@@ -708,6 +805,11 @@
             recheckAtPercent: 60, // % de la animación en que se repite la comprobación
           },
 
+          /** Consulta de autorización al servidor (ver AuthClient). */
+          auth: {
+            timeoutMs: 8000, // espera máxima de la respuesta
+          },
+
           /** Campos fijos de los mensajes enviados a la app. */
           message: {
             origin: "loadingPage", // de dónde proviene la información
@@ -718,7 +820,10 @@
         });
 
         /** Resultados posibles de la comprobación de internet. */
-        const INTERNET = Object.freeze({ ONLINE: "online", OFFLINE: "offline" });
+        const INTERNET = Object.freeze({
+          ONLINE: "online",
+          OFFLINE: "offline",
+        });
 
         /**
          * Envía un texto a la app probando 4 métodos, del más específico al
@@ -777,21 +882,65 @@
           /**
            * Verifica cada setting: si no existe o es inválido lo crea
            * con su valor por defecto. Llamar una vez al iniciar.
+           *
+           * Defaults cambiados en este archivo: en DEFAULTS_KEY se guarda el
+           * default con el que se trabajó la última vez. Si el default
+           * actual es DISTINTO (se editó loading.html), el nuevo default
+           * reemplaza el valor guardado, y todas las páginas lo leen de
+           * localStorage. Si es igual, el valor guardado se respeta (aunque
+           * se haya cambiado con config.html o updateSettings).
+           * Sin registro previo (primera vez) no se pisa nada: solo se anota.
+           * Los defaults que son función (deviceId) nunca se reemplazan.
            */
           init() {
+            const previous = this._readDefaults();
+            const current = {};
             Object.keys(this.schema).forEach((name) => {
               const def = this.schema[name];
               let value = def.parse(this._read(def.key));
+              // defaultValue puede ser una función (ej. id generado al azar)
+              const isFn = typeof def.defaultValue === "function";
+              if (!isFn) {
+                current[def.key] = String(def.defaultValue);
+                const changed =
+                  previous !== null &&
+                  Object.prototype.hasOwnProperty.call(previous, def.key) &&
+                  previous[def.key] !== current[def.key];
+                if (changed) {
+                  console.log(
+                    "Default cambiado:",
+                    def.key,
+                    previous[def.key],
+                    "=>",
+                    current[def.key],
+                  );
+                  value = null; // se aplica el nuevo default
+                }
+              }
               if (value === null) {
-                // defaultValue puede ser una función (ej. id generado al azar)
-                value =
-                  typeof def.defaultValue === "function"
-                    ? def.defaultValue()
-                    : def.defaultValue;
+                value = isFn ? def.defaultValue() : def.defaultValue;
                 this._write(def.key, value);
               }
               this.values[name] = value;
             });
+            // Anota los defaults actuales para detectar el próximo cambio
+            this._write(DEFAULTS_KEY, JSON.stringify(current));
+          }
+
+          /**
+           * Lee los defaults anotados en el arranque anterior.
+           * @returns {object|null} {clave: default en texto}, o null si no hay.
+           * @private
+           */
+          _readDefaults() {
+            try {
+              const data = JSON.parse(this._read(DEFAULTS_KEY));
+              return data && typeof data === "object" && !Array.isArray(data)
+                ? data
+                : null;
+            } catch (e) {
+              return null; // ausente o dañado: se trata como primera vez
+            }
           }
 
           /**
@@ -818,7 +967,7 @@
            * nombres de `editable`; cada valor se valida con su parse() y se
            * guarda ya normalizado (ej. "NBA" => "nba", 360 => 0).
            * Un campo inválido se rechaza sin afectar a los demás.
-           * @param {object} data      Campos a cambiar ({version:"3.0.15", ...}).
+           * @param {object} data      Campos a cambiar ({version:"3.0.14", ...}).
            * @param {string[]} editable Nombres de settings modificables.
            * @returns {{applied:string[], rejected:string[]}}
            */
@@ -843,6 +992,24 @@
               result.applied.push(name);
             });
             return result;
+          }
+
+          /**
+           * Guarda un setting SIN pasar por editableSettings (uso interno de
+           * esta página, p. ej. la bandera de autorización).
+           * @param {string} name Nombre en CONFIG.settings.
+           * @param {*} value     Se valida con su parse().
+           * @returns {boolean} true si el valor era válido y se guardó.
+           */
+          set(name, value) {
+            const def = this.schema[name];
+            const parsed = def ? def.parse(String(value)) : null;
+            if (parsed === null) {
+              return false;
+            }
+            this._write(def.key, parsed);
+            this.values[name] = parsed;
+            return true;
           }
 
           /** @returns {boolean} true si la clave pertenece a algún setting. */
@@ -1051,7 +1218,10 @@
           /** @param {{version:string, url:string, email:string}} values SettingsStore.values */
           show(values) {
             const t = this.translator;
-            this._setText(this.elements.version, t.t("version") + values.version);
+            this._setText(
+              this.elements.version,
+              t.t("version") + values.version,
+            );
             this._setText(this.elements.url, values.url);
             this._setText(this.elements.email, values.email);
             this._setText(this.elements.deviceId, t.t("id") + values.deviceId);
@@ -1252,7 +1422,10 @@
               }
             };
             this._waiting.push(once);
-            setTimeout(() => once(this.lastStatus()), this.settings.readyTimeoutMs);
+            setTimeout(
+              () => once(this.lastStatus()),
+              this.settings.readyTimeoutMs,
+            );
           }
 
           /**
@@ -1290,20 +1463,30 @@
               }
               done(ok);
             };
-            const timer = setTimeout(() => end(false), this.settings.requestTimeoutMs);
+            const timer = setTimeout(
+              () => end(false),
+              this.settings.requestTimeoutMs,
+            );
 
             try {
               // Parámetro aleatorio para evitar respuestas en caché (falso "online")
               const separator = endpoint.url.indexOf("?") === -1 ? "?" : "&";
               const pad = Math.random().toString(36).slice(2, 12);
               xhr = new XMLHttpRequest();
-              xhr.open("GET", endpoint.url + separator + "random_padding=" + pad, true);
+              xhr.open(
+                "GET",
+                endpoint.url + separator + "random_padding=" + pad,
+                true,
+              );
               xhr.timeout = this.settings.requestTimeoutMs;
               if (endpoint.type === "dns") {
                 xhr.setRequestHeader("Accept", "application/dns-json");
               }
               xhr.onload = () =>
-                end(xhr.status === 200 && this._isValid(endpoint.type, xhr.responseText));
+                end(
+                  xhr.status === 200 &&
+                    this._isValid(endpoint.type, xhr.responseText),
+                );
               xhr.onerror = () => end(false);
               xhr.ontimeout = () => end(false);
               xhr.onabort = () => end(false);
@@ -1324,10 +1507,19 @@
             try {
               const data = JSON.parse(text);
               if (type === "dns") {
-                return !!data && data.Status === 0 && Array.isArray(data.Answer) && data.Answer.length > 0;
+                return (
+                  !!data &&
+                  data.Status === 0 &&
+                  Array.isArray(data.Answer) &&
+                  data.Answer.length > 0
+                );
               }
               if (type === "ip") {
-                return !!data && typeof data.ip === "string" && /^[0-9a-fA-F:.]{7,45}$/.test(data.ip);
+                return (
+                  !!data &&
+                  typeof data.ip === "string" &&
+                  /^[0-9a-fA-F:.]{7,45}$/.test(data.ip)
+                );
               }
             } catch (e) {
               /* respuesta no JSON = no es internet real */
@@ -1346,6 +1538,65 @@
         }
 
         /* ==================================================================
+           CLASE AuthClient
+           Responsabilidad: preguntar a smartpizarra.org si este equipo está
+           autorizado (y registrarlo como pendiente si es nuevo). Mismo
+           protocolo que fingerprint.html: POST form-urlencoded (sin
+           verificación previa CORS) con deviceId + secret + version.
+           ================================================================== */
+        class AuthClient {
+          /** @param {object} settings CONFIG.auth */
+          constructor(settings) {
+            this.settings = settings;
+          }
+
+          /**
+           * @param {string} apiUrl
+           * @param {{deviceId:string, secret:string, version:string}} data
+           * @returns {Promise<boolean|null>} true/false = autorizado o no según
+           *          el servidor; null = sin respuesta válida (no cambiar nada).
+           */
+          check(apiUrl, data) {
+            return new Promise((resolve) => {
+              let xhr;
+              try {
+                xhr = new XMLHttpRequest();
+                xhr.open("POST", apiUrl, true);
+                xhr.timeout = this.settings.timeoutMs;
+                xhr.setRequestHeader(
+                  "Content-Type",
+                  "application/x-www-form-urlencoded",
+                );
+                xhr.onload = () => {
+                  try {
+                    const res = JSON.parse(xhr.responseText);
+                    resolve(
+                      xhr.status === 200 && res && res.ok === true
+                        ? res.authorized === true
+                        : null,
+                    );
+                  } catch (e) {
+                    resolve(null); // respuesta no JSON (portal cautivo, error)
+                  }
+                };
+                xhr.onerror = () => resolve(null);
+                xhr.ontimeout = () => resolve(null);
+                xhr.send(
+                  "deviceId=" +
+                    encodeURIComponent(data.deviceId) +
+                    "&secret=" +
+                    encodeURIComponent(data.secret) +
+                    "&version=" +
+                    encodeURIComponent(data.version),
+                );
+              } catch (e) {
+                resolve(null);
+              }
+            });
+          }
+        }
+
+        /* ==================================================================
            CLASE LoadingScreen
            Responsabilidad: preparar los settings, aplicar el layout,
            arrancar la animación y, al terminar, hacer el fundido de salida
@@ -1359,6 +1610,7 @@
 
             this.settings = new SettingsStore(config.settings);
             this.internet = new InternetChecker(config.internet);
+            this.auth = new AuthClient(config.auth);
             this.layout = new LayoutManager(
               requireElement(ids.stage),
               requireElement(ids.scaler),
@@ -1402,6 +1654,7 @@
             this.settings.init();
             this._applyLayout();
             this._listenForChanges();
+            this._checkAuthorization();
 
             this.internet.check();
             setTimeout(
@@ -1418,6 +1671,30 @@
                 this._fadeOutAndShowWelcome();
               });
             });
+          }
+
+          /**
+           * Consulta la autorización del equipo al arrancar (así se detecta
+           * si se revocó) y guarda la bandera "smartpizarra.authorized" con
+           * lo que diga el servidor. Sin respuesta se conserva la anterior.
+           * @private
+           */
+          _checkAuthorization() {
+            const v = this.settings.values;
+            this.auth
+              .check(v.apiUrl, {
+                deviceId: v.deviceId,
+                secret: v.deviceSecret,
+                version: v.version,
+              })
+              .then((authorized) => {
+                if (authorized === null) {
+                  console.log("Autorización: sin respuesta del servidor");
+                  return;
+                }
+                this.settings.set("authorized", authorized ? "1" : "0");
+                console.log("Autorización:", authorized);
+              });
           }
 
           /**
@@ -1444,7 +1721,9 @@
               leagues: LEAGUE_OPTIONS[v.league], // ligas de esa opción ("" = todas)
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas
-              // Escala de CADA pantalla, como factor (80 % => 0.8)
+              scale: v.appScale / 100, // escala para la app (factor), la edita config.html
+              authorized: v.authorized === "1", // autorizado en smartpizarra.org
+              // Tamaño de CADA pantalla, como factor (80 % => 0.8)
               pages: {},
             };
             Object.keys(PAGES).forEach((page) => {
@@ -1461,7 +1740,7 @@
           /**
            * Modifica settings desde un JSON (texto u objeto), los guarda en
            * localStorage y actualiza la pantalla al momento.
-           * @param {string|object} jsonData Ej. '{"version":"3.0.15","league":"nba"}'
+           * @param {string|object} jsonData Ej. '{"version":"3.0.14","league":"nba"}'
            * @returns {{ok:boolean, applied:string[], rejected:string[], error?:string}}
            */
           updateSettings(jsonData) {
@@ -1505,7 +1784,9 @@
             // "orientation" es global. "page" indica de qué pantalla es "scale"
             // (sin "page" => esta pantalla); se traduce a "<page>.scale".
             const page =
-              data.page === undefined ? this.config.thisPage : String(data.page);
+              data.page === undefined
+                ? this.config.thisPage
+                : String(data.page);
             if (!Object.prototype.hasOwnProperty.call(PAGES, page)) {
               return {
                 ok: false,
@@ -1601,7 +1882,7 @@
 
           /**
            * Función GLOBAL (la app la llama con RunJavaScript / EvaluateJavaScript):
-           *   updateSettings('{"version":"3.0.15","url":"smartpizarra.com",
+           *   updateSettings('{"version":"3.0.14","url":"smartpizarra.com",
            *     "email":"a@b.com","league":"nba",
            *     "page":"config","orientation":90,"scale":100}')
            * "orientation" y "language" (es, en) son GLOBALES (valen para
