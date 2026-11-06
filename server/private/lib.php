@@ -24,18 +24,75 @@ final class AppConfig
     /** @var array<string,mixed>|null */
     private static ?array $data = null;
 
-    /** @return array<string,mixed> */
+    /**
+     * Lee y valida config.php una sola vez.
+     * Los mensajes de error son de diagnóstico: dicen QUÉ falla (archivo
+     * ausente, error de sintaxis, clave que falta) pero nunca muestran
+     * valores ni contraseñas. El panel los enseña para poder arreglarlo
+     * sin acceso a los registros del servidor.
+     * @return array<string,mixed>
+     * @throws RuntimeException si falta el archivo o está mal escrito.
+     */
     public static function get(): array
     {
         if (self::$data === null) {
             // SP_CONFIG permite usar otro archivo en pruebas locales
             $file = getenv('SP_CONFIG') ?: __DIR__ . '/config.php';
             if (!is_file($file)) {
-                throw new RuntimeException('Falta private/config.php (copiar de config.sample.php)');
+                throw new RuntimeException(
+                    'No existe private/config.php. Copia private/config.sample.php como config.php '
+                    . '(en la MISMA carpeta private/, al lado de lib.php) y rellénalo.'
+                );
             }
-            self::$data = require $file;
+            try {
+                $data = require $file;
+            } catch (ParseError $e) {
+                throw new RuntimeException(
+                    'private/config.php tiene un error de escritura cerca de la línea ' . $e->getLine()
+                    . ' (suele ser una comilla, una coma o un corchete que falta). '
+                    . 'Pon los textos entre comillas simples \'...\'.'
+                );
+            }
+            if (!is_array($data)) {
+                throw new RuntimeException(
+                    'private/config.php no devuelve la configuración: debe empezar por <?php y contener '
+                    . '"return [ ... ];" como config.sample.php.'
+                );
+            }
+            self::validate($data);
+            self::$data = $data;
         }
         return self::$data;
+    }
+
+    /**
+     * Comprueba que estén las claves obligatorias (sin mirar sus valores).
+     * @param array<string,mixed> $data
+     * @throws RuntimeException con la lista de claves que faltan.
+     */
+    private static function validate(array $data): void
+    {
+        $missing = [];
+        foreach (['admin_user', 'admin_password_hash', 'allowed_origins', 'register_per_ip_per_hour',
+                  'login_fails_per_ip', 'login_window_seconds'] as $key) {
+            if (!array_key_exists($key, $data)) {
+                $missing[] = $key;
+            }
+        }
+        foreach (['host', 'name', 'user', 'password'] as $key) {
+            if (!isset($data['db']) || !is_array($data['db']) || !array_key_exists($key, $data['db'])) {
+                $missing[] = "db['$key']";
+            }
+        }
+        if (isset($data['allowed_origins']) && !is_array($data['allowed_origins'])) {
+            $missing[] = 'allowed_origins (debe ser una lista: [\'http://localhost\'])';
+        }
+        if ($missing) {
+            throw new RuntimeException(
+                'A private/config.php le faltan estas claves: ' . implode(', ', $missing)
+                . '. Cópialas de config.sample.php.'
+            );
+        }
     }
 }
 
@@ -62,6 +119,63 @@ final class Database
             self::$pdo->exec("SET time_zone = '+00:00'");
         }
         return self::$pdo;
+    }
+
+    /**
+     * Diagnóstico para el panel: conecta y comprueba que existan las tablas
+     * y columnas que usa este código. No muestra datos ni contraseñas.
+     * @return string|null null si todo está bien; si no, qué falla y cómo arreglarlo.
+     */
+    public static function diagnose(): ?string
+    {
+        try {
+            $pdo = self::pdo();
+        } catch (PDOException $e) {
+            // Códigos de MySQL/MariaDB más habituales al configurar Hostinger
+            $code = (int) ($e->errorInfo[1] ?? 0);
+            $msg = (string) $e->getMessage();
+            if ($code === 1045 || str_contains($msg, '1045')) {
+                return 'La base de datos rechaza el usuario o la contraseña de config.php (db[\'user\'] / db[\'password\']). '
+                    . 'Compruébalos en hPanel > Bases de datos > Administración de MySQL.';
+            }
+            if ($code === 1049 || str_contains($msg, '1049')) {
+                return 'No existe la base de datos indicada en config.php (db[\'name\']). '
+                    . 'En Hostinger el nombre lleva el prefijo de la cuenta (u123456789_...).';
+            }
+            if ($code === 1044 || str_contains($msg, '1044')) {
+                return 'El usuario de config.php no tiene permiso sobre esa base de datos. '
+                    . 'En hPanel, asígnale la base al usuario.';
+            }
+            if (str_contains($msg, '2002') || str_contains($msg, '2005')) {
+                return 'No se puede conectar con el servidor MySQL de config.php (db[\'host\']). En Hostinger suele ser \'localhost\'.';
+            }
+            if (str_contains($msg, 'could not find driver')) {
+                return 'PHP no tiene activada la extensión pdo_mysql. Actívala en hPanel > Avanzado > Configuración de PHP > Extensiones.';
+            }
+            return 'No se pudo conectar con la base de datos (código ' . $code . '). Revisa db en config.php.';
+        }
+
+        // Tablas y columnas que necesita el código (schema.sql + migrations/)
+        $tables = [];
+        foreach ($pdo->query('SHOW TABLES') as $row) {
+            $tables[] = (string) array_values($row)[0];
+        }
+        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots'], $tables);
+        if (in_array('sp_devices', $missing, true)) {
+            return 'Faltan las tablas: importa server/schema.sql en phpMyAdmin (pestaña Importar) sobre esta base.';
+        }
+        if ($missing) {
+            return 'Faltan tablas (' . implode(', ', $missing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-06-boots.sql, o vuelve a importar schema.sql (solo crea lo que falta).';
+        }
+        $cols = [];
+        foreach ($pdo->query('SHOW COLUMNS FROM sp_devices') as $row) {
+            $cols[] = (string) $row['Field'];
+        }
+        if (!in_array('online_at', $cols, true)) {
+            return 'Falta la columna online_at: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-online.sql.';
+        }
+        return null;
     }
 
     /** @return string Fecha y hora actual UTC para columnas DATETIME. */

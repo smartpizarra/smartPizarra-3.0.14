@@ -151,13 +151,33 @@ function onlineTag(?string $utc, int $timeout): string
         . '<span data-ago="' . $t . '">' . h(ago($utc)) . '</span></span>';
 }
 
-$config = AppConfig::get();
+/*
+ * Diagnóstico de instalación: si config.php falta o está mal escrito, o la
+ * base no responde o le faltan tablas, el panel lo explica en pantalla
+ * (sin mostrar valores ni contraseñas) en lugar de dar un error 500 vacío.
+ */
+$setupError = '';
+try {
+    $config = AppConfig::get();
+    $setupError = Database::diagnose() ?? '';
+    if ($setupError === '' && (string) $config['admin_password_hash'] === 'CAMBIAR') {
+        $setupError = 'Falta la contraseña del panel: en private/config.php, admin_password_hash sigue diciendo CAMBIAR. '
+            . 'Genera el hash como explica config.sample.php y pégalo entre comillas simples.';
+    }
+} catch (Throwable $e) {
+    $config = [];
+    $setupError = $e->getMessage();
+}
 // Segundos sin señal de la app para considerarla desconectada (mín. 30)
 $onlineTimeout = max(30, (int) ($config['online_timeout_seconds'] ?? 180));
 $loggedIn = !empty($_SESSION['admin']);
 $error = '';
 
 try {
+    if ($setupError !== '') {
+        // Sin configuración válida no se puede hacer nada más
+        throw new RuntimeException($setupError);
+    }
     /* -----------------------------------------------------------------
        Acciones (POST)
        ----------------------------------------------------------------- */
@@ -256,7 +276,10 @@ try {
 } catch (Throwable $e) {
     error_log('smartpizarra admin: ' . $e->getMessage());
     http_response_code(500);
-    $error = 'Error del servidor. Revisa la configuración de la base de datos.';
+    // Error de instalación: se explica; cualquier otro: mensaje genérico
+    $error = $setupError !== ''
+        ? 'Problema de instalación: ' . $setupError
+        : 'Error del servidor. Revisa el registro de errores de PHP en hPanel.';
     $devices = [];
     $counts = [];
     $flash = '';

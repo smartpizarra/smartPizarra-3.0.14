@@ -52,4 +52,7 @@ return [
     // Si el sitio va detrás de un proxy/CDN que pone la IP real en una
     // cabecera, indícala aquí (p. ej. 'HTTP_CF_CONNECTING_IP'). Si no, null.
     'client_ip_header' => null,
+    'online_timeout_seconds' => 180,
+    'boot_history_days' => 365,
+     'boots_per_device_per_hour' => 30,
 ];
