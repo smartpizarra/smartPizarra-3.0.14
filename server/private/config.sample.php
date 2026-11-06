@@ -41,6 +41,14 @@ return [
     // veces el intervalo del Clock de la app (p. ej. Clock 60 s => 180).
     'online_timeout_seconds' => 180,
 
+    // Historial de arranques (cada vez que se ejecuta loading.html).
+    // boot_history_days: días que se guardan por equipo (0 = para siempre).
+    // boots_per_device_per_hour: máximo de arranques anotados por equipo y
+    // hora (si la app se reinicia en bucle no llena la tabla; la "última
+    // conexión" se sigue actualizando igual).
+    'boot_history_days'         => 365,
+    'boots_per_device_per_hour' => 30,
+
     // Si el sitio va detrás de un proxy/CDN que pone la IP real en una
     // cabecera, indícala aquí (p. ej. 'HTTP_CF_CONNECTING_IP'). Si no, null.
     'client_ip_header' => null,

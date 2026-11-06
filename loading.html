@@ -39,9 +39,10 @@
   "smartpizarra.authorized". Así una revocación se detecta en el siguiente
   arranque. Sin respuesta del servidor la bandera no cambia. El JSON a la
   app lleva "authorized": true | false.
-  También lleva "deviceId" y "deviceSecret": la app NATIVA los usa para
-  enviar cada cierto tiempo su señal "online" a api/ping.php (las páginas
-  .html no envían esa señal).
+  La consulta va con event=boot: el servidor anota el arranque en el
+  historial del equipo (panel > Historial) y refresca su "última conexión".
+  El JSON también lleva "deviceId" y "deviceSecret": la app NATIVA los usa
+  para enviar cada cierto tiempo su señal "online" a api/ping.php.
 
   CAMBIAR UN VALOR POR DEFECTO EN ESTE ARCHIVO
   Si se edita un default (ej. version "3.0.14" => "3.0.16"), al abrir esta
@@ -1548,7 +1549,8 @@
            Responsabilidad: preguntar a smartpizarra.cloud si este equipo está
            autorizado (y registrarlo como pendiente si es nuevo). Mismo
            protocolo que fingerprint.html: POST form-urlencoded (sin
-           verificación previa CORS) con deviceId + secret + version.
+           verificación previa CORS) con deviceId + secret + version, más
+           event=boot (historial de arranques + última conexión).
            ================================================================== */
         class AuthClient {
           /** @param {object} settings CONFIG.auth */
@@ -1593,7 +1595,10 @@
                     "&secret=" +
                     encodeURIComponent(data.secret) +
                     "&version=" +
-                    encodeURIComponent(data.version),
+                    encodeURIComponent(data.version) +
+                    // Arranque: el servidor lo anota en el historial del
+                    // equipo y refresca su "última conexión" en el panel.
+                    "&event=boot",
                 );
               } catch (e) {
                 resolve(null);

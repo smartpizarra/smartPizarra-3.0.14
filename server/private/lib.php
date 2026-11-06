@@ -12,6 +12,7 @@
  *    Database          Conexión PDO a MySQL (consultas preparadas siempre).
  *    RateLimiter       Límite de peticiones por "cubeta" (IP + motivo) y ventana.
  *    DeviceRepository  Alta, consulta y cambio de estado de los equipos.
+ *    BootLog           Historial de arranques (cada ejecución de loading.html).
  *    Http              IP del cliente, respuestas JSON y CORS.
  */
 
@@ -177,6 +178,21 @@ final class DeviceRepository
         )->execute([Database::now(), $version, $ip, $id]);
     }
 
+    /**
+     * Arranque de loading.html (api/device.php con event=boot): además de la
+     * consulta (last_seen_at) refresca online_at, que es la "última
+     * conexión" que muestra el panel. Así el panel queda al día aunque la
+     * app nativa todavía no haya enviado su señal a api/ping.php.
+     */
+    public static function markBoot(string $id, ?string $version, string $ip): void
+    {
+        $now = Database::now();
+        Database::pdo()->prepare(
+            'UPDATE sp_devices SET last_seen_at = ?, online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
+             WHERE device_id = ?'
+        )->execute([$now, $now, $version, $ip, $id]);
+    }
+
     /** Cambia el estado desde el panel. */
     public static function setStatus(string $id, string $status): bool
     {
@@ -222,9 +238,13 @@ final class DeviceRepository
             $args[] = $like;
             $args[] = $like;
         }
-        $sql = 'SELECT * FROM sp_devices'
+        // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
+        $sql = 'SELECT d.*,
+                  (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
+                  (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
+                FROM sp_devices d'
             . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
-            . ' ORDER BY (status = \'pending\') DESC, last_seen_at DESC LIMIT 500';
+            . ' ORDER BY (d.status = \'pending\') DESC, d.last_seen_at DESC LIMIT 500';
         $stmt = Database::pdo()->prepare($sql);
         $stmt->execute($args);
         return $stmt->fetchAll();
@@ -238,6 +258,49 @@ final class DeviceRepository
             $out[$r['status']] = (int) $r['n'];
         }
         return $out;
+    }
+}
+
+/** Historial de arranques (tabla sp_boots). */
+final class BootLog
+{
+    /**
+     * Anota un arranque y purga los de ese equipo más viejos que $keepDays.
+     * @param int $keepDays Días que se conservan (0 = para siempre).
+     */
+    public static function record(string $id, ?string $version, string $ip, int $keepDays): void
+    {
+        $pdo = Database::pdo();
+        $pdo->prepare(
+            'INSERT INTO sp_boots (device_id, booted_at, ip, app_version) VALUES (?, ?, ?, ?)'
+        )->execute([$id, Database::now(), $ip, $version]);
+        if ($keepDays > 0) {
+            $pdo->prepare('DELETE FROM sp_boots WHERE device_id = ? AND booted_at < ?')
+                ->execute([$id, gmdate('Y-m-d H:i:s', time() - $keepDays * 86400)]);
+        }
+    }
+
+    /**
+     * Últimos arranques de un equipo, del más reciente al más antiguo.
+     * @param int $limit Máximo de filas (1-1000).
+     * @return array<int,array<string,mixed>>
+     */
+    public static function forDevice(string $id, int $limit = 300): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT booted_at, ip, app_version FROM sp_boots WHERE device_id = ?
+             ORDER BY booted_at DESC, id DESC LIMIT ' . max(1, min(1000, $limit))
+        );
+        $stmt->execute([$id]);
+        return $stmt->fetchAll();
+    }
+
+    /** @return int Total de arranques guardados del equipo. */
+    public static function count(string $id): int
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_boots WHERE device_id = ?');
+        $stmt->execute([$id]);
+        return (int) $stmt->fetchColumn();
     }
 }
 

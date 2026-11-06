@@ -11,10 +11,15 @@
  *  - Autorizar, revocar, poner un ALIAS o eliminar un equipo. El equipo se
  *    entera en su próxima consulta (fingerprint.html la hace cada pocos
  *    segundos mientras espera; loading.html al arrancar la app).
- *  - Cada equipo muestra su fecha de registro en la base y si la app
- *    nativa está "En línea" (señal de api/ping.php en los últimos
- *    online_timeout_seconds) o hace cuánto envió la última señal. Los
- *    tiempos se recalculan solos cada 30 s sin recargar la página.
+ *  - Cada equipo muestra su fecha de registro en la base y su "Última
+ *    conexión": "En línea" si hubo señal en los últimos
+ *    online_timeout_seconds o hace cuánto llegó la última. La refrescan el
+ *    arranque de loading.html (api/device.php con event=boot) y la señal
+ *    de la app nativa (api/ping.php). Los tiempos se recalculan solos cada
+ *    30 s sin recargar la página.
+ *  - Historial de arranques: cuántas veces se ejecutó loading.html, el
+ *    último arranque y, con el botón "Historial" (?history=SP-...), la
+ *    lista con fecha/hora, IP y versión de cada arranque.
  *
  *  Seguridad: sesión con cookie segura, token CSRF en cada formulario,
  *  límite de intentos de login por IP, consultas preparadas, salida
@@ -137,7 +142,7 @@ function dateTag(?string $utc): string
 function onlineTag(?string $utc, int $timeout): string
 {
     if (!$utc) {
-        return '<span class="online never">Sin señal de la app</span>';
+        return '<span class="online never">Sin conexión registrada</span>';
     }
     $t = utcTs($utc);
     $on = time() - $t < $timeout;
@@ -235,6 +240,19 @@ try {
     $counts = $loggedIn ? DeviceRepository::counts() : [];
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
+
+    // Vista de historial de arranques de un equipo (?history=SP-...)
+    $historyDevice = null;
+    $boots = [];
+    $bootTotal = 0;
+    $historyId = strtoupper(trim((string) ($_GET['history'] ?? '')));
+    if ($loggedIn && DeviceRepository::isValidId($historyId)) {
+        $historyDevice = DeviceRepository::find($historyId);
+        if ($historyDevice !== null) {
+            $boots = BootLog::forDevice($historyId, 300);
+            $bootTotal = BootLog::count($historyId);
+        }
+    }
 } catch (Throwable $e) {
     error_log('smartpizarra admin: ' . $e->getMessage());
     http_response_code(500);
@@ -246,6 +264,9 @@ try {
     $filter = 'pending';
     $q = '';
     $back = '';
+    $historyDevice = null;
+    $boots = [];
+    $bootTotal = 0;
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -309,6 +330,13 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
       margin-right: 6px; background: currentColor; vertical-align: middle; }
     .online.on { color: var(--ok); } .online.off { color: var(--bad); } .online.never { color: var(--muted); }
     .empty { color: var(--muted); text-align: center; padding: 24px; }
+    /* Historial de arranques */
+    .history-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+    .boots { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    .boots th, .boots td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+    .boots th { color: var(--muted); font-weight: 500; }
+    .boots td.n { color: var(--muted); width: 1%; white-space: nowrap; }
+    .table-wrap { overflow-x: auto; }
     /* Escáner de QR (pantalla completa) */
     #scanner { position: fixed; inset: 0; background: #000; display: none; flex-direction: column;
       align-items: center; justify-content: center; z-index: 10; padding: 16px; }
@@ -347,6 +375,44 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
     <button type="button" id="scanBtn" class="primary">Escanear QR</button>
   </form>
 
+  <?php if ($historyDevice): $hid = $historyDevice['device_id']; ?>
+    <!-- Historial de arranques de un equipo (cada ejecución de loading.html) -->
+    <section class="card">
+      <div class="history-head">
+        <span>
+          <?= $historyDevice['label'] ? '<span class="alias">' . h($historyDevice['label']) . '</span>' : '' ?>
+          <span class="device-id"><?= h($hid) ?></span>
+        </span>
+        <a class="btn" href="./?<?= h(http_build_query(['q' => $hid])) ?>">Volver</a>
+      </div>
+      <div class="meta">
+        Historial de arranques: <?= (int) $bootTotal ?> en total
+        <?= $bootTotal > count($boots) ? '(se muestran los ' . count($boots) . ' más recientes)' : '' ?>
+        · Registrado el <?= dateTag($historyDevice['created_at']) ?>
+      </div>
+      <?php if (!$boots): ?>
+        <p class="empty">Todavía no hay arranques registrados. Se anotan cada vez que el equipo abre la pantalla de carga.</p>
+      <?php else: ?>
+        <div class="table-wrap">
+          <table class="boots">
+            <thead><tr><th>#</th><th>Fecha y hora</th><th>Hace</th><th>IP</th><th>Versión</th></tr></thead>
+            <tbody>
+            <?php foreach ($boots as $i => $b): ?>
+              <tr>
+                <td class="n"><?= (int) ($bootTotal - $i) ?></td>
+                <td><?= dateTag($b['booted_at']) ?></td>
+                <td><?= agoTag($b['booted_at']) ?></td>
+                <td><?= h($b['ip'] ?? '—') ?></td>
+                <td><?= $b['app_version'] ? 'v' . h($b['app_version']) : '—' ?></td>
+              </tr>
+            <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </section>
+  <?php else: ?>
+
   <nav class="tabs">
     <?php foreach ($filters as $key => $text): ?>
       <a class="<?= $filter === $key ? 'on' : '' ?>" href="?<?= h(http_build_query(array_filter(['filter' => $key, 'q' => $q]))) ?>">
@@ -371,10 +437,12 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
         <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
       </div>
       <div class="meta">
-        <!-- Señal de la app nativa (api/ping.php) -->
-        <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
+        <!-- Última conexión: arranque de loading.html o señal de la app nativa -->
+        Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>
-        · Última consulta de las páginas <?= agoTag($d['last_seen_at']) ?>
+        · Arranques: <?= (int) ($d['boots'] ?? 0) ?>
+        <?= !empty($d['last_boot_at']) ? '(último ' . dateTag($d['last_boot_at']) . ')' : '' ?>
+        · Última consulta <?= agoTag($d['last_seen_at']) ?>
         <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
         <?= $d['last_ip'] ? ' · IP ' . h($d['last_ip']) : '' ?>
       </div>
@@ -396,9 +464,11 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
         <form method="post" data-confirm="¿Eliminar <?= h($id) ?>? Si vuelve a conectarse quedará pendiente."><?= csrfField() ?><input type="hidden" name="action" value="delete">
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
           <button type="submit">Eliminar</button></form>
+        <a class="btn" href="./?<?= h(http_build_query(['history' => $id])) ?>">Historial</a>
       </div>
     </section>
   <?php endforeach; ?>
+  <?php endif; /* fin vista lista / historial */ ?>
 
   <!-- Escáner: cámara trasera + lector de QR -->
   <div id="scanner" role="dialog" aria-label="Escanear código QR">

@@ -11,10 +11,15 @@
  *    deviceId  "SP-XXXX-XXXX-XXXX"   (localStorage smartpizarra.deviceId)
  *    secret    64 caracteres hex      (localStorage smartpizarra.deviceSecret)
  *    version   texto opcional         (versión de la app)
+ *    event     opcional: "boot" (solo lo envía loading.html al arrancar)
  *
  *  QUÉ HACE
  *    - Equipo nuevo: lo registra como "pending" (límite por IP y hora).
  *    - Equipo conocido: comprueba el secreto y anota la consulta.
+ *    - event=boot: anota el arranque en el historial (sp_boots, máx.
+ *      boots_per_device_per_hour por equipo) y refresca la "última
+ *      conexión" del panel (online_at). Las consultas de fingerprint.html
+ *      (cada pocos segundos) no cuentan como arranques.
  *    - Devuelve su estado. Solo quien tiene el secreto puede consultarlo:
  *      conocer el ID (que se ve en pantalla y en el QR) no basta.
  *
@@ -42,6 +47,8 @@ try {
     $secret = strtolower(trim((string) ($_POST['secret'] ?? '')));
     $version = trim((string) ($_POST['version'] ?? ''));
     $version = $version === '' ? null : mb_substr($version, 0, 20);
+    // "boot" = arranque de loading.html (fingerprint.html no lo envía)
+    $isBoot = ($_POST['event'] ?? '') === 'boot';
 
     if (!DeviceRepository::isValidId($id) || !DeviceRepository::isValidSecret($secret)) {
         Http::json(['ok' => false, 'error' => 'bad_request'], 400);
@@ -64,8 +71,18 @@ try {
         // Otro equipo (o alguien) usa este ID: no se revela su estado.
         // Se resuelve borrando el registro desde el panel.
         Http::json(['ok' => false, 'error' => 'secret_mismatch'], 403);
-    } else {
+    } elseif (!$isBoot) {
         DeviceRepository::touch($id, $version, $ip);
+    }
+
+    if ($isBoot) {
+        // Arranque de loading.html: refresca la última conexión del panel y
+        // lo anota en el historial (con límite por equipo y hora).
+        DeviceRepository::markBoot($id, $version, $ip);
+        $perHour = (int) ($config['boots_per_device_per_hour'] ?? 30);
+        if (RateLimiter::hit('boot:' . $id, $perHour, 3600)) {
+            BootLog::record($id, $version, $ip, (int) ($config['boot_history_days'] ?? 365));
+        }
     }
 
     Http::json([

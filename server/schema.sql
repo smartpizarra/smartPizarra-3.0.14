@@ -32,3 +32,19 @@ CREATE TABLE IF NOT EXISTS sp_rate_limits (
   hits          INT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (bucket)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Historial de arranques: una fila cada vez que loading.html se ejecuta en
+-- un equipo (api/device.php con event=boot). Se borra junto con el equipo
+-- (ON DELETE CASCADE) y las filas más antiguas que boot_history_days
+-- (config.php) se purgan solas al registrar un arranque nuevo.
+CREATE TABLE IF NOT EXISTS sp_boots (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  device_id     VARCHAR(32)  NOT NULL,          -- equipo (sp_devices.device_id)
+  booted_at     DATETIME     NOT NULL,          -- momento del arranque (UTC, hora del servidor)
+  ip            VARCHAR(45)  NULL,              -- IP pública desde la que arrancó
+  app_version   VARCHAR(20)  NULL,              -- versión que informó en ese arranque
+  PRIMARY KEY (id),
+  KEY idx_device_time (device_id, booted_at),
+  CONSTRAINT fk_boots_device FOREIGN KEY (device_id)
+    REFERENCES sp_devices (device_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
