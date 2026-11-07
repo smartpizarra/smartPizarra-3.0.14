@@ -79,7 +79,13 @@
     Autorización (solo cuando la bandera CAMBIA):
       {"origin":"fingerPrint","action":"authorized","status":"success","token":"", ...}
       {"origin":"fingerPrint","action":"unauthorized","status":"revoked|pending|conflict","token":"", ...}
-    TODOS los mensajes llevan además "authorized": true | false.
+    TODOS los mensajes llevan además "authorized": true | false y
+    "authStatus": authorized | pending | revoked | conflict | unknown |
+    offline | no_device (ver authStatusForApp, sección 8b).
+    Antes de enviar cada JSON se consulta la autorización en
+    smartpizarra.cloud (api/device.php, máx. 5 s; sin internet se usa la
+    última bandera). Los avisos authorized/unauthorized no repiten la
+    consulta: salen justo de una.
   Ya no se envían "info" ni "id_empty": el ID no se pide a la app.
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
@@ -820,6 +826,7 @@
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
           msg.authorized = readStorage(KEYS.authorized) === "1"; // autorizado en smartpizarra.cloud
+          msg.authStatus = authStatusForApp(); // detalle de la última consulta (sección 8b)
           return msg;
         }
 
@@ -877,6 +884,19 @@
          * @param {string} token   Token del QR ("" si falló).
          */
         function send(action, status, token) {
+          // Antes de enviar, consulta la autorización en el servidor
+          // (checkAuthorization, sección 8b; sin internet usa la bandera).
+          checkAuthorization().then(function () {
+            sendNow(action, status, token);
+          });
+        }
+
+        /**
+         * Igual que send() pero SIN consultar antes al servidor. Solo para
+         * los avisos "authorized"/"unauthorized", que salen justo de una
+         * consulta (setAuthorizedFlag).
+         */
+        function sendNow(action, status, token) {
           sendToAppInventor(
             JSON.stringify(
               withSettings({
@@ -893,19 +913,19 @@
 
         /** Envía el estado de la conexión (origin "loading", igual que example4.html). */
         function sendConnectionStatus() {
-          sendToAppInventor(
-            JSON.stringify(
-              withSettings({
-                origin: "loading",
-                action: "connection",
-                status: internetStatus, // igual que internetStatus (compatibilidad)
-                internetStatus: internetStatus, // estado REAL de internet
-                latency: lastLatency,
-                localNetwork: navigator.onLine, // hay red local aunque no haya internet
-                checkedAt: new Date().toISOString(),
-              }),
-            ),
-          );
+          // Los datos de conexión se toman AHORA; la autorización, tras la consulta
+          var fields = {
+            origin: "loading",
+            action: "connection",
+            status: internetStatus, // igual que internetStatus (compatibilidad)
+            internetStatus: internetStatus, // estado REAL de internet
+            latency: lastLatency,
+            localNetwork: navigator.onLine, // hay red local aunque no haya internet
+            checkedAt: new Date().toISOString(),
+          };
+          checkAuthorization().then(function () {
+            sendToAppInventor(JSON.stringify(withSettings(fields)));
+          });
         }
 
         /* ==================================================================
@@ -1496,13 +1516,14 @@
         var AUTH_PENDING_MS = 10000; // pendiente: consultar cada 10 s
         var AUTH_RECHECK_MS = 30 * 60 * 1000; // autorizado: cada 30 min
         var AUTH_ERROR_MS = 30000; // sin respuesta del servidor: cada 30 s
-        var AUTH_TIMEOUT_MS = 8000; // espera máxima de una consulta
+        var AUTH_TIMEOUT_MS = 5000; // espera máxima de una consulta (retrasa el JSON como mucho esto)
 
         // 'idle' (sin datos) | 'checking' | 'pending' | 'authorized' |
         // 'revoked' | 'error' (sin respuesta) | 'conflict' (ID con otro secreto)
         var authState = "idle";
         var authTimer = null; // próxima consulta
         var authBusy = false; // hay una consulta en curso
+        var authPromise = null; // Promise de la consulta en curso (la comparten los JSON)
 
         /**
          * Escribe en localStorage (solo la bandera de autorización: el resto
@@ -1579,7 +1600,8 @@
           var before = readAuthorized();
           writeStorage(KEYS.authorized, authorized ? "1" : "0");
           if (before !== authorized) {
-            send(
+            // sendNow: este aviso sale justo de una consulta (no repetirla)
+            sendNow(
               authorized ? "authorized" : "unauthorized",
               authorized ? "success" : authState,
               "",
@@ -1612,14 +1634,16 @@
             renderAuth();
             return Promise.resolve(readAuthorized());
           }
-          if (authBusy || !isOnline) return Promise.resolve(readAuthorized());
+          // Consulta en curso: se comparte (así un JSON espera su resultado)
+          if (authBusy) return authPromise;
+          if (!isOnline) return Promise.resolve(readAuthorized());
           authBusy = true;
           clearTimeout(authTimer);
           if (authState === "idle" || authState === "error") {
             authState = "checking";
             renderAuth();
           }
-          return requestAuth(apiUrl, deviceId, secret).then(function (res) {
+          authPromise = requestAuth(apiUrl, deviceId, secret).then(function (res) {
             authBusy = false;
             if (res && res.ok === true) {
               authState =
@@ -1641,6 +1665,33 @@
             scheduleAuth();
             return readAuthorized();
           });
+          return authPromise;
+        }
+
+        /**
+         * "authStatus" de los JSON (mismos valores que config.html y
+         * connection.html): authorized | pending | revoked | conflict |
+         * unknown (sin respuesta del servidor) | offline (sin internet, no se
+         * consultó) | no_device (falta ID/secreto/API: abrir loading.html).
+         * @returns {string}
+         */
+        function authStatusForApp() {
+          if (
+            !deviceId ||
+            !readText(KEYS.deviceSecret) ||
+            !readText(KEYS.apiUrl)
+          ) {
+            return "no_device";
+          }
+          if (!isOnline) return "offline";
+          if (
+            authState === "idle" ||
+            authState === "error" ||
+            authState === "checking"
+          ) {
+            return "unknown";
+          }
+          return authState; // authorized | pending | revoked | conflict
         }
 
         /** Muestra el estado de la autorización (solo toca el DOM si cambia). */

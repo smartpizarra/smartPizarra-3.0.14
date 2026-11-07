@@ -95,13 +95,19 @@
   la orientación, ni al guardar, ni cuando cambia internet).
   Excepción: 5 min sin interacción => se envía este mismo JSON, igual que
   al pulsar "Salir" (ver SALIDA AUTOMÁTICA POR INACTIVIDAD).
-  Mismo formato que loading.html:
+  Mismo formato que loading.html. Al pulsar "Salir" se consulta en
+  smartpizarra.cloud (api/device.php, a la vez que internet; máx. 5 s) si
+  el equipo está autorizado, se actualiza "smartpizarra.authorized" y el
+  JSON lleva "authorized" (true|false) y "authStatus" (authorized |
+  pending | revoked | conflict | unknown | offline | no_device; ver
+  "AUTORIZACIÓN EN smartpizarra.cloud" en el script):
 
       {"origin":"config","action":"exit","status":"saved",
        "internetStatus":"online","version":"3.0.14","url":"smartpizarra.com",
        "email":"smartpizarra@gmail.com","deviceId":"SP-XXXX-XXXX-XXXX",
        "league":"mlb","leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
-       "orientation":90,"language":"en","scale":1}
+       "orientation":90,"language":"en","scale":1,
+       "authorized":true,"authStatus":"authorized"}
 
     origin          "config" (de dónde proviene la información).
     language        Idioma GLOBAL guardado (es, en; null si no existe).
@@ -781,7 +787,7 @@
             "status.error": "No se pudo guardar la configuración",
             "status.dirty": "Cambios sin guardar",
             "status.saved": "Configuración guardada ✓",
-            "status.checking": "Verificando internet…",
+            "status.checking": "Verificando conexión…",
             hint: "Flechas: moverse · OK / Enter: elegir · 1-4: orientación · Esc: ir a Salir",
             version: "Versión: ",
             id: "Id: ",
@@ -812,7 +818,7 @@
             "status.error": "Settings could not be saved",
             "status.dirty": "Unsaved changes",
             "status.saved": "Settings saved ✓",
-            "status.checking": "Checking internet…",
+            "status.checking": "Checking connection…",
             hint: "Arrows: move · OK / Enter: select · 1-4: orientation · Esc: go to Exit",
             version: "Version: ",
             id: "Id: ",
@@ -948,6 +954,159 @@
         // Referencias DOM cacheadas. Se llenan en init().
         // el.focusables = todos los botones a los que se llega con las flechas.
         var el = {};
+
+        /* ==================================================================
+           AUTORIZACIÓN EN smartpizarra.cloud (antes de CADA JSON a la app)
+           Antes de enviar un JSON se pregunta a api/device.php (deviceId +
+           secreto, que crea loading.html) si el equipo está autorizado. Con
+           la respuesta se actualiza la bandera "smartpizarra.authorized" y
+           el JSON lleva:
+             "authorized"  true | false
+             "authStatus"  "authorized" | "pending" | "revoked"  => respuesta del servidor
+                           "conflict"  el ID existe en el servidor con otro
+                                       secreto (authorized = false)
+                           "unknown"   el servidor no respondió (authorized =
+                                       última bandera guardada)
+                           "offline"   sin internet, no se consultó (idem)
+                           "no_device" falta ID, secreto o API (nunca se
+                                       abrió loading.html; authorized = bandera)
+           Mismo comportamiento en config.html, connection.html y fingerprint.html.
+           Las llamadas simultáneas comparten la misma consulta.
+           ================================================================== */
+        var serverAuth = {
+          keys: {
+            deviceId: "smartpizarra.deviceId",
+            deviceSecret: "smartpizarra.deviceSecret", // nunca se muestra
+            apiUrl: "smartpizarra.apiUrl", // https://smartpizarra.cloud/api/device.php
+            version: "smartpizarra.version",
+            authorized: "smartpizarra.authorized", // "1" | "0"
+          },
+          timeoutMs: 5000, // espera máxima de la respuesta del servidor
+          pending: null, // Promise de la consulta en curso
+
+          /** @returns {string} Texto guardado ("" si no existe o falla). */
+          read: function (key) {
+            try {
+              var v = window.localStorage.getItem(key);
+              return v === null ? "" : String(v).trim();
+            } catch (e) {
+              return "";
+            }
+          },
+
+          /** @returns {boolean} Última bandera guardada. */
+          cachedFlag: function () {
+            return this.read(this.keys.authorized) === "1";
+          },
+
+          /** Guarda la bandera con lo que dijo el servidor. */
+          saveFlag: function (authorized) {
+            try {
+              window.localStorage.setItem(
+                this.keys.authorized,
+                authorized ? "1" : "0",
+              );
+            } catch (e) {
+              console.log("No se pudo guardar la autorización:", e);
+            }
+          },
+
+          /**
+           * Consulta el servidor (o usa la bandera guardada si no se puede).
+           * @param {boolean} offline true si ya se sabe que no hay internet.
+           * @returns {Promise<{authorized:boolean, authStatus:string}>} Nunca falla.
+           */
+          check: function (offline) {
+            var self = this;
+            if (self.pending) return self.pending;
+            var id = self.read(self.keys.deviceId);
+            var secret = self.read(self.keys.deviceSecret);
+            var apiUrl = self.read(self.keys.apiUrl);
+            if (!id || !secret || !apiUrl) {
+              return Promise.resolve({
+                authorized: self.cachedFlag(),
+                authStatus: "no_device",
+              });
+            }
+            if (offline) {
+              return Promise.resolve({
+                authorized: self.cachedFlag(),
+                authStatus: "offline",
+              });
+            }
+            var p = new Promise(function (resolve) {
+              var done = false;
+              /** Interpreta la respuesta (res = JSON o null). */
+              function finish(res, httpStatus) {
+                if (done) return;
+                done = true;
+                if (res && res.ok === true) {
+                  var ok = res.authorized === true;
+                  self.saveFlag(ok);
+                  resolve({
+                    authorized: ok,
+                    authStatus: ok
+                      ? "authorized"
+                      : res.status === "revoked"
+                        ? "revoked"
+                        : "pending",
+                  });
+                } else if (httpStatus === 403) {
+                  // ID con otro secreto: por seguridad, sin autorización
+                  self.saveFlag(false);
+                  resolve({ authorized: false, authStatus: "conflict" });
+                } else {
+                  // Sin respuesta válida: la bandera no se toca
+                  resolve({
+                    authorized: self.cachedFlag(),
+                    authStatus: "unknown",
+                  });
+                }
+              }
+              try {
+                var xhr = new XMLHttpRequest();
+                xhr.open("POST", apiUrl, true);
+                xhr.timeout = self.timeoutMs;
+                // form-urlencoded: el WebView no hace la verificación previa CORS
+                xhr.setRequestHeader(
+                  "Content-Type",
+                  "application/x-www-form-urlencoded",
+                );
+                xhr.onload = function () {
+                  var res = null;
+                  try {
+                    res = JSON.parse(xhr.responseText);
+                  } catch (e) {
+                    /* no es la API (portal cautivo, error del hosting) */
+                  }
+                  finish(res, xhr.status);
+                };
+                xhr.onerror = function () {
+                  finish(null, 0);
+                };
+                xhr.ontimeout = function () {
+                  finish(null, 0);
+                };
+                xhr.send(
+                  "deviceId=" +
+                    encodeURIComponent(id) +
+                    "&secret=" +
+                    encodeURIComponent(secret) +
+                    "&version=" +
+                    encodeURIComponent(self.read(self.keys.version)),
+                );
+              } catch (e) {
+                finish(null, 0);
+              }
+            });
+            self.pending = p;
+            // Al terminar se libera (la siguiente llamada consulta de nuevo)
+            p.then(function () {
+              if (self.pending === p) self.pending = null;
+            });
+            return p;
+          },
+        };
 
         /* ==================================================================
            3. COMUNICACIÓN CON LA APP (Kodular / App Inventor)
@@ -1463,25 +1622,33 @@
          */
         function exitConfig() {
           if (exiting) return; // ya se está saliendo (OK pulsado dos veces)
-          if (internetStatus === "unknown") {
-            exiting = true;
-            el.status.textContent = t("status.checking");
-            var done = false;
-            var finish = function () {
-              if (done) return;
-              done = true;
-              exiting = false;
-              sendExit();
-            };
-            runCheck(true).then(finish);
-            setTimeout(finish, EXIT_WAIT_MS);
-            return;
-          }
-          sendExit();
+          exiting = true;
+          el.status.textContent = t("status.checking");
+          // 1) Internet: si aún no se verificó, se espera (máx. EXIT_WAIT_MS)
+          var internetReady = new Promise(function (resolve) {
+            if (internetStatus !== "unknown") return resolve();
+            runCheck(true).then(resolve, resolve);
+            setTimeout(resolve, EXIT_WAIT_MS);
+          });
+          // 2) A la vez, autorización en el servidor (máx. serverAuth.timeoutMs);
+          //    si ya se sabe que no hay internet no se consulta.
+          var authReady = serverAuth.check(internetStatus === "offline");
+          Promise.all([internetReady, authReady]).then(function (r) {
+            exiting = false;
+            sendExit(r[1]);
+          });
         }
 
-        /** Descarta cambios sin guardar y envía el JSON de "Salir". */
-        function sendExit() {
+        /**
+         * Descarta cambios sin guardar y envía el JSON de "Salir".
+         * @param {{authorized:boolean, authStatus:string}} auth Resultado de serverAuth.check().
+         */
+        function sendExit(auth) {
+          // Sin respuesta y sin internet confirmado => "offline" (más claro que "unknown")
+          var authStatus =
+            auth.authStatus === "unknown" && internetStatus === "offline"
+              ? "offline"
+              : auth.authStatus;
           var status = saveError
             ? "error"
             : savedThisSession
@@ -1501,7 +1668,10 @@
                 ? null
                 : LEAGUE_OPTIONS[saved.league].values,
             scale: toZoom(saved.scale), // escala para la app (factor)
+            authorized: auth.authorized, // según smartpizarra.cloud (o la última bandera)
+            authStatus: authStatus,
           });
+          render(); // quita "Comprobando..." si la app no cierra la pantalla
         }
 
         /* ==================================================================
