@@ -25,7 +25,11 @@
  *
  *  RESPUESTAS (JSON)
  *    200 {"ok":true,"deviceId":"SP-...","status":"pending|authorized|revoked",
- *         "authorized":false,"registered":true|false}
+ *         "authorized":false,"group":"General","groupEnabled":true,
+ *         "registered":true|false}
+ *        Si el equipo está autorizado pero su GRUPO está deshabilitado:
+ *         "status":"revoked","authorized":false,"groupEnabled":false,
+ *         "reason":"group_disabled" (las páginas lo tratan como revocado).
  *    400 {"ok":false,"error":"bad_request"}      datos con formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el ID ya existe con otro secreto
  *    405 {"ok":false,"error":"method"}           no es POST
@@ -85,13 +89,12 @@ try {
         }
     }
 
-    Http::json([
-        'ok' => true,
-        'deviceId' => $id,
-        'status' => $device['status'],
-        'authorized' => $device['status'] === 'authorized',
-        'registered' => $registered,
-    ]);
+    // status/authorized ya tienen en cuenta el grupo (deshabilitado => revoked)
+    Http::json(array_merge(
+        ['ok' => true, 'deviceId' => $id],
+        DeviceRepository::authPayload($device),
+        ['registered' => $registered]
+    ));
 } catch (Throwable $e) {
     error_log('smartpizarra api/device.php: ' . $e->getMessage());
     Http::json(['ok' => false, 'error' => 'server'], 500);

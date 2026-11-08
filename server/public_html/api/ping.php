@@ -24,7 +24,10 @@
  *
  *  RESPUESTAS (JSON)
  *    200 {"ok":true,"deviceId":"SP-...","status":"pending|authorized|revoked",
- *         "authorized":true|false,"serverTime":"2026-11-06T12:00:00Z"}
+ *         "authorized":true|false,"group":"General","groupEnabled":true,
+ *         "serverTime":"2026-11-06T12:00:00Z"}
+ *        Grupo deshabilitado: "status":"revoked","authorized":false,
+ *         "reason":"group_disabled" (igual que api/device.php).
  *    400 {"ok":false,"error":"bad_request"}      faltan datos o formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el secreto no coincide
  *    404 {"ok":false,"error":"not_registered"}   el ID no está en la base
@@ -73,13 +76,12 @@ try {
 
     DeviceRepository::markOnline($id, $version, Http::clientIp());
 
-    Http::json([
-        'ok' => true,
-        'deviceId' => $id,
-        'status' => $device['status'],
-        'authorized' => $device['status'] === 'authorized',
-        'serverTime' => gmdate('Y-m-d\TH:i:s\Z'),
-    ]);
+    // status/authorized ya tienen en cuenta el grupo (deshabilitado => revoked)
+    Http::json(array_merge(
+        ['ok' => true, 'deviceId' => $id],
+        DeviceRepository::authPayload($device),
+        ['serverTime' => gmdate('Y-m-d\TH:i:s\Z')]
+    ));
 } catch (Throwable $e) {
     error_log('smartpizarra api/ping.php: ' . $e->getMessage());
     Http::json(['ok' => false, 'error' => 'server'], 500);

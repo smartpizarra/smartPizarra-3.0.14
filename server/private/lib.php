@@ -12,6 +12,7 @@
  *    Database          Conexión PDO a MySQL (consultas preparadas siempre).
  *    RateLimiter       Límite de peticiones por "cubeta" (IP + motivo) y ventana.
  *    DeviceRepository  Alta, consulta y cambio de estado de los equipos.
+ *    GroupRepository   Grupos de equipos (habilitar/deshabilitar por grupo).
  *    BootLog           Historial de arranques (cada ejecución de loading.html).
  *    Http              IP del cliente, respuestas JSON y CORS.
  */
@@ -160,13 +161,16 @@ final class Database
         foreach ($pdo->query('SHOW TABLES') as $row) {
             $tables[] = (string) array_values($row)[0];
         }
-        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots'], $tables);
+        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots', 'sp_groups'], $tables);
         if (in_array('sp_devices', $missing, true)) {
             return 'Faltan las tablas: importa server/schema.sql en phpMyAdmin (pestaña Importar) sobre esta base.';
         }
+        if (in_array('sp_boots', $missing, true)) {
+            return 'Falta la tabla sp_boots: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-boots.sql.';
+        }
         if ($missing) {
             return 'Faltan tablas (' . implode(', ', $missing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
-                . 'server/migrations/2026-11-06-boots.sql, o vuelve a importar schema.sql (solo crea lo que falta).';
+                . 'server/migrations/2026-11-07-groups.sql.';
         }
         $cols = [];
         foreach ($pdo->query('SHOW COLUMNS FROM sp_devices') as $row) {
@@ -174,6 +178,15 @@ final class Database
         }
         if (!in_array('online_at', $cols, true)) {
             return 'Falta la columna online_at: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-online.sql.';
+        }
+        if (!in_array('group_id', $cols, true)) {
+            return 'Falta la columna group_id: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-07-groups.sql.';
+        }
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM sp_groups WHERE id = ?');
+        $stmt->execute([GroupRepository::DEFAULT_ID]);
+        if ((int) $stmt->fetchColumn() === 0) {
+            return 'Falta el grupo por defecto (id 1): ejecuta en phpMyAdmin (pestaña SQL) '
+                . "INSERT INTO sp_groups (id, name, enabled, created_at) VALUES (1, 'General', 1, UTC_TIMESTAMP());";
         }
         return null;
     }
@@ -245,23 +258,84 @@ final class DeviceRepository
         return (bool) preg_match('/^[0-9a-f]{64}$/', $secret);
     }
 
-    /** @return array<string,mixed>|null */
+    /**
+     * Columnas del equipo + las de su grupo:
+     *   group_name     nombre del grupo
+     *   group_enabled  1 habilitado | 0 deshabilitado
+     */
+    private const SELECT_WITH_GROUP = 'SELECT d.*, g.name AS group_name, g.enabled AS group_enabled
+        FROM sp_devices d JOIN sp_groups g ON g.id = d.group_id';
+
+    /** @return array<string,mixed>|null Equipo con los datos de su grupo. */
     public static function find(string $id): ?array
     {
-        $stmt = Database::pdo()->prepare('SELECT * FROM sp_devices WHERE device_id = ?');
+        $stmt = Database::pdo()->prepare(self::SELECT_WITH_GROUP . ' WHERE d.device_id = ?');
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         return $row ?: null;
     }
 
-    /** Alta de un equipo nuevo en estado "pending". */
+    /** Alta de un equipo nuevo en estado "pending", en el grupo por defecto. */
     public static function create(string $id, string $secret, ?string $version, string $ip): void
     {
         $now = Database::now();
         Database::pdo()->prepare(
-            'INSERT INTO sp_devices (device_id, secret_hash, status, app_version, last_ip, created_at, last_seen_at)
-             VALUES (?, ?, \'pending\', ?, ?, ?, ?)'
-        )->execute([$id, hash('sha256', $secret), $version, $ip, $now, $now]);
+            'INSERT INTO sp_devices (device_id, secret_hash, status, group_id, app_version, last_ip, created_at, last_seen_at)
+             VALUES (?, ?, \'pending\', ?, ?, ?, ?, ?)'
+        )->execute([$id, hash('sha256', $secret), GroupRepository::DEFAULT_ID, $version, $ip, $now, $now]);
+    }
+
+    /**
+     * Estado que se comunica al equipo: el suyo, salvo que esté autorizado
+     * y su grupo deshabilitado; entonces se le trata como "revoked" SIN
+     * cambiar su estado guardado (al rehabilitar el grupo vuelve a estar
+     * autorizado).
+     * @param array<string,mixed> $device Fila de find().
+     */
+    public static function effectiveStatus(array $device): string
+    {
+        if ($device['status'] === 'authorized' && !self::groupEnabled($device)) {
+            return 'revoked';
+        }
+        return (string) $device['status'];
+    }
+
+    /** @param array<string,mixed> $device Fila de find()/search(). */
+    public static function groupEnabled(array $device): bool
+    {
+        return (int) ($device['group_enabled'] ?? 1) === 1;
+    }
+
+    /**
+     * Parte de la respuesta de api/device.php y api/ping.php sobre la
+     * autorización. "reason":"group_disabled" si lo que la impide es el grupo.
+     * @param array<string,mixed> $device Fila de find().
+     * @return array<string,mixed>
+     */
+    public static function authPayload(array $device): array
+    {
+        $status = self::effectiveStatus($device);
+        $out = [
+            'status' => $status,
+            'authorized' => $status === 'authorized',
+            'group' => (string) ($device['group_name'] ?? ''),
+            'groupEnabled' => self::groupEnabled($device),
+        ];
+        if ($device['status'] === 'authorized' && $status !== 'authorized') {
+            $out['reason'] = 'group_disabled';
+        }
+        return $out;
+    }
+
+    /** Cambia el grupo del equipo. @return bool false si el grupo no existe. */
+    public static function setGroup(string $id, int $groupId): bool
+    {
+        if (GroupRepository::find($groupId) === null) {
+            return false;
+        }
+        Database::pdo()->prepare('UPDATE sp_devices SET group_id = ? WHERE device_id = ?')
+            ->execute([$groupId, $id]);
+        return true;
     }
 
     /** true si el secreto coincide con el guardado (comparación en tiempo constante). */
@@ -336,27 +410,32 @@ final class DeviceRepository
      * Lista para el panel.
      * @param string|null $status Filtro de estado (null = todos).
      * @param string      $search Texto a buscar en el ID o el alias.
-     * @return array<int,array<string,mixed>>
+     * @param int|null    $groupId Filtro de grupo (null = todos).
+     * @return array<int,array<string,mixed>> Filas con group_name/group_enabled.
      */
-    public static function search(?string $status, string $search): array
+    public static function search(?string $status, string $search, ?int $groupId = null): array
     {
         $where = [];
         $args = [];
         if ($status !== null) {
-            $where[] = 'status = ?';
+            $where[] = 'd.status = ?';
             $args[] = $status;
         }
+        if ($groupId !== null) {
+            $where[] = 'd.group_id = ?';
+            $args[] = $groupId;
+        }
         if ($search !== '') {
-            $where[] = '(device_id LIKE ? OR label LIKE ?)';
+            $where[] = '(d.device_id LIKE ? OR d.label LIKE ?)';
             $like = '%' . addcslashes($search, '%_\\') . '%';
             $args[] = $like;
             $args[] = $like;
         }
         // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
-        $sql = 'SELECT d.*,
+        $sql = 'SELECT d.*, g.name AS group_name, g.enabled AS group_enabled,
                   (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
                   (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
-                FROM sp_devices d'
+                FROM sp_devices d JOIN sp_groups g ON g.id = d.group_id'
             . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
             . ' ORDER BY (d.status = \'pending\') DESC, d.last_seen_at DESC LIMIT 500';
         $stmt = Database::pdo()->prepare($sql);
@@ -364,14 +443,117 @@ final class DeviceRepository
         return $stmt->fetchAll();
     }
 
-    /** @return array<string,int> Cantidad de equipos por estado. */
-    public static function counts(): array
+    /**
+     * @param int|null $groupId Contar solo ese grupo (null = todos).
+     * @return array<string,int> Cantidad de equipos por estado (+ "all").
+     */
+    public static function counts(?int $groupId = null): array
     {
-        $out = ['pending' => 0, 'authorized' => 0, 'revoked' => 0];
-        foreach (Database::pdo()->query('SELECT status, COUNT(*) n FROM sp_devices GROUP BY status') as $r) {
+        $out = ['pending' => 0, 'authorized' => 0, 'revoked' => 0, 'all' => 0];
+        $stmt = Database::pdo()->prepare(
+            'SELECT status, COUNT(*) n FROM sp_devices'
+            . ($groupId !== null ? ' WHERE group_id = ?' : '')
+            . ' GROUP BY status'
+        );
+        $stmt->execute($groupId !== null ? [$groupId] : []);
+        foreach ($stmt as $r) {
             $out[$r['status']] = (int) $r['n'];
+            $out['all'] += (int) $r['n'];
         }
         return $out;
+    }
+}
+
+/** Grupos de equipos (tabla sp_groups). */
+final class GroupRepository
+{
+    /** Grupo por defecto: equipos nuevos y los de un grupo borrado. No se borra. */
+    public const DEFAULT_ID = 1;
+
+    /** @return string|null Nombre limpio (1-60 caracteres) o null si no vale. */
+    public static function cleanName(string $name): ?string
+    {
+        $name = trim((string) preg_replace('/\s+/u', ' ', $name));
+        return ($name === '' || mb_strlen($name) > 60) ? null : $name;
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_groups WHERE id = ?');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Todos los grupos (General primero, luego por nombre) con contadores:
+     * devices = equipos del grupo, authorized = de ellos, autorizados.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function all(): array
+    {
+        return Database::pdo()->query(
+            'SELECT g.*,
+               (SELECT COUNT(*) FROM sp_devices d WHERE d.group_id = g.id) AS devices,
+               (SELECT COUNT(*) FROM sp_devices d WHERE d.group_id = g.id AND d.status = \'authorized\') AS authorized
+             FROM sp_groups g
+             ORDER BY (g.id = ' . self::DEFAULT_ID . ') DESC, g.name'
+        )->fetchAll();
+    }
+
+    /** @return bool true si otro grupo (distinto de $exceptId) ya usa ese nombre. */
+    public static function nameTaken(string $name, int $exceptId = 0): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_groups WHERE name = ? AND id <> ?');
+        $stmt->execute([$name, $exceptId]);
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /** Crea un grupo habilitado. @return int Su id. */
+    public static function create(string $name): int
+    {
+        $pdo = Database::pdo();
+        $pdo->prepare('INSERT INTO sp_groups (name, enabled, created_at) VALUES (?, 1, ?)')
+            ->execute([$name, Database::now()]);
+        return (int) $pdo->lastInsertId();
+    }
+
+    public static function rename(int $id, string $name): void
+    {
+        Database::pdo()->prepare('UPDATE sp_groups SET name = ? WHERE id = ?')->execute([$name, $id]);
+    }
+
+    /** Habilita o deshabilita el grupo (afecta a todos sus equipos al momento). */
+    public static function setEnabled(int $id, bool $enabled): void
+    {
+        Database::pdo()->prepare('UPDATE sp_groups SET enabled = ?, enabled_at = ? WHERE id = ?')
+            ->execute([$enabled ? 1 : 0, Database::now(), $id]);
+    }
+
+    /**
+     * Borra un grupo: sus equipos pasan al grupo por defecto conservando su
+     * estado. El grupo por defecto no se puede borrar.
+     * @return int Equipos movidos, o -1 si no se puede borrar.
+     */
+    public static function delete(int $id): int
+    {
+        if ($id === self::DEFAULT_ID) {
+            return -1;
+        }
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare('UPDATE sp_devices SET group_id = ? WHERE group_id = ?');
+            $stmt->execute([self::DEFAULT_ID, $id]);
+            $moved = $stmt->rowCount();
+            $pdo->prepare('DELETE FROM sp_groups WHERE id = ?')->execute([$id]);
+            $pdo->commit();
+            return $moved;
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
     }
 }
 

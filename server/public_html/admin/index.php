@@ -21,6 +21,14 @@
  *    último arranque y, con el botón "Historial" (?history=SP-...), la
  *    lista con fecha/hora, IP y versión de cada arranque.
  *
+ *  - GRUPOS (botón "Grupos", ?view=groups): todo equipo pertenece a un
+ *    grupo (los nuevos entran en el grupo por defecto, id 1). Se crean,
+ *    renombran, habilitan/deshabilitan y eliminan grupos (sus equipos
+ *    pasan al grupo por defecto). Deshabilitar un grupo deja sin
+ *    autorización a todos sus equipos sin cambiar su estado; para un solo
+ *    equipo se usa "Revocar". El grupo de cada equipo se cambia con el
+ *    selector de su tarjeta, y la lista se puede filtrar por grupo.
+ *
  *  Seguridad: sesión con cookie segura, token CSRF en cada formulario,
  *  límite de intentos de login por IP, consultas preparadas, salida
  *  escapada y CSP con nonce.
@@ -58,6 +66,17 @@ header('Cache-Control: no-store');
 function h(?string $s): string
 {
     return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+/**
+ * Lee un parámetro de $_GET/$_POST como texto. Si no existe o llega como
+ * lista (p. ej. "q[]=x"), devuelve "" (evita avisos "Array to string").
+ * @param array<string,mixed> $src $_GET o $_POST.
+ */
+function param(array $src, string $key): string
+{
+    $v = $src[$key] ?? '';
+    return is_string($v) ? $v : '';
 }
 
 /** Token CSRF de la sesión. */
@@ -182,8 +201,8 @@ try {
        Acciones (POST)
        ----------------------------------------------------------------- */
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
-        $action = (string) ($_POST['action'] ?? '');
-        if (!hash_equals(csrfToken(), (string) ($_POST['csrf'] ?? ''))) {
+        $action = param($_POST, 'action');
+        if (!hash_equals(csrfToken(), param($_POST, 'csrf'))) {
             redirectWith('La sesión caducó. Vuelve a intentarlo.');
         }
 
@@ -195,8 +214,8 @@ try {
                 $error = 'Demasiados intentos. Espera unos minutos.';
             } else {
                 $hash = (string) $config['admin_password_hash'];
-                $userOk = hash_equals((string) $config['admin_user'], (string) ($_POST['user'] ?? ''));
-                $passOk = $hash !== 'CAMBIAR' && password_verify((string) ($_POST['password'] ?? ''), $hash);
+                $userOk = hash_equals((string) $config['admin_user'], param($_POST, 'user'));
+                $passOk = $hash !== 'CAMBIAR' && password_verify(param($_POST, 'password'), $hash);
                 if ($userOk && $passOk) {
                     RateLimiter::reset($bucket);
                     session_regenerate_id(true);
@@ -214,9 +233,49 @@ try {
             session_destroy();
             header('Location: ./', true, 303);
             exit;
+        } elseif (str_starts_with($action, 'group_')) {
+            /* ---- Acciones sobre GRUPOS (vista ?view=groups) ---- */
+            $gid = (int) param($_POST, 'groupId');
+            $group = $gid > 0 ? GroupRepository::find($gid) : null;
+            if ($action !== 'group_create' && $group === null) {
+                redirectWith('Ese grupo no existe.', 'view=groups');
+            }
+            switch ($action) {
+                case 'group_create':
+                case 'group_rename':
+                    $name = GroupRepository::cleanName(param($_POST, 'name'));
+                    if ($name === null) {
+                        redirectWith('El nombre del grupo debe tener entre 1 y 60 caracteres.', 'view=groups');
+                    }
+                    if (GroupRepository::nameTaken($name, $action === 'group_rename' ? $gid : 0)) {
+                        redirectWith("Ya existe un grupo llamado «{$name}».", 'view=groups');
+                    }
+                    if ($action === 'group_create') {
+                        GroupRepository::create($name);
+                        redirectWith("Grupo «{$name}» creado.", 'view=groups');
+                    }
+                    GroupRepository::rename($gid, $name);
+                    redirectWith("Grupo renombrado a «{$name}».", 'view=groups');
+                case 'group_enable':
+                    GroupRepository::setEnabled($gid, true);
+                    redirectWith("Grupo «{$group['name']}» habilitado: sus equipos autorizados vuelven a funcionar.", 'view=groups');
+                case 'group_disable':
+                    GroupRepository::setEnabled($gid, false);
+                    redirectWith("Grupo «{$group['name']}» deshabilitado: sus equipos quedan sin autorización "
+                        . 'en su próxima consulta.', 'view=groups');
+                case 'group_delete':
+                    $moved = GroupRepository::delete($gid);
+                    redirectWith($moved < 0
+                        ? 'El grupo por defecto no se puede eliminar.'
+                        : "Grupo «{$group['name']}» eliminado; {$moved} equipo(s) pasan a "
+                            . '«' . (GroupRepository::find(GroupRepository::DEFAULT_ID)['name'] ?? 'General') . '».',
+                        'view=groups');
+                default:
+                    redirectWith('Acción desconocida.', 'view=groups');
+            }
         } else {
-            $id = strtoupper(trim((string) ($_POST['deviceId'] ?? '')));
-            $back = (string) ($_POST['back'] ?? '');
+            $id = strtoupper(trim(param($_POST, 'deviceId')));
+            $back = param($_POST, 'back');
             if (!DeviceRepository::isValidId($id)) {
                 redirectWith('ID de dispositivo inválido.', $back);
             }
@@ -231,8 +290,11 @@ try {
                     DeviceRepository::setStatus($id, 'pending');
                     redirectWith("$id vuelve a pendiente.", $back);
                 case 'label':
-                    DeviceRepository::setLabel($id, trim((string) ($_POST['label'] ?? '')));
+                    DeviceRepository::setLabel($id, trim(param($_POST, 'label')));
                     redirectWith("Alias de $id guardado.", $back);
+                case 'set_group':
+                    $ok = DeviceRepository::setGroup($id, (int) param($_POST, 'groupId'));
+                    redirectWith($ok ? "Grupo de $id cambiado." : 'Ese grupo no existe.', $back);
                 case 'delete':
                     DeviceRepository::delete($id);
                     redirectWith("$id eliminado. Si el equipo vuelve a consultar, se registrará como pendiente.", $back);
@@ -246,18 +308,26 @@ try {
        Datos para la página (GET)
        ----------------------------------------------------------------- */
     $filters = ['pending' => 'Pendientes', 'authorized' => 'Autorizados', 'revoked' => 'Revocados', 'all' => 'Todos'];
-    $filter = (string) ($_GET['filter'] ?? 'pending');
+    $filter = param($_GET, 'filter') ?: 'pending';
     if (!isset($filters[$filter])) {
         $filter = 'pending';
     }
-    $q = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 40);
+    $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Una búsqueda por ID muestra el equipo esté en el estado que esté
     if ($q !== '' && !isset($_GET['filter'])) {
         $filter = 'all';
     }
-    $back = http_build_query(array_filter(['filter' => $filter, 'q' => $q]));
-    $devices = $loggedIn ? DeviceRepository::search($filter === 'all' ? null : $filter, $q) : [];
-    $counts = $loggedIn ? DeviceRepository::counts() : [];
+    // Vista: lista de equipos (por defecto) o gestión de grupos (?view=groups)
+    $view = param($_GET, 'view') === 'groups' ? 'groups' : 'list';
+    // Grupos (para el filtro, el selector de cada equipo y la vista de grupos)
+    $groups = $loggedIn ? GroupRepository::all() : [];
+    $groupNames = array_column($groups, 'name', 'id');
+    // Filtro de grupo (?group=ID); se ignora si el grupo no existe
+    $groupFilter = (int) param($_GET, 'group');
+    $groupFilter = isset($groupNames[$groupFilter]) ? $groupFilter : null;
+    $back = http_build_query(array_filter(['filter' => $filter, 'q' => $q, 'group' => $groupFilter]));
+    $devices = $loggedIn ? DeviceRepository::search($filter === 'all' ? null : $filter, $q, $groupFilter) : [];
+    $counts = $loggedIn ? DeviceRepository::counts($groupFilter) : [];
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
 
@@ -265,7 +335,7 @@ try {
     $historyDevice = null;
     $boots = [];
     $bootTotal = 0;
-    $historyId = strtoupper(trim((string) ($_GET['history'] ?? '')));
+    $historyId = strtoupper(trim(param($_GET, 'history')));
     if ($loggedIn && DeviceRepository::isValidId($historyId)) {
         $historyDevice = DeviceRepository::find($historyId);
         if ($historyDevice !== null) {
@@ -290,6 +360,17 @@ try {
     $historyDevice = null;
     $boots = [];
     $bootTotal = 0;
+    $view = 'list';
+    $groups = [];
+    $groupNames = [];
+    $groupFilter = null;
+}
+
+/** Enlace del panel conservando filtros: q, filter, group, view... (vacíos fuera). */
+function panelUrl(array $params): string
+{
+    $query = http_build_query(array_filter($params, static fn($v) => $v !== null && $v !== ''));
+    return './' . ($query !== '' ? '?' . $query : '');
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -360,6 +441,22 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
     .boots th { color: var(--muted); font-weight: 500; }
     .boots td.n { color: var(--muted); width: 1%; white-space: nowrap; }
     .table-wrap { overflow-x: auto; }
+    /* Grupos */
+    .header-nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .header-nav a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+    select { font: inherit; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line);
+      background: var(--bg); color: var(--text); max-width: 100%; }
+    .tools { flex-wrap: wrap; }
+    .tools input { min-width: 180px; }
+    .group-tag { font-size: .85rem; color: var(--muted); }
+    .group-tag.disabled { color: var(--bad); font-weight: 600; }
+    .badge.blocked { color: var(--bad); }
+    .group-form { display: flex; gap: 6px; }
+    .group-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+    .group-name { font-weight: 600; font-size: 1.05rem; }
+    .badge.enabled { color: var(--ok); } .badge.disabled { color: var(--bad); }
+    .new-group { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .new-group input { flex: 1 1 220px; }
     /* Escáner de QR (pantalla completa) */
     #scanner { position: fixed; inset: 0; background: #000; display: none; flex-direction: column;
       align-items: center; justify-content: center; z-index: 10; padding: 16px; }
@@ -387,18 +484,79 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
 <?php else: ?>
   <header>
     <h1>Smart Pizarra · Dispositivos</h1>
-    <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
+    <nav class="header-nav">
+      <!-- Vistas: equipos / grupos -->
+      <a class="btn <?= $view === 'list' && !$historyDevice ? 'on' : '' ?>" href="./">Dispositivos</a>
+      <a class="btn <?= $view === 'groups' ? 'on' : '' ?>" href="?view=groups">Grupos</a>
+      <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
+    </nav>
   </header>
   <?php if ($flash): ?><div class="card flash"><?= h($flash) ?></div><?php endif; ?>
   <?php if ($error): ?><div class="card error"><?= h($error) ?></div><?php endif; ?>
 
   <form class="tools" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="Buscar por ID (SP-...) o alias" aria-label="Buscar">
+    <!-- Filtro por grupo (se aplica al cambiarlo) -->
+    <select name="group" aria-label="Grupo" data-autosubmit>
+      <option value="">Todos los grupos</option>
+      <?php foreach ($groups as $g): ?>
+        <option value="<?= (int) $g['id'] ?>" <?= $groupFilter === (int) $g['id'] ? 'selected' : '' ?>>
+          <?= h($g['name']) ?><?= (int) $g['enabled'] === 1 ? '' : ' (deshabilitado)' ?>
+        </option>
+      <?php endforeach; ?>
+    </select>
+    <?php if ($view === 'list' && isset($_GET['filter'])): ?><input type="hidden" name="filter" value="<?= h($filter) ?>"><?php endif; ?>
     <button type="submit">Buscar</button>
     <button type="button" id="scanBtn" class="primary">Escanear QR</button>
   </form>
 
-  <?php if ($historyDevice): $hid = $historyDevice['device_id']; ?>
+  <?php if ($view === 'groups' && !$historyDevice): ?>
+    <!-- ================= GESTIÓN DE GRUPOS =================
+         Deshabilitar un grupo quita la autorización a TODOS sus equipos
+         (sin cambiar el estado de cada uno). Para deshabilitar un solo
+         equipo se usa "Revocar" en su tarjeta. -->
+    <form class="card new-group" method="post"><?= csrfField() ?>
+      <input type="hidden" name="action" value="group_create">
+      <input type="text" name="name" maxlength="60" required placeholder="Nombre del grupo nuevo (p. ej. Sucursal Norte)" aria-label="Nombre del grupo">
+      <button class="primary" type="submit">Crear grupo</button>
+    </form>
+    <?php foreach ($groups as $g): $gid = (int) $g['id']; $on = (int) $g['enabled'] === 1; ?>
+      <section class="card device">
+        <div class="group-head">
+          <span class="group-name"><?= h($g['name']) ?><?= $gid === GroupRepository::DEFAULT_ID ? ' <span class="group-tag">· por defecto</span>' : '' ?></span>
+          <span class="badge <?= $on ? 'enabled' : 'disabled' ?>"><?= $on ? 'Habilitado' : 'Deshabilitado' ?></span>
+        </div>
+        <div class="meta">
+          <?= (int) $g['devices'] ?> equipo(s) · <?= (int) $g['authorized'] ?> autorizado(s)
+          <?= !$on && (int) $g['authorized'] > 0 ? ' · <span class="group-tag disabled">sin servicio mientras el grupo esté deshabilitado</span>' : '' ?>
+          · Creado el <?= dateTag($g['created_at']) ?>
+          <?= $g['enabled_at'] ? ' · Último cambio ' . dateTag($g['enabled_at']) : '' ?>
+        </div>
+        <div class="actions">
+          <?php if ($on): ?>
+            <form method="post" data-confirm="¿Deshabilitar el grupo «<?= h($g['name']) ?>»? Sus <?= (int) $g['authorized'] ?> equipo(s) autorizados dejarán de estar autorizados en su próxima consulta."><?= csrfField() ?>
+              <input type="hidden" name="action" value="group_disable"><input type="hidden" name="groupId" value="<?= $gid ?>">
+              <button class="bad" type="submit">Deshabilitar grupo</button></form>
+          <?php else: ?>
+            <form method="post"><?= csrfField() ?>
+              <input type="hidden" name="action" value="group_enable"><input type="hidden" name="groupId" value="<?= $gid ?>">
+              <button class="ok" type="submit">Habilitar grupo</button></form>
+          <?php endif; ?>
+          <form method="post" class="label-form"><?= csrfField() ?>
+            <input type="hidden" name="action" value="group_rename"><input type="hidden" name="groupId" value="<?= $gid ?>">
+            <input type="text" name="name" value="<?= h($g['name']) ?>" maxlength="60" required aria-label="Nombre del grupo">
+            <button type="submit">Renombrar</button></form>
+          <a class="btn" href="<?= h(panelUrl(['filter' => 'all', 'group' => $gid])) ?>">Ver equipos</a>
+          <?php if ($gid !== GroupRepository::DEFAULT_ID): ?>
+            <form method="post" data-confirm="¿Eliminar el grupo «<?= h($g['name']) ?>»? Sus equipos pasarán al grupo «<?= h($groupNames[GroupRepository::DEFAULT_ID] ?? 'General') ?>» conservando su estado."><?= csrfField() ?>
+              <input type="hidden" name="action" value="group_delete"><input type="hidden" name="groupId" value="<?= $gid ?>">
+              <button type="submit">Eliminar</button></form>
+          <?php endif; ?>
+        </div>
+      </section>
+    <?php endforeach; ?>
+
+  <?php elseif ($historyDevice): $hid = $historyDevice['device_id']; ?>
     <!-- Historial de arranques de un equipo (cada ejecución de loading.html) -->
     <section class="card">
       <div class="history-head">
@@ -409,6 +567,7 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
         <a class="btn" href="./?<?= h(http_build_query(['q' => $hid])) ?>">Volver</a>
       </div>
       <div class="meta">
+        Grupo: <?= h($historyDevice['group_name'] ?? '') ?> ·
         Historial de arranques: <?= (int) $bootTotal ?> en total
         <?= $bootTotal > count($boots) ? '(se muestran los ' . count($boots) . ' más recientes)' : '' ?>
         · Registrado el <?= dateTag($historyDevice['created_at']) ?>
@@ -438,7 +597,7 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
 
   <nav class="tabs">
     <?php foreach ($filters as $key => $text): ?>
-      <a class="<?= $filter === $key ? 'on' : '' ?>" href="?<?= h(http_build_query(array_filter(['filter' => $key, 'q' => $q]))) ?>">
+      <a class="<?= $filter === $key ? 'on' : '' ?>" href="<?= h(panelUrl(['filter' => $key, 'q' => $q, 'group' => $groupFilter])) ?>">
         <?= h($text) ?><?= isset($counts[$key]) ? ' (' . (int) $counts[$key] . ')' : '' ?>
       </a>
     <?php endforeach; ?>
@@ -450,16 +609,26 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
     </div>
   <?php endif; ?>
 
-  <?php foreach ($devices as $d): $id = $d['device_id']; $st = $d['status']; ?>
+  <?php foreach ($devices as $d):
+      $id = $d['device_id'];
+      $st = $d['status'];
+      $gOn = DeviceRepository::groupEnabled($d); // grupo habilitado
+  ?>
     <section class="card device">
       <div class="device-head">
         <span>
           <?= $d['label'] ? '<span class="alias">' . h($d['label']) . '</span>' : '' ?>
           <span class="device-id"><?= h($id) ?></span>
         </span>
-        <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
+        <?php if ($st === 'authorized' && !$gOn): ?>
+          <!-- Autorizado, pero bloqueado por su grupo: el equipo recibe "revoked" -->
+          <span class="badge blocked">Autorizado · bloqueado por grupo</span>
+        <?php else: ?>
+          <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
+        <?php endif; ?>
       </div>
       <div class="meta">
+        Grupo: <span class="group-tag <?= $gOn ? '' : 'disabled' ?>"><?= h($d['group_name']) ?><?= $gOn ? '' : ' (deshabilitado)' ?></span><br>
         <!-- Última conexión: arranque de loading.html o señal de la app nativa -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>
@@ -484,6 +653,15 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
           <input type="text" name="label" value="<?= h($d['label']) ?>" maxlength="100" placeholder="Alias (p. ej. Local Centro)" aria-label="Alias">
           <button type="submit">Guardar</button></form>
+        <!-- Grupo del equipo (se guarda al cambiarlo) -->
+        <form method="post" class="group-form"><?= csrfField() ?><input type="hidden" name="action" value="set_group">
+          <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
+          <select name="groupId" aria-label="Grupo del equipo" data-autosubmit>
+            <?php foreach ($groups as $g): ?>
+              <option value="<?= (int) $g['id'] ?>" <?= (int) $g['id'] === (int) $d['group_id'] ? 'selected' : '' ?>><?= h($g['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <noscript><button type="submit">Mover</button></noscript></form>
         <form method="post" data-confirm="¿Eliminar <?= h($id) ?>? Si vuelve a conectarse quedará pendiente."><?= csrfField() ?><input type="hidden" name="action" value="delete">
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
           <button type="submit">Eliminar</button></form>
@@ -491,7 +669,7 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
       </div>
     </section>
   <?php endforeach; ?>
-  <?php endif; /* fin vista lista / historial */ ?>
+  <?php endif; /* fin vista grupos / historial / lista */ ?>
 
   <!-- Escáner: cámara trasera + lector de QR -->
   <div id="scanner" role="dialog" aria-label="Escanear código QR">
@@ -503,11 +681,15 @@ $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked'
   <script nonce="<?= h($nonce) ?>">
   (function () {
     "use strict";
-    // Confirmación antes de revocar/eliminar
+    // Confirmación antes de revocar/eliminar/deshabilitar un grupo
     document.querySelectorAll("form[data-confirm]").forEach(function (f) {
       f.addEventListener("submit", function (e) {
         if (!window.confirm(f.getAttribute("data-confirm"))) e.preventDefault();
       });
+    });
+    // Selectores que se aplican al cambiarlos (filtro de grupo, grupo del equipo)
+    document.querySelectorAll("select[data-autosubmit]").forEach(function (s) {
+      s.addEventListener("change", function () { s.form.submit(); });
     });
 
     /*

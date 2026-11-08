@@ -21,6 +21,18 @@ En el panel cada equipo muestra:
 
 Cada vez que se ejecuta `loading.html`, llama a `api/device.php` con `event=boot`. El servidor guarda una fila en `sp_boots` y actualiza la última conexión. `fingerprint.html` no envía `event`, así que sus consultas no cuentan como arranques. En `config.php`, `boot_history_days` (365) fija cuántos días se guardan y `boots_per_device_per_hour` (30) limita las filas si la app se reinicia en bucle. Al eliminar un equipo se borra también su historial.
 
+## Grupos
+
+Todo equipo pertenece a **un grupo**. Los equipos nuevos entran en el grupo por defecto, **General** (id 1), que se puede renombrar y deshabilitar pero no eliminar.
+
+- **Un solo equipo:** botón *Revocar* en su tarjeta. Vuelve con *Autorizar*.
+- **Un grupo entero:** botón *Grupos* → *Deshabilitar grupo*. Todos sus equipos autorizados dejan de estarlo en su próxima consulta. Su estado no cambia: al pulsar *Habilitar grupo* vuelven a funcionar sin tocarlos uno a uno. En la lista salen como *Autorizado · bloqueado por grupo*.
+- **Mover un equipo:** selector de grupo en su tarjeta (se guarda al elegirlo).
+- **Filtrar:** selector *Todos los grupos* junto al buscador, o *Ver equipos* en la vista de grupos.
+- **Eliminar un grupo:** sus equipos pasan a *General* con el estado que tenían. Si el grupo estaba deshabilitado, esos equipos vuelven a quedar autorizados.
+
+Un equipo autorizado de un grupo deshabilitado recibe de `api/device.php` y `api/ping.php` `"status":"revoked","authorized":false,"reason":"group_disabled"`. Las páginas `.html` lo tratan como revocado sin cambios en su código. Ambas APIs devuelven además `"group"` (nombre) y `"groupEnabled"`.
+
 Conocer el ID no basta para consultar ni suplantar un equipo: hace falta el secreto. Si alguien registra un ID con otro secreto, la TV muestra un aviso de conflicto. Se resuelve eliminando ese registro en el panel.
 
 ## Señal "online" desde la app nativa de Kodular
@@ -99,6 +111,13 @@ Para el historial de arranques (si la tabla `sp_boots` no existe todavía):
 3. Opcional: añade a tu `config.php` `'boot_history_days' => 365,` y `'boots_per_device_per_hour' => 30,` (si faltan, se usan esos valores).
 
 Sube primero la tabla y después `lib.php`: el panel la consulta y sin ella da error.
+
+Para los grupos (si la tabla `sp_groups` no existe todavía):
+
+1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-07-groups.sql`, después de las dos anteriores. Todos los equipos quedan en el grupo *General*. Si sale *Duplicate column name 'group_id'*, ya estaba hecha.
+2. Sube `lib.php`, `api/device.php`, `api/ping.php` y `admin/index.php`. No hace falta cambiar nada en la app ni en las páginas `.html`.
+
+Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas
 
