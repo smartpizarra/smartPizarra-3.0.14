@@ -127,7 +127,7 @@ try {
     // Subida más grande que post_max_size de PHP: llega sin datos ni CSRF
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !$_POST && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
         redirectWith('El archivo es demasiado grande para el servidor (límite de PHP post_max_size: '
-            . ini_get('post_max_size') . ').');
+            . ini_get('post_max_size') . ').', 's=contenido');
     }
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $action = param($_POST, 'action');
@@ -167,74 +167,74 @@ try {
             $current = param($_POST, 'current');
             $new = param($_POST, 'new');
             if (!password_verify($current, (string) $user['password_hash'])) {
-                redirectWith('La contraseña actual no es correcta.');
+                redirectWith('La contraseña actual no es correcta.', 's=cuenta');
             }
             if ($new !== param($_POST, 'confirm')) {
-                redirectWith('La contraseña nueva y su confirmación no coinciden.');
+                redirectWith('La contraseña nueva y su confirmación no coinciden.', 's=cuenta');
             }
             $problem = UserRepository::passwordProblem($new, (string) $user['email']);
             if ($problem === null && hash_equals($current, $new)) {
                 $problem = 'La contraseña nueva debe ser distinta de la actual.';
             }
             if ($problem !== null) {
-                redirectWith($problem);
+                redirectWith($problem, 's=cuenta');
             }
             UserRepository::setPassword((int) $user['id'], $new, false);
             // La sesión actual sigue abierta con la contraseña nueva
             session_regenerate_id(true);
             $_SESSION['pwd'] = passwordStamp(UserRepository::find((int) $user['id']) ?? []);
-            redirectWith('Contraseña cambiada.');
+            redirectWith('Contraseña cambiada.', 's=cuenta');
         } elseif (str_starts_with($action, 'media_')) {
             /* ---- Contenido para mirror.html (imágenes y videos) ---- */
             if ((int) $user['must_change_password'] === 1) {
-                redirectWith('Primero elige tu contraseña.');
+                redirectWith('Primero elige tu contraseña.', 's=contenido');
             }
             $uid = (int) $user['id'];
             $mid = (int) param($_POST, 'mediaId');
             if ($action !== 'media_upload' && MediaRepository::findForUser($mid, $uid) === null) {
-                redirectWith('Ese archivo no existe.');
+                redirectWith('Ese archivo no existe.', 's=contenido');
             }
             [$all, $chosen] = targetDevices();
             if (in_array($action, ['media_upload', 'media_update'], true) && !$all && !$chosen) {
-                redirectWith('Marca al menos un equipo o elige "Todos mis equipos".');
+                redirectWith('Marca al menos un equipo o elige "Todos mis equipos".', 's=contenido');
             }
             switch ($action) {
                 case 'media_upload':
                     $f = $_FILES['file'] ?? null;
                     $err = is_array($f) && is_int($f['error'] ?? null) ? $f['error'] : UPLOAD_ERR_NO_FILE;
                     if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
-                        redirectWith('El archivo supera el límite de PHP (upload_max_filesize: ' . ini_get('upload_max_filesize') . ').');
+                        redirectWith('El archivo supera el límite de PHP (upload_max_filesize: ' . ini_get('upload_max_filesize') . ').', 's=contenido');
                     }
                     if ($err !== UPLOAD_ERR_OK) {
-                        redirectWith($err === UPLOAD_ERR_NO_FILE ? 'Elige un archivo.' : 'La subida falló (código ' . $err . '). Inténtalo de nuevo.');
+                        redirectWith($err === UPLOAD_ERR_NO_FILE ? 'Elige un archivo.' : 'La subida falló (código ' . $err . '). Inténtalo de nuevo.', 's=contenido');
                     }
                     $size = (int) $f['size'];
                     if ($size > MediaRepository::maxBytes()) {
-                        redirectWith('El archivo supera el máximo de ' . formatBytes(MediaRepository::maxBytes()) . '.');
+                        redirectWith('El archivo supera el máximo de ' . formatBytes(MediaRepository::maxBytes()) . '.', 's=contenido');
                     }
                     if (MediaRepository::usedBytes($uid) + $size > MediaRepository::quotaBytes()) {
                         redirectWith('No queda espacio: tu límite es ' . formatBytes(MediaRepository::quotaBytes())
-                            . '. Borra algún archivo.');
+                            . '. Borra algún archivo.', 's=contenido');
                     }
                     $mime = MediaRepository::detectMime((string) $f['tmp_name']);
                     if ($mime === null) {
-                        redirectWith('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.');
+                        redirectWith('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.', 's=contenido');
                     }
                     MediaRepository::create($uid, (string) $f['tmp_name'], (string) $f['name'], $mime,
                         (int) param($_POST, 'seconds'), $all, $chosen);
-                    redirectWith('«' . $f['name'] . '» subido. Tus equipos lo descargarán en su próxima consulta.');
+                    redirectWith('«' . $f['name'] . '» subido. Tus equipos lo descargarán en su próxima consulta.', 's=contenido');
                 case 'media_update':
                     MediaRepository::update($mid, $uid, (int) param($_POST, 'seconds'), $all, $chosen);
-                    redirectWith('Cambios guardados.');
+                    redirectWith('Cambios guardados.', 's=contenido');
                 case 'media_up':
                 case 'media_down':
                     MediaRepository::move($mid, $uid, $action === 'media_up' ? -1 : 1);
-                    redirectWith('Orden cambiado.');
+                    redirectWith('Orden cambiado.', 's=contenido');
                 case 'media_delete':
                     MediaRepository::delete($mid, $uid);
-                    redirectWith('Archivo eliminado. Tus equipos dejarán de mostrarlo en su próxima consulta.');
+                    redirectWith('Archivo eliminado. Tus equipos dejarán de mostrarlo en su próxima consulta.', 's=contenido');
                 default:
-                    redirectWith('Acción desconocida.');
+                    redirectWith('Acción desconocida.', 's=contenido');
             }
         } else {
             redirectWith('Acción desconocida.');
@@ -263,6 +263,29 @@ try {
 }
 
 $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
+
+/*
+ * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | cuenta.
+ * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
+ */
+$sections = ['inicio' => 'Inicio', 'equipos' => 'Equipos', 'contenido' => 'Contenido', 'cuenta' => 'Mi cuenta'];
+$section = param($_GET, 's');
+if (!isset($sections[$section])) {
+    $section = 'inicio';
+}
+if ($mustChange) {
+    $section = 'cuenta';
+}
+// Resumen para Inicio
+$authorizedCount = 0;
+$mediaOnCount = 0;
+$onlineCount = 0;
+foreach ($devices as $d) {
+    $authorizedCount += $d['status'] === 'authorized' ? 1 : 0;
+    $mediaOnCount += ($d['status'] === 'authorized' && DeviceRepository::mediaEnabled($d)) ? 1 : 0;
+    $onlineCount += (!empty($d['online_at']) && time() - utcTs($d['online_at']) < $onlineTimeout) ? 1 : 0;
+}
+$quota = MediaRepository::quotaBytes();
 ?>
 <!doctype html>
 <html lang="es">
@@ -270,41 +293,78 @@ $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizad
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>Mi cuenta - Smart Pizarra</title>
+  <title><?= $user !== null ? h($sections[$section]) . ' - ' : '' ?>Mi cuenta - Smart Pizarra</title>
   <style nonce="<?= h($nonce) ?>">
 <?= baseStyles() ?>
 
-    main { max-width: 720px; }
     .block { margin-bottom: 12px; }
-    .narrow { max-width: 420px; }
+    .narrow { max-width: 440px; }
     .hint { color: var(--muted); font-size: .85rem; }
-    /* Contenido (mirror.html) */
+    .who { color: var(--muted); font-size: .9rem; }
+    /* Pestañas */
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; overflow-x: auto; }
+    .tabs a { padding: 10px 14px; color: var(--muted); text-decoration: none; border-bottom: 3px solid transparent;
+      white-space: nowrap; font-weight: 500; }
+    .tabs a.on { color: var(--accent); border-bottom-color: var(--accent); }
+    .tabs .count { font-size: .8rem; color: var(--muted); margin-left: 4px; }
+    /* Móvil: las 4 pestañas caben sin desplazar */
+    @media (max-width: 480px) {
+      .tabs { gap: 0; }
+      .tabs a { flex: 1 1 auto; padding: 10px 6px; font-size: .92rem; text-align: center; }
+      .tabs .count { margin-left: 2px; }
+    }
+    .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .section-head h2 { margin: 0; }
+    /* Inicio: tarjetas de resumen */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .stat { text-decoration: none; color: var(--text); }
+    .stat .num { font-size: 1.8rem; font-weight: 700; line-height: 1.1; }
+    .stat .lbl { color: var(--muted); font-size: .9rem; }
+    .stat:hover { border-color: var(--accent); }
+    progress { width: 100%; height: 10px; accent-color: var(--accent); }
+    /* Contenido */
     .targets { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
     .targets legend { font-size: .9rem; color: var(--muted); padding: 0 4px; }
     label.inline { display: inline-flex; gap: 6px; align-items: center; margin: 4px 14px 4px 0; color: var(--text); font-size: .95rem; }
     .device-checks { margin-left: 4px; }
-    .media { display: flex; gap: 12px; flex-wrap: wrap; }
+    .media { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
     .thumb { width: 160px; height: 90px; border-radius: 8px; background: #000; object-fit: contain; flex: 0 0 auto;
       display: flex; align-items: center; justify-content: center; color: #fff; font-size: .9rem; text-decoration: none; }
     .media-body { flex: 1 1 260px; min-width: 0; }
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
-    input[type=number] { width: 90px; padding: 7px 10px; font: inherit; color: var(--text);
+    .pos { display: inline-block; min-width: 1.8em; text-align: center; border-radius: 999px; background: var(--bg);
+      border: 1px solid var(--line); font-size: .85rem; margin-right: 6px; }
+    details.edit { margin-top: 8px; }
+    details.edit summary { cursor: pointer; color: var(--accent); font-size: .95rem; }
+    details.edit[open] summary { margin-bottom: 4px; }
+    .upload h2 { margin-bottom: 4px; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+    .row > div { flex: 1 1 200px; }
+    input[type=number] { width: 100px; padding: 9px 10px; font: inherit; color: var(--text);
       background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
-    input[type=file] { font: inherit; color: var(--text); max-width: 100%; }
+    input[type=file] { font: inherit; color: var(--text); width: 100%; max-width: 100%; overflow: hidden; }
+    .row > div { min-width: 0; }
+    .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; align-items: start; }
+    dl.data { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
+    dl.data dt { color: var(--muted); }
+    dl.data dd { margin: 0; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <h1>Smart Pizarra · Mi cuenta</h1>
+    <div>
+      <h1>Smart Pizarra · Mi cuenta</h1>
+      <?php if ($user !== null): ?><div class="who"><?= h($user['company']) ?> · <?= h($user['email']) ?></div><?php endif; ?>
+    </div>
     <?php if ($user !== null): ?>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     <?php endif; ?>
   </header>
-  <?php if ($flash): ?><div class="card flash"><?= h($flash) ?></div><?php endif; ?>
-  <?php if ($error): ?><div class="card error"><?= h($error) ?></div><?php endif; ?>
 
 <?php if ($user === null): ?>
+  <?php if ($flash): ?><div class="card flash"><?= h($flash) ?></div><?php endif; ?>
+  <?php if ($error): ?><div class="card error"><?= h($error) ?></div><?php endif; ?>
   <!-- Entrada con el email y la contraseña que entregó el administrador -->
   <form class="card narrow" method="post" autocomplete="on">
     <?= csrfField() ?>
@@ -319,117 +379,186 @@ $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizad
 <?php else: ?>
 
   <?php if (!$mustChange): ?>
-    <!-- Datos del usuario (los cambia el administrador) -->
+    <!-- Pestañas (enlaces normales: funcionan sin JavaScript) -->
+    <nav class="tabs" aria-label="Secciones">
+      <?php foreach ($sections as $key => $text): ?>
+        <a class="<?= $section === $key ? 'on' : '' ?>" href="?s=<?= h($key) ?>" <?= $section === $key ? 'aria-current="page"' : '' ?>>
+          <?= h($text) ?><?php if ($key === 'equipos'): ?><span class="count"><?= count($devices) ?></span><?php elseif ($key === 'contenido'): ?><span class="count"><?= count($mediaList) ?></span><?php endif; ?>
+        </a>
+      <?php endforeach; ?>
+    </nav>
+  <?php endif; ?>
+  <?php if ($flash): ?><div class="card flash"><?= h($flash) ?></div><?php endif; ?>
+  <?php if ($error): ?><div class="card error"><?= h($error) ?></div><?php endif; ?>
+
+  <?php if ($section === 'inicio'): ?>
+    <!-- ======================= INICIO: resumen ======================= -->
+    <div class="stats">
+      <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Equipos</div></a>
+      <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl">Autorizados</div></a>
+      <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl">En línea ahora</div></a>
+      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?></div><div class="lbl">Archivos de contenido</div></a>
+    </div>
     <section class="card block">
-      <h2><?= h($user['company']) ?></h2>
+      <h2>Espacio para contenido</h2>
+      <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
+      <div class="meta">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?></div>
+    </section>
+    <section class="card block">
+      <h2>¿Qué muestran mis pantallas?</h2>
       <div class="meta">
-        <?= h($user['email']) ?> · Tel. <?= h($user['phone']) ?><br>
-        <span class="hint">Para cambiar estos datos, autorizar o revocar un equipo, contacta al administrador.</span>
+        <?= $mediaOnCount ?> de <?= count($devices) ?> equipo(s) pueden mostrar tus imágenes y videos
+        (autorizados y con el contenido habilitado por el administrador).
+      </div>
+      <div class="actions">
+        <a class="btn" href="?s=contenido">Subir o cambiar contenido</a>
+        <a class="btn" href="?s=equipos">Ver mis equipos</a>
       </div>
     </section>
 
-    <!-- Equipos del usuario: solo lectura -->
-    <h2>Mis equipos (<?= count($devices) ?>)</h2>
+  <?php elseif ($section === 'equipos'): ?>
+    <!-- ======================= EQUIPOS (solo lectura) ======================= -->
+    <div class="section-head">
+      <h2>Mis equipos</h2>
+      <span class="hint">Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
+    </div>
     <?php if (!$devices): ?>
       <div class="card empty block">Todavía no tienes equipos asignados.</div>
     <?php endif; ?>
-    <?php foreach ($devices as $d): $st = (string) $d['status']; ?>
+    <?php foreach ($devices as $d): $st = (string) $d['status']; $mOn = DeviceRepository::mediaEnabled($d); ?>
       <section class="card device">
         <div class="device-head">
           <span>
             <?= $d['label'] ? '<span class="alias">' . h($d['label']) . '</span>' : '' ?>
             <span class="device-id"><?= h($d['device_id']) ?></span>
           </span>
-          <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
+          <span>
+            <span class="badge <?= $mOn ? 'authorized' : 'pending' ?>"><?= $mOn ? 'Contenido habilitado' : 'Contenido no habilitado' ?></span>
+            <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
+          </span>
         </div>
         <div class="meta">
           Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
-          <!-- Permiso de contenido: lo habilita el administrador -->
-          Contenido (imágenes y videos): <?= DeviceRepository::mediaEnabled($d) ? 'habilitado' : '<strong>no habilitado</strong> — pídeselo al administrador' ?><br>
           Registrado el <?= dateTag($d['created_at']) ?>
           · Arranques: <?= (int) ($d['boots'] ?? 0) ?>
           <?= !empty($d['last_boot_at']) ? '(último ' . dateTag($d['last_boot_at']) . ')' : '' ?>
           <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
+          <?= $mOn ? '' : '<br><span class="hint">Para mostrar tus imágenes y videos aquí, pide al administrador que habilite el contenido.</span>' ?>
         </div>
       </section>
     <?php endforeach; ?>
 
+  <?php elseif ($section === 'contenido'): ?>
     <!-- ============ CONTENIDO PARA LAS PANTALLAS (mirror.html) ============
          Cada equipo descarga UNA vez sus archivos y los muestra en
          carrusel, en este orden, desde su propia memoria. -->
-    <h2>Contenido de mis pantallas (<?= count($mediaList) ?>)</h2>
-    <p class="hint">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes(MediaRepository::quotaBytes())) ?>.
-      Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
-      Los videos se reproducen sin sonido. Los equipos se actualizan solos en un minuto aproximadamente.
-      Solo lo muestran los equipos autorizados con el contenido habilitado por el administrador.</p>
-    <form class="card block" method="post" enctype="multipart/form-data" id="uploadForm">
+    <form class="card block upload" method="post" enctype="multipart/form-data" id="uploadForm">
       <?= csrfField() ?>
+      <h2>Subir un archivo</h2>
+      <p class="hint">Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
+        Los videos se reproducen sin sonido.</p>
       <input type="hidden" name="action" value="media_upload">
-      <label for="file">Archivo</label>
-      <input type="file" id="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required>
-      <label for="seconds">Segundos en pantalla (solo imágenes; los videos duran lo suyo)</label>
-      <input type="number" id="seconds" name="seconds" value="10" min="<?= MediaRepository::MIN_SECONDS ?>" max="<?= MediaRepository::MAX_SECONDS ?>">
+      <div class="row">
+        <div>
+          <label for="file">Archivo</label>
+          <input type="file" id="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required>
+        </div>
+        <div>
+          <label for="seconds">Segundos en pantalla (solo imágenes)</label>
+          <input type="number" id="seconds" name="seconds" value="10" min="<?= MediaRepository::MIN_SECONDS ?>" max="<?= MediaRepository::MAX_SECONDS ?>">
+        </div>
+      </div>
       <?= targetFields($devices, true, [], 'new') ?>
       <button class="primary" type="submit" id="uploadBtn">Subir</button>
     </form>
 
+    <div class="section-head">
+      <h2>Mis archivos (<?= count($mediaList) ?>)</h2>
+      <span class="hint">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?> · se muestran en este orden</span>
+    </div>
+    <?php if (!$mediaList): ?>
+      <div class="card empty block">Todavía no has subido nada. Usa «Subir un archivo».</div>
+    <?php endif; ?>
     <?php foreach ($mediaList as $i => $m): $mid = (int) $m['id']; $isImg = $m['kind'] === 'image'; ?>
       <section class="card device">
         <div class="media">
           <?php if ($isImg): ?>
-            <img class="thumb" src="?file=<?= $mid ?>" alt="" loading="lazy">
+            <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?file=<?= $mid ?>" alt="" loading="lazy"></a>
           <?php else: ?>
             <a class="thumb" href="?file=<?= $mid ?>" target="_blank" rel="noopener">&#9654; Video</a>
           <?php endif; ?>
           <div class="media-body">
-            <div class="media-name"><?= ($i + 1) ?>. <?= h($m['original_name']) ?></div>
-            <div class="meta"><?= $isImg ? 'Imagen' : 'Video' ?> · <?= h(formatBytes((int) $m['size_bytes'])) ?>
-              · Subido el <?= dateTag($m['created_at']) ?></div>
-            <form method="post">
-              <?= csrfField() ?>
-              <input type="hidden" name="action" value="media_update"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-              <?php if ($isImg): ?>
-                <label for="s<?= $mid ?>">Segundos en pantalla</label>
-                <input type="number" id="s<?= $mid ?>" name="seconds" value="<?= (int) $m['seconds'] ?>" min="<?= MediaRepository::MIN_SECONDS ?>" max="<?= MediaRepository::MAX_SECONDS ?>">
-              <?php else: ?>
-                <input type="hidden" name="seconds" value="<?= (int) $m['seconds'] ?>">
-              <?php endif; ?>
-              <?= targetFields($devices, (int) $m['all_devices'] === 1, $m['devices'], 'm' . $mid . '-') ?>
-              <button type="submit">Guardar</button>
-            </form>
+            <div class="media-name"><span class="pos"><?= $i + 1 ?></span><?= h($m['original_name']) ?></div>
+            <div class="meta">
+              <?= $isImg ? 'Imagen · ' . (int) $m['seconds'] . ' s' : 'Video' ?> · <?= h(formatBytes((int) $m['size_bytes'])) ?>
+              · Subido el <?= dateTag($m['created_at']) ?><br>
+              Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos mis equipos' : count($m['devices']) . ' equipo(s)' ?>
+            </div>
+            <div class="actions">
+              <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_up"><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <button type="submit" <?= $i === 0 ? 'disabled' : '' ?> title="Mostrar antes">&#9650;</button></form>
+              <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_down"><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <button type="submit" <?= $i === count($mediaList) - 1 ? 'disabled' : '' ?> title="Mostrar después">&#9660;</button></form>
+              <form method="post" data-confirm="¿Eliminar «<?= h($m['original_name']) ?>»? Tus pantallas dejarán de mostrarlo."><?= csrfField() ?>
+                <input type="hidden" name="action" value="media_delete"><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <button class="bad" type="submit">Eliminar</button></form>
+            </div>
+            <!-- Edición plegada: duración y equipos -->
+            <details class="edit">
+              <summary>Editar duración y equipos</summary>
+              <form method="post">
+                <?= csrfField() ?>
+                <input type="hidden" name="action" value="media_update"><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <?php if ($isImg): ?>
+                  <label for="s<?= $mid ?>">Segundos en pantalla</label>
+                  <input type="number" id="s<?= $mid ?>" name="seconds" value="<?= (int) $m['seconds'] ?>" min="<?= MediaRepository::MIN_SECONDS ?>" max="<?= MediaRepository::MAX_SECONDS ?>">
+                <?php else: ?>
+                  <input type="hidden" name="seconds" value="<?= (int) $m['seconds'] ?>">
+                <?php endif; ?>
+                <?= targetFields($devices, (int) $m['all_devices'] === 1, $m['devices'], 'm' . $mid . '-') ?>
+                <button class="primary" type="submit">Guardar cambios</button>
+              </form>
+            </details>
           </div>
-        </div>
-        <div class="actions">
-          <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_up"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-            <button type="submit" <?= $i === 0 ? 'disabled' : '' ?>>&#9650; Antes</button></form>
-          <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_down"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-            <button type="submit" <?= $i === count($mediaList) - 1 ? 'disabled' : '' ?>>&#9660; Después</button></form>
-          <form method="post" data-confirm="¿Eliminar «<?= h($m['original_name']) ?>»? Tus pantallas dejarán de mostrarlo."><?= csrfField() ?>
-            <input type="hidden" name="action" value="media_delete"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-            <button class="bad" type="submit">Eliminar</button></form>
         </div>
       </section>
     <?php endforeach; ?>
-  <?php endif; ?>
 
-  <!-- Cambio de contraseña (obligatorio si es la temporal) -->
-  <form class="card block narrow" method="post" autocomplete="off">
-    <?= csrfField() ?>
-    <h2><?= $mustChange ? 'Elige tu contraseña' : 'Cambiar contraseña' ?></h2>
-    <?php if ($mustChange): ?>
-      <p class="hint">Estás usando una contraseña temporal. Cámbiala para ver tus equipos.</p>
-    <?php endif; ?>
-    <input type="hidden" name="action" value="password">
-    <!-- Campo oculto con el email: ayuda a los gestores de contraseñas -->
-    <input type="email" name="username" value="<?= h($user['email']) ?>" autocomplete="username" hidden>
-    <label for="current"><?= $mustChange ? 'Contraseña temporal' : 'Contraseña actual' ?></label>
-    <input type="password" id="current" name="current" autocomplete="current-password" required>
-    <label for="new">Contraseña nueva (mínimo <?= UserRepository::MIN_PASSWORD ?> caracteres)</label>
-    <input type="password" id="new" name="new" autocomplete="new-password" minlength="<?= UserRepository::MIN_PASSWORD ?>" required>
-    <label for="confirm">Repite la contraseña nueva</label>
-    <input type="password" id="confirm" name="confirm" autocomplete="new-password" minlength="<?= UserRepository::MIN_PASSWORD ?>" required>
-    <p><button class="primary" type="submit">Guardar contraseña</button></p>
-  </form>
+  <?php else: ?>
+    <!-- ======================= MI CUENTA ======================= -->
+    <div class="two">
+      <?php if (!$mustChange): ?>
+        <section class="card">
+          <h2>Mis datos</h2>
+          <dl class="data">
+            <dt>Empresa</dt><dd><?= h($user['company']) ?></dd>
+            <dt>Email</dt><dd><?= h($user['email']) ?></dd>
+            <dt>Teléfono</dt><dd><?= h($user['phone']) ?></dd>
+            <dt>Cliente desde</dt><dd><?= dateTag($user['created_at']) ?></dd>
+          </dl>
+          <p class="hint">Para cambiar estos datos, contacta al administrador.</p>
+        </section>
+      <?php endif; ?>
+      <!-- Cambio de contraseña (obligatorio si es la temporal) -->
+      <form class="card" method="post" autocomplete="off">
+        <?= csrfField() ?>
+        <h2><?= $mustChange ? 'Elige tu contraseña' : 'Cambiar contraseña' ?></h2>
+        <?php if ($mustChange): ?>
+          <p class="hint">Estás usando una contraseña temporal. Cámbiala para entrar a tu cuenta.</p>
+        <?php endif; ?>
+        <input type="hidden" name="action" value="password">
+        <!-- Campo oculto con el email: ayuda a los gestores de contraseñas -->
+        <input type="email" name="username" value="<?= h($user['email']) ?>" autocomplete="username" hidden>
+        <label for="current"><?= $mustChange ? 'Contraseña temporal' : 'Contraseña actual' ?></label>
+        <input type="password" id="current" name="current" autocomplete="current-password" required>
+        <label for="new">Contraseña nueva (mínimo <?= UserRepository::MIN_PASSWORD ?> caracteres)</label>
+        <input type="password" id="new" name="new" autocomplete="new-password" minlength="<?= UserRepository::MIN_PASSWORD ?>" required>
+        <label for="confirm">Repite la contraseña nueva</label>
+        <input type="password" id="confirm" name="confirm" autocomplete="new-password" minlength="<?= UserRepository::MIN_PASSWORD ?>" required>
+        <p><button class="primary" type="submit">Guardar contraseña</button></p>
+      </form>
+    </div>
+  <?php endif; ?>
 
   <script nonce="<?= h($nonce) ?>"><?= timeScript($onlineTimeout) ?></script>
   <script nonce="<?= h($nonce) ?>">
