@@ -24,10 +24,7 @@
  *
  *  RESPUESTAS (JSON)
  *    200 {"ok":true,"deviceId":"SP-...","status":"pending|authorized|revoked",
- *         "authorized":true|false,"group":"General","groupEnabled":true,
- *         "serverTime":"2026-11-06T12:00:00Z"}
- *        Grupo deshabilitado: "status":"revoked","authorized":false,
- *         "reason":"group_disabled" (igual que api/device.php).
+ *         "authorized":true|false,"serverTime":"2026-11-06T12:00:00Z"}
  *    400 {"ok":false,"error":"bad_request"}      faltan datos o formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el secreto no coincide
  *    404 {"ok":false,"error":"not_registered"}   el ID no está en la base
@@ -76,7 +73,7 @@ try {
 
     DeviceRepository::markOnline($id, $version, Http::clientIp());
 
-    // status/authorized ya tienen en cuenta el grupo (deshabilitado => revoked)
+    // status/authorized: los que fijó el administrador en el panel
     Http::json(array_merge(
         ['ok' => true, 'deviceId' => $id],
         DeviceRepository::authPayload($device),

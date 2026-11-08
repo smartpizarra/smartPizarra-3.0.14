@@ -5,23 +5,23 @@
 --  Se puede volver a importar: solo crea lo que falte.
 -- =====================================================================
 
--- Grupos de equipos. Todo equipo pertenece a UN grupo. Deshabilitar un
--- grupo quita la autorización a todos sus equipos a la vez (sin tocar el
--- estado de cada uno: al volver a habilitarlo recuperan el que tenían).
--- El grupo 1 ("General") es el grupo por defecto de los equipos nuevos y
--- no se puede borrar (sí renombrar y deshabilitar).
-CREATE TABLE IF NOT EXISTS sp_groups (
-  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  name          VARCHAR(60)  NOT NULL,          -- nombre visible (único)
-  enabled       TINYINT(1)   NOT NULL DEFAULT 1, -- 1 habilitado | 0 deshabilitado
-  created_at    DATETIME     NOT NULL,          -- fecha de creación (UTC)
-  enabled_at    DATETIME     NULL,              -- último cambio habilitado/deshabilitado (UTC)
+-- Usuarios (empresas) dueños de equipos. Los crea el administrador en
+-- el panel (email, teléfono, empresa); entran en /cuenta/ con su email
+-- y cambian su contraseña. Solo VEN sus equipos: autorizar y revocar
+-- (también "revocar todos" los de un usuario) lo hace el administrador.
+CREATE TABLE IF NOT EXISTS sp_users (
+  id                   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  email                VARCHAR(190) NOT NULL,          -- email de acceso (único, minúsculas)
+  phone                VARCHAR(30)  NOT NULL,          -- teléfono de contacto
+  company              VARCHAR(100) NOT NULL,          -- nombre de la empresa
+  password_hash        VARCHAR(255) NOT NULL,          -- password_hash() de PHP (nunca la contraseña)
+  must_change_password TINYINT(1)   NOT NULL DEFAULT 1, -- 1 = contraseña temporal del administrador
+  created_at           DATETIME     NOT NULL,          -- alta (UTC)
+  password_changed_at  DATETIME     NULL,              -- último cambio de contraseña (UTC)
+  last_login_at        DATETIME     NULL,              -- último acceso a /cuenta/ (UTC)
   PRIMARY KEY (id),
-  UNIQUE KEY uq_group_name (name)
+  UNIQUE KEY uq_user_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Grupo por defecto (id 1). INSERT IGNORE: no falla si ya existe.
-INSERT IGNORE INTO sp_groups (id, name, enabled, created_at) VALUES (1, 'General', 1, UTC_TIMESTAMP());
 
 -- Un registro por TV box. La crea/actualiza api/device.php y la
 -- autoriza o revoca el panel admin/.
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   device_id     VARCHAR(32)  NOT NULL,          -- "SP-XXXX-XXXX-XXXX" (localStorage smartpizarra.deviceId)
   secret_hash   CHAR(64)     NOT NULL,          -- SHA-256 del secreto del equipo (nunca el secreto)
   status        VARCHAR(10)  NOT NULL DEFAULT 'pending', -- pending | authorized | revoked
-  group_id      INT UNSIGNED NOT NULL DEFAULT 1, -- grupo (sp_groups.id); 1 = General
+  user_id       INT UNSIGNED NULL,              -- usuario dueño (sp_users.id); NULL = sin asignar
   label         VARCHAR(100) NULL,              -- ALIAS libre puesto desde el panel
   app_version   VARCHAR(20)  NULL,              -- versión que informó el equipo
   last_ip       VARCHAR(45)  NULL,              -- última IP pública vista
@@ -41,8 +41,9 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   KEY idx_status (status),
   KEY idx_last_seen (last_seen_at),
   KEY idx_online (online_at),
-  KEY idx_group (group_id),
-  CONSTRAINT fk_devices_group FOREIGN KEY (group_id) REFERENCES sp_groups (id)
+  KEY idx_user (user_id),
+  CONSTRAINT fk_devices_user FOREIGN KEY (user_id)
+    REFERENCES sp_users (id) ON DELETE SET NULL -- borrar el usuario deja sus equipos sin asignar
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Contadores para limitar abusos (registros nuevos e intentos de login

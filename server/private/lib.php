@@ -3,16 +3,16 @@
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
  * =====================================================================
- *  Lo usan public_html/api/device.php (los equipos) y
- *  public_html/admin/index.php (el panel). Va en private/, FUERA de
- *  public_html, junto a config.php.
+ *  Lo usan public_html/api/device.php y api/ping.php (los equipos),
+ *  public_html/admin/index.php (el panel) y public_html/cuenta/index.php
+ *  (los usuarios). Va en private/, FUERA de public_html, junto a config.php.
  *
  *  Clases:
  *    AppConfig         Lee config.php (o el archivo de SP_CONFIG, para pruebas).
  *    Database          Conexión PDO a MySQL (consultas preparadas siempre).
  *    RateLimiter       Límite de peticiones por "cubeta" (IP + motivo) y ventana.
  *    DeviceRepository  Alta, consulta y cambio de estado de los equipos.
- *    GroupRepository   Grupos de equipos (habilitar/deshabilitar por grupo).
+ *    UserRepository    Usuarios (empresas) dueños de equipos y sus contraseñas.
  *    BootLog           Historial de arranques (cada ejecución de loading.html).
  *    Http              IP del cliente, respuestas JSON y CORS.
  */
@@ -161,16 +161,16 @@ final class Database
         foreach ($pdo->query('SHOW TABLES') as $row) {
             $tables[] = (string) array_values($row)[0];
         }
-        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots', 'sp_groups'], $tables);
+        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots', 'sp_users'], $tables);
         if (in_array('sp_devices', $missing, true)) {
             return 'Faltan las tablas: importa server/schema.sql en phpMyAdmin (pestaña Importar) sobre esta base.';
         }
         if (in_array('sp_boots', $missing, true)) {
             return 'Falta la tabla sp_boots: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-boots.sql.';
         }
+        $usersSql = 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-08-users.sql.';
         if ($missing) {
-            return 'Faltan tablas (' . implode(', ', $missing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
-                . 'server/migrations/2026-11-07-groups.sql.';
+            return 'Faltan tablas (' . implode(', ', $missing) . '): ' . $usersSql;
         }
         $cols = [];
         foreach ($pdo->query('SHOW COLUMNS FROM sp_devices') as $row) {
@@ -179,14 +179,8 @@ final class Database
         if (!in_array('online_at', $cols, true)) {
             return 'Falta la columna online_at: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-online.sql.';
         }
-        if (!in_array('group_id', $cols, true)) {
-            return 'Falta la columna group_id: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-07-groups.sql.';
-        }
-        $stmt = $pdo->prepare('SELECT COUNT(*) FROM sp_groups WHERE id = ?');
-        $stmt->execute([GroupRepository::DEFAULT_ID]);
-        if ((int) $stmt->fetchColumn() === 0) {
-            return 'Falta el grupo por defecto (id 1): ejecuta en phpMyAdmin (pestaña SQL) '
-                . "INSERT INTO sp_groups (id, name, enabled, created_at) VALUES (1, 'General', 1, UTC_TIMESTAMP());";
+        if (!in_array('user_id', $cols, true)) {
+            return 'Falta la columna user_id: ' . $usersSql;
         }
         return null;
     }
@@ -259,82 +253,56 @@ final class DeviceRepository
     }
 
     /**
-     * Columnas del equipo + las de su grupo:
-     *   group_name     nombre del grupo
-     *   group_enabled  1 habilitado | 0 deshabilitado
+     * Columnas del equipo + las de su usuario (NULL si no está asignado):
+     *   user_company  nombre de la empresa
+     *   user_email    email del usuario
      */
-    private const SELECT_WITH_GROUP = 'SELECT d.*, g.name AS group_name, g.enabled AS group_enabled
-        FROM sp_devices d JOIN sp_groups g ON g.id = d.group_id';
+    private const SELECT_WITH_USER = 'SELECT d.*, u.company AS user_company, u.email AS user_email
+        FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id';
 
-    /** @return array<string,mixed>|null Equipo con los datos de su grupo. */
+    /** @return array<string,mixed>|null Equipo con los datos de su usuario. */
     public static function find(string $id): ?array
     {
-        $stmt = Database::pdo()->prepare(self::SELECT_WITH_GROUP . ' WHERE d.device_id = ?');
+        $stmt = Database::pdo()->prepare(self::SELECT_WITH_USER . ' WHERE d.device_id = ?');
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         return $row ?: null;
     }
 
-    /** Alta de un equipo nuevo en estado "pending", en el grupo por defecto. */
+    /** Alta de un equipo nuevo en estado "pending", sin usuario asignado. */
     public static function create(string $id, string $secret, ?string $version, string $ip): void
     {
         $now = Database::now();
         Database::pdo()->prepare(
-            'INSERT INTO sp_devices (device_id, secret_hash, status, group_id, app_version, last_ip, created_at, last_seen_at)
-             VALUES (?, ?, \'pending\', ?, ?, ?, ?, ?)'
-        )->execute([$id, hash('sha256', $secret), GroupRepository::DEFAULT_ID, $version, $ip, $now, $now]);
-    }
-
-    /**
-     * Estado que se comunica al equipo: el suyo, salvo que esté autorizado
-     * y su grupo deshabilitado; entonces se le trata como "revoked" SIN
-     * cambiar su estado guardado (al rehabilitar el grupo vuelve a estar
-     * autorizado).
-     * @param array<string,mixed> $device Fila de find().
-     */
-    public static function effectiveStatus(array $device): string
-    {
-        if ($device['status'] === 'authorized' && !self::groupEnabled($device)) {
-            return 'revoked';
-        }
-        return (string) $device['status'];
-    }
-
-    /** @param array<string,mixed> $device Fila de find()/search(). */
-    public static function groupEnabled(array $device): bool
-    {
-        return (int) ($device['group_enabled'] ?? 1) === 1;
+            'INSERT INTO sp_devices (device_id, secret_hash, status, app_version, last_ip, created_at, last_seen_at)
+             VALUES (?, ?, \'pending\', ?, ?, ?, ?)'
+        )->execute([$id, hash('sha256', $secret), $version, $ip, $now, $now]);
     }
 
     /**
      * Parte de la respuesta de api/device.php y api/ping.php sobre la
-     * autorización. "reason":"group_disabled" si lo que la impide es el grupo.
+     * autorización. Solo el administrador cambia el estado (por equipo o
+     * "revocar todos" los de un usuario), así que es el estado guardado.
      * @param array<string,mixed> $device Fila de find().
      * @return array<string,mixed>
      */
     public static function authPayload(array $device): array
     {
-        $status = self::effectiveStatus($device);
-        $out = [
-            'status' => $status,
-            'authorized' => $status === 'authorized',
-            'group' => (string) ($device['group_name'] ?? ''),
-            'groupEnabled' => self::groupEnabled($device),
-        ];
-        if ($device['status'] === 'authorized' && $status !== 'authorized') {
-            $out['reason'] = 'group_disabled';
-        }
-        return $out;
+        $status = (string) $device['status'];
+        return ['status' => $status, 'authorized' => $status === 'authorized'];
     }
 
-    /** Cambia el grupo del equipo. @return bool false si el grupo no existe. */
-    public static function setGroup(string $id, int $groupId): bool
+    /**
+     * Asigna el equipo a un usuario (null = sin asignar).
+     * @return bool false si el usuario no existe.
+     */
+    public static function setUser(string $id, ?int $userId): bool
     {
-        if (GroupRepository::find($groupId) === null) {
+        if ($userId !== null && UserRepository::find($userId) === null) {
             return false;
         }
-        Database::pdo()->prepare('UPDATE sp_devices SET group_id = ? WHERE device_id = ?')
-            ->execute([$groupId, $id]);
+        Database::pdo()->prepare('UPDATE sp_devices SET user_id = ? WHERE device_id = ?')
+            ->execute([$userId, $id]);
         return true;
     }
 
@@ -394,6 +362,22 @@ final class DeviceRepository
         return $stmt->rowCount() > 0;
     }
 
+    /**
+     * REVOCAR TODOS los equipos de un usuario (botón del panel). Pasan a
+     * "revoked" los que estaban autorizados o pendientes; cada equipo se
+     * entera en su próxima consulta. Se vuelven a autorizar uno a uno.
+     * @return int Equipos que cambiaron de estado.
+     */
+    public static function revokeAllForUser(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE sp_devices SET status = \'revoked\', status_at = ?
+             WHERE user_id = ? AND status <> \'revoked\''
+        );
+        $stmt->execute([Database::now(), $userId]);
+        return $stmt->rowCount();
+    }
+
     /** Guarda el alias del equipo ("" lo borra). Máx. 100 caracteres. */
     public static function setLabel(string $id, string $label): void
     {
@@ -407,13 +391,13 @@ final class DeviceRepository
     }
 
     /**
-     * Lista para el panel.
+     * Lista para el panel (y para la página del usuario con $userId > 0).
      * @param string|null $status Filtro de estado (null = todos).
-     * @param string      $search Texto a buscar en el ID o el alias.
-     * @param int|null    $groupId Filtro de grupo (null = todos).
-     * @return array<int,array<string,mixed>> Filas con group_name/group_enabled.
+     * @param string      $search Texto a buscar en el ID, el alias o la empresa/email del usuario.
+     * @param int|null    $userId Filtro de usuario: null = todos, 0 = sin asignar, >0 = ese usuario.
+     * @return array<int,array<string,mixed>> Filas con user_company/user_email, boots y last_boot_at.
      */
-    public static function search(?string $status, string $search, ?int $groupId = null): array
+    public static function search(?string $status, string $search, ?int $userId = null): array
     {
         $where = [];
         $args = [];
@@ -421,21 +405,22 @@ final class DeviceRepository
             $where[] = 'd.status = ?';
             $args[] = $status;
         }
-        if ($groupId !== null) {
-            $where[] = 'd.group_id = ?';
-            $args[] = $groupId;
+        if ($userId === 0) {
+            $where[] = 'd.user_id IS NULL';
+        } elseif ($userId !== null) {
+            $where[] = 'd.user_id = ?';
+            $args[] = $userId;
         }
         if ($search !== '') {
-            $where[] = '(d.device_id LIKE ? OR d.label LIKE ?)';
+            $where[] = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ?)';
             $like = '%' . addcslashes($search, '%_\\') . '%';
-            $args[] = $like;
-            $args[] = $like;
+            array_push($args, $like, $like, $like, $like);
         }
         // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
-        $sql = 'SELECT d.*, g.name AS group_name, g.enabled AS group_enabled,
+        $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email,
                   (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
                   (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
-                FROM sp_devices d JOIN sp_groups g ON g.id = d.group_id'
+                FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id'
             . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
             . ' ORDER BY (d.status = \'pending\') DESC, d.last_seen_at DESC LIMIT 500';
         $stmt = Database::pdo()->prepare($sql);
@@ -444,18 +429,15 @@ final class DeviceRepository
     }
 
     /**
-     * @param int|null $groupId Contar solo ese grupo (null = todos).
+     * @param int|null $userId Igual que en search(): null todos, 0 sin asignar, >0 ese usuario.
      * @return array<string,int> Cantidad de equipos por estado (+ "all").
      */
-    public static function counts(?int $groupId = null): array
+    public static function counts(?int $userId = null): array
     {
         $out = ['pending' => 0, 'authorized' => 0, 'revoked' => 0, 'all' => 0];
-        $stmt = Database::pdo()->prepare(
-            'SELECT status, COUNT(*) n FROM sp_devices'
-            . ($groupId !== null ? ' WHERE group_id = ?' : '')
-            . ' GROUP BY status'
-        );
-        $stmt->execute($groupId !== null ? [$groupId] : []);
+        $where = $userId === 0 ? ' WHERE user_id IS NULL' : ($userId !== null ? ' WHERE user_id = ?' : '');
+        $stmt = Database::pdo()->prepare('SELECT status, COUNT(*) n FROM sp_devices' . $where . ' GROUP BY status');
+        $stmt->execute($userId ? [$userId] : []);
         foreach ($stmt as $r) {
             $out[$r['status']] = (int) $r['n'];
             $out['all'] += (int) $r['n'];
@@ -464,96 +446,186 @@ final class DeviceRepository
     }
 }
 
-/** Grupos de equipos (tabla sp_groups). */
-final class GroupRepository
+/**
+ * Usuarios (clientes) dueños de equipos (tabla sp_users).
+ * Los crea el administrador con email, teléfono y empresa; el sistema
+ * genera una contraseña temporal que el usuario debe cambiar al entrar
+ * en /cuenta/. El usuario solo VE sus equipos: autorizar y revocar es
+ * cosa del administrador.
+ */
+final class UserRepository
 {
-    /** Grupo por defecto: equipos nuevos y los de un grupo borrado. No se borra. */
-    public const DEFAULT_ID = 1;
+    /** Longitud mínima de la contraseña que elige el usuario. */
+    public const MIN_PASSWORD = 8;
 
-    /** @return string|null Nombre limpio (1-60 caracteres) o null si no vale. */
-    public static function cleanName(string $name): ?string
+    /** @return string|null Email en minúsculas o null si no es válido (máx. 190). */
+    public static function cleanEmail(string $email): ?string
     {
-        $name = trim((string) preg_replace('/\s+/u', ' ', $name));
-        return ($name === '' || mb_strlen($name) > 60) ? null : $name;
+        $email = mb_strtolower(trim($email));
+        return (mb_strlen($email) <= 190 && filter_var($email, FILTER_VALIDATE_EMAIL)) ? $email : null;
+    }
+
+    /** @return string|null Teléfono (dígitos, espacios, + - ( ) .; 6-15 dígitos) o null. */
+    public static function cleanPhone(string $phone): ?string
+    {
+        $phone = trim((string) preg_replace('/\s+/', ' ', $phone));
+        if (!preg_match('/^\+?[0-9 ().-]{6,30}$/', $phone)) {
+            return null;
+        }
+        $digits = strlen((string) preg_replace('/\D/', '', $phone));
+        return ($digits >= 6 && $digits <= 15) ? $phone : null;
+    }
+
+    /** @return string|null Nombre de la empresa limpio (1-100 caracteres) o null. */
+    public static function cleanCompany(string $company): ?string
+    {
+        $company = trim((string) preg_replace('/\s+/u', ' ', $company));
+        return ($company === '' || mb_strlen($company) > 100) ? null : $company;
     }
 
     /** @return array<string,mixed>|null */
     public static function find(int $id): ?array
     {
-        $stmt = Database::pdo()->prepare('SELECT * FROM sp_groups WHERE id = ?');
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_users WHERE id = ?');
         $stmt->execute([$id]);
         $row = $stmt->fetch();
         return $row ?: null;
     }
 
+    /** @return array<string,mixed>|null */
+    public static function findByEmail(string $email): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_users WHERE email = ?');
+        $stmt->execute([mb_strtolower(trim($email))]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
     /**
-     * Todos los grupos (General primero, luego por nombre) con contadores:
-     * devices = equipos del grupo, authorized = de ellos, autorizados.
+     * Todos los usuarios (por empresa) con contadores:
+     * devices = equipos asignados, authorized = de ellos, autorizados.
      * @return array<int,array<string,mixed>>
      */
     public static function all(): array
     {
         return Database::pdo()->query(
-            'SELECT g.*,
-               (SELECT COUNT(*) FROM sp_devices d WHERE d.group_id = g.id) AS devices,
-               (SELECT COUNT(*) FROM sp_devices d WHERE d.group_id = g.id AND d.status = \'authorized\') AS authorized
-             FROM sp_groups g
-             ORDER BY (g.id = ' . self::DEFAULT_ID . ') DESC, g.name'
+            'SELECT u.*,
+               (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id) AS devices,
+               (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id AND d.status = \'authorized\') AS authorized
+             FROM sp_users u ORDER BY u.company, u.email'
         )->fetchAll();
     }
 
-    /** @return bool true si otro grupo (distinto de $exceptId) ya usa ese nombre. */
-    public static function nameTaken(string $name, int $exceptId = 0): bool
+    /** @return bool true si otro usuario (distinto de $exceptId) ya usa ese email. */
+    public static function emailTaken(string $email, int $exceptId = 0): bool
     {
-        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_groups WHERE name = ? AND id <> ?');
-        $stmt->execute([$name, $exceptId]);
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_users WHERE email = ? AND id <> ?');
+        $stmt->execute([$email, $exceptId]);
         return (int) $stmt->fetchColumn() > 0;
     }
 
-    /** Crea un grupo habilitado. @return int Su id. */
-    public static function create(string $name): int
+    /**
+     * Contraseña temporal aleatoria de 12 caracteres, sin letras/números
+     * que se confundan al dictarla (0/O, 1/l/I).
+     */
+    public static function generatePassword(): string
     {
-        $pdo = Database::pdo();
-        $pdo->prepare('INSERT INTO sp_groups (name, enabled, created_at) VALUES (?, 1, ?)')
-            ->execute([$name, Database::now()]);
-        return (int) $pdo->lastInsertId();
-    }
-
-    public static function rename(int $id, string $name): void
-    {
-        Database::pdo()->prepare('UPDATE sp_groups SET name = ? WHERE id = ?')->execute([$name, $id]);
-    }
-
-    /** Habilita o deshabilita el grupo (afecta a todos sus equipos al momento). */
-    public static function setEnabled(int $id, bool $enabled): void
-    {
-        Database::pdo()->prepare('UPDATE sp_groups SET enabled = ?, enabled_at = ? WHERE id = ?')
-            ->execute([$enabled ? 1 : 0, Database::now(), $id]);
+        $chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        $out = '';
+        for ($i = 0; $i < 12; $i++) {
+            $out .= $chars[random_int(0, strlen($chars) - 1)];
+        }
+        return $out;
     }
 
     /**
-     * Borra un grupo: sus equipos pasan al grupo por defecto conservando su
-     * estado. El grupo por defecto no se puede borrar.
-     * @return int Equipos movidos, o -1 si no se puede borrar.
+     * Crea un usuario con contraseña temporal (debe cambiarla al entrar).
+     * @return array{0:int,1:string} [id, contraseña temporal en claro para dársela al usuario]
      */
-    public static function delete(int $id): int
+    public static function create(string $email, string $phone, string $company): array
     {
-        if ($id === self::DEFAULT_ID) {
-            return -1;
-        }
+        $password = self::generatePassword();
+        $now = Database::now();
         $pdo = Database::pdo();
-        $pdo->beginTransaction();
-        try {
-            $stmt = $pdo->prepare('UPDATE sp_devices SET group_id = ? WHERE group_id = ?');
-            $stmt->execute([self::DEFAULT_ID, $id]);
-            $moved = $stmt->rowCount();
-            $pdo->prepare('DELETE FROM sp_groups WHERE id = ?')->execute([$id]);
-            $pdo->commit();
-            return $moved;
-        } catch (Throwable $e) {
-            $pdo->rollBack();
-            throw $e;
+        $pdo->prepare(
+            'INSERT INTO sp_users (email, phone, company, password_hash, must_change_password, created_at, password_changed_at)
+             VALUES (?, ?, ?, ?, 1, ?, ?)'
+        )->execute([$email, $phone, $company, password_hash($password, PASSWORD_DEFAULT), $now, $now]);
+        return [(int) $pdo->lastInsertId(), $password];
+    }
+
+    /** Cambia email, teléfono y empresa (desde el panel). */
+    public static function update(int $id, string $email, string $phone, string $company): void
+    {
+        Database::pdo()->prepare('UPDATE sp_users SET email = ?, phone = ?, company = ? WHERE id = ?')
+            ->execute([$email, $phone, $company, $id]);
+    }
+
+    /**
+     * Guarda una contraseña nueva. password_changed_at cambia, así que las
+     * sesiones abiertas del usuario con la contraseña anterior se cierran.
+     * @param bool $temporary true = la puso el administrador (obliga a cambiarla al entrar).
+     */
+    public static function setPassword(int $id, string $password, bool $temporary): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_users SET password_hash = ?, must_change_password = ?, password_changed_at = ? WHERE id = ?'
+        )->execute([password_hash($password, PASSWORD_DEFAULT), $temporary ? 1 : 0, Database::now(), $id]);
+    }
+
+    /** Restablece la contraseña (panel). @return string La nueva contraseña temporal. */
+    public static function resetPassword(int $id): string
+    {
+        $password = self::generatePassword();
+        self::setPassword($id, $password, true);
+        return $password;
+    }
+
+    /** @return string|null Motivo por el que la contraseña nueva no vale, o null si vale. */
+    public static function passwordProblem(string $password, string $email): ?string
+    {
+        if (mb_strlen($password) < self::MIN_PASSWORD) {
+            return 'La contraseña debe tener al menos ' . self::MIN_PASSWORD . ' caracteres.';
         }
+        if (mb_strlen($password) > 200) {
+            return 'La contraseña es demasiado larga.';
+        }
+        if (mb_strtolower($password) === mb_strtolower($email)) {
+            return 'La contraseña no puede ser tu email.';
+        }
+        return null;
+    }
+
+    /**
+     * Comprueba email + contraseña (login de /cuenta/).
+     * @return array<string,mixed>|null El usuario, o null si no coinciden.
+     */
+    public static function verifyLogin(string $email, string $password): ?array
+    {
+        $user = self::findByEmail($email);
+        if ($user === null) {
+            // Mismo tiempo de respuesta exista o no el email
+            password_verify($password, '$2y$10$try4q.NEPqMHJq1E2PTbq.nOlA/0lsyOZOZS7SR9yT.0wueRcm4u6');
+            return null;
+        }
+        return password_verify($password, (string) $user['password_hash']) ? $user : null;
+    }
+
+    /** Anota el último acceso correcto a /cuenta/. */
+    public static function markLogin(int $id): void
+    {
+        Database::pdo()->prepare('UPDATE sp_users SET last_login_at = ? WHERE id = ?')
+            ->execute([Database::now(), $id]);
+    }
+
+    /**
+     * Borra el usuario. Sus equipos quedan sin asignar CONSERVANDO su
+     * estado (ON DELETE SET NULL); para cortarles el servicio antes se usa
+     * "Revocar todos".
+     */
+    public static function delete(int $id): void
+    {
+        Database::pdo()->prepare('DELETE FROM sp_users WHERE id = ?')->execute([$id]);
     }
 }
 

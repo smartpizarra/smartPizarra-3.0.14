@@ -21,17 +21,18 @@ En el panel cada equipo muestra:
 
 Cada vez que se ejecuta `loading.html`, llama a `api/device.php` con `event=boot`. El servidor guarda una fila en `sp_boots` y actualiza la última conexión. `fingerprint.html` no envía `event`, así que sus consultas no cuentan como arranques. En `config.php`, `boot_history_days` (365) fija cuántos días se guardan y `boots_per_device_per_hour` (30) limita las filas si la app se reinicia en bucle. Al eliminar un equipo se borra también su historial.
 
-## Grupos
+## Usuarios
 
-Todo equipo pertenece a **un grupo**. Los equipos nuevos entran en el grupo por defecto, **General** (id 1), que se puede renombrar y deshabilitar pero no eliminar.
+El administrador crea **usuarios** (empresas) en el panel: botón *Usuarios* → *Nuevo usuario*, con **empresa, email y teléfono**. El sistema genera una **contraseña temporal** que se muestra una sola vez para entregársela. En la base solo se guarda su hash.
 
-- **Un solo equipo:** botón *Revocar* en su tarjeta. Vuelve con *Autorizar*.
-- **Un grupo entero:** botón *Grupos* → *Deshabilitar grupo*. Todos sus equipos autorizados dejan de estarlo en su próxima consulta. Su estado no cambia: al pulsar *Habilitar grupo* vuelven a funcionar sin tocarlos uno a uno. En la lista salen como *Autorizado · bloqueado por grupo*.
-- **Mover un equipo:** selector de grupo en su tarjeta (se guarda al elegirlo).
-- **Filtrar:** selector *Todos los grupos* junto al buscador, o *Ver equipos* en la vista de grupos.
-- **Eliminar un grupo:** sus equipos pasan a *General* con el estado que tenían. Si el grupo estaba deshabilitado, esos equipos vuelven a quedar autorizados.
+- **El usuario** entra en `https://smartpizarra.cloud/cuenta/` con su email y esa contraseña. La primera vez está obligado a cambiarla (pide la actual, mínimo 8 caracteres). Después ve sus datos y **sus equipos** (alias, ID, estado y última conexión) y puede cambiar su contraseña cuando quiera. **No puede autorizar ni revocar**.
+- **Asignar un equipo:** selector *Usuario* en la tarjeta del equipo (se guarda al elegirlo). Los equipos nuevos llegan *Sin asignar*.
+- **Filtrar:** selector *Todos los usuarios / Sin asignar / …* junto al buscador, o *Ver equipos* en la vista de usuarios. El buscador también encuentra por empresa o email.
+- **Revocar todos sus equipos:** botón en la ficha del usuario (y arriba de su lista de equipos). Pasa a *Revocado* cada equipo suyo, autorizado o pendiente, y cada uno lo detecta en su próxima consulta. Después se vuelven a autorizar uno a uno con *Autorizar*.
+- **Restablecer contraseña:** genera otra temporal. La anterior deja de funcionar y la sesión abierta del usuario se cierra.
+- **Eliminar usuario:** sus equipos quedan *Sin asignar* **con su estado actual**. Si quieres cortarles el servicio, primero usa *Revocar todos sus equipos*.
 
-Un equipo autorizado de un grupo deshabilitado recibe de `api/device.php` y `api/ping.php` `"status":"revoked","authorized":false,"reason":"group_disabled"`. Las páginas `.html` lo tratan como revocado sin cambios en su código. Ambas APIs devuelven además `"group"` (nombre) y `"groupEnabled"`.
+Las APIs (`api/device.php`, `api/ping.php`) devuelven el estado que fijó el administrador, sin campos nuevos. No hace falta cambiar la app ni las páginas `.html`.
 
 Conocer el ID no basta para consultar ni suplantar un equipo: hace falta el secreto. Si alguien registra un ID con otro secreto, la TV muestra un aviso de conflicto. Se resuelve eliminando ese registro en el panel.
 
@@ -60,13 +61,15 @@ server/
   schema.sql                  Tablas (se importan una vez)
   migrations/                 Cambios para una base ya creada (ver "Actualizar")
   private/                    FUERA de public_html
-    lib.php                   Código común
+    lib.php                   Código común (base de datos, equipos, usuarios)
+    web.php                   Utilidades comunes de admin/ y cuenta/ (sesión, CSRF, estilos)
     config.sample.php         Plantilla -> copiar como config.php
     .htaccess                 Bloquea el acceso web si acabara en public_html
   public_html/
     api/device.php            API para las TV box (páginas .html: registro y autorización)
     api/ping.php              Señal "online" de la app nativa Kodular
     admin/index.php           Panel de administración
+    cuenta/index.php          Página de los usuarios (ver sus equipos, cambiar contraseña)
 ```
 
 ## Instalación en Hostinger (una vez)
@@ -87,10 +90,11 @@ server/
 5. **Subir archivos.** Usa el _Administrador de archivos_ de Hostinger, con esta estructura:
    ```
    domains/smartpizarra.cloud/
-     private/       <- lib.php, config.php, .htaccess
+     private/       <- lib.php, web.php, config.php, .htaccess
      public_html/
        api/         <- device.php, ping.php
        admin/       <- index.php
+       cuenta/      <- index.php
    ```
    La carpeta `private/` va **al lado** de `public_html`, no dentro.
 6. **PHP.** Comprueba en hPanel (_Avanzado → Configuración de PHP_) que la versión es 8.1 o superior.
@@ -112,10 +116,10 @@ Para el historial de arranques (si la tabla `sp_boots` no existe todavía):
 
 Sube primero la tabla y después `lib.php`: el panel la consulta y sin ella da error.
 
-Para los grupos (si la tabla `sp_groups` no existe todavía):
+Para los usuarios (si la tabla `sp_users` no existe todavía):
 
-1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-07-groups.sql`, después de las dos anteriores. Todos los equipos quedan en el grupo *General*. Si sale *Duplicate column name 'group_id'*, ya estaba hecha.
-2. Sube `lib.php`, `api/device.php`, `api/ping.php` y `admin/index.php`. No hace falta cambiar nada en la app ni en las páginas `.html`.
+1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-08-users.sql`, después de las dos anteriores. Todos los equipos quedan *Sin asignar*. Si sale _Duplicate column name 'user_id'_, ya estaba hecha. Si llegaste a ejecutar la antigua migración de grupos, ejecuta también las 3 líneas comentadas del final del archivo.
+2. Sube `private/lib.php`, `private/web.php` (nuevo), `api/device.php`, `api/ping.php`, `admin/index.php` y la carpeta nueva `cuenta/` con su `index.php`.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
