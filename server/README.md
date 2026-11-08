@@ -37,6 +37,26 @@ Las APIs (`api/device.php`, `api/ping.php`) devuelven el estado que fijó el adm
 
 Conocer el ID no basta para consultar ni suplantar un equipo: hace falta el secreto. Si alguien registra un ID con otro secreto, la TV muestra un aviso de conflicto. Se resuelve eliminando ese registro en el panel.
 
+## Contenido para las pantallas (mirror.html)
+
+Cada usuario sube **imágenes** (JPG, PNG, WEBP, GIF) y **videos** (MP4 H.264 o WEBM) en `https://smartpizarra.cloud/cuenta/`, sección *Contenido de mis pantallas*:
+
+- **Mostrar en:** *Todos mis equipos* (incluye los que se le asignen después) o *Solo en:* los equipos marcados.
+- **Orden:** botones *▲ Antes* / *▼ Después*. Las **imágenes** duran los segundos indicados (10 por defecto) y los **videos** lo que duren, siempre **sin sonido**.
+- **Eliminar:** las pantallas lo quitan en su próxima consulta.
+
+`mirror.html`, en la TV:
+
+- consulta `api/media.php` cada **60 s**. Si nada cambió, la respuesta ocupa unos bytes (`"unchanged":true`);
+- descarga **una sola vez** cada archivo nuevo y lo guarda en el propio equipo (Cache Storage del WebView);
+- reproduce siempre desde ahí y borra lo retirado.
+
+Sin internet sigue mostrando lo guardado. Si el equipo no está autorizado (pendiente o revocado), muestra un aviso con su ID en lugar del contenido. Lo descargado se conserva y vuelve a verse al autorizarlo, sin descargarlo otra vez.
+
+Los archivos se guardan en `private/media/` (fuera de `public_html`). Solo los entregan `api/media.php`, a un equipo autorizado con su secreto, y `/cuenta/`, a su dueño con sesión. Al eliminar un usuario se borran sus archivos. Los límites (`media_max_mb`, `media_user_quota_mb`, …) están en `config.sample.php`. Para subir videos grandes, sube también `upload_max_filesize` y `post_max_size` en *hPanel → Avanzado → Configuración de PHP*.
+
+**API (`POST api/media.php`, form-urlencoded):** `deviceId`, `secret` y `action=list` (opcional `rev`) o `action=file&id=N`. La lista devuelve `{"ok":true,"authorized":true,"revision":"…","items":[{"id","kind","mime","size","sha256","seconds"}]}`.
+
 ## Señal "online" desde la app nativa de Kodular
 
 Solo la envía la app nativa (no las páginas `.html`). La app toma `deviceId` y `deviceSecret` del JSON que `loading.html` le manda por `WebViewString` y los guarda (TinyDB o variables globales).
@@ -69,8 +89,9 @@ server/
   public_html/
     api/device.php            API para las TV box (páginas .html: registro y autorización)
     api/ping.php              Señal "online" de la app nativa Kodular
+    api/media.php             Lista y descarga de imágenes/videos para mirror.html
     admin/index.php           Panel de administración
-    cuenta/index.php          Página de los usuarios (ver sus equipos, cambiar contraseña)
+    cuenta/index.php          Página de los usuarios (equipos, contenido de mirror.html, contraseña)
 ```
 
 ## Instalación en Hostinger (una vez)
@@ -93,7 +114,7 @@ server/
    domains/smartpizarra.cloud/
      private/       <- lib.php, web.php, config.php, .htaccess
      public_html/
-       api/         <- device.php, ping.php
+       api/         <- device.php, ping.php, media.php
        admin/       <- index.php
        cuenta/      <- index.php
    ```
@@ -121,6 +142,13 @@ Para los usuarios (si la tabla `sp_users` no existe todavía):
 
 1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-08-users.sql`, después de las dos anteriores. Todos los equipos quedan *Sin asignar*. Si sale _Duplicate column name 'user_id'_, ya estaba hecha. Si llegaste a ejecutar la antigua migración de grupos, ejecuta también las 3 líneas comentadas del final del archivo.
 2. Sube `private/lib.php`, `private/web.php` (nuevo), `api/device.php`, `api/ping.php`, `admin/index.php` y la carpeta nueva `cuenta/` con su `index.php`.
+
+Para el contenido de `mirror.html` (si la tabla `sp_media` no existe todavía):
+
+1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-08-media.sql`, después de la de usuarios. Se puede repetir sin riesgo.
+2. Sube `private/lib.php`, `api/media.php` (nuevo) y `cuenta/index.php`. La carpeta `private/media/` se crea sola al subir el primer archivo. Si no tiene permiso, créala a mano junto a `lib.php`.
+3. Opcional: añade a `config.php` las claves `media_*` de `config.sample.php` y ajusta `upload_max_filesize` / `post_max_size` de PHP.
+4. Sube `mirror.html` y el `loading.html` actual a los assets de Kodular. `loading.html` crea `smartpizarra.mirror.scale`, la API y las credenciales del equipo.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 

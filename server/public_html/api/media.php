@@ -1,0 +1,109 @@
+<?php
+/*
+ * =====================================================================
+ *  SMART PIZARRA - API DE CONTENIDO (imágenes y videos) PARA mirror.html
+ *  URL: https://smartpizarra.cloud/api/media.php
+ * =====================================================================
+ *  mirror.html (en la TV) pregunta cada cierto tiempo qué debe mostrar,
+ *  descarga UNA sola vez cada archivo nuevo, lo guarda en el propio
+ *  equipo y lo reproduce desde ahí. Al servidor solo le llegan consultas
+ *  pequeñas (con "rev" casi siempre responde "unchanged") y una descarga
+ *  por archivo y equipo.
+ *
+ *  PETICIÓN (POST, application/x-www-form-urlencoded: sin verificación
+ *  previa CORS desde el WebView)
+ *    deviceId, secret   igual que api/device.php (localStorage del equipo)
+ *    action=list        lista de lo que debe mostrar el equipo
+ *      rev            (opcional) la "revision" que ya tiene el equipo
+ *    action=file        descarga un archivo
+ *      id             id del archivo (de la lista)
+ *
+ *  SOLO equipos AUTORIZADOS reciben contenido. Un equipo pendiente o
+ *  revocado recibe la lista vacía (y su estado) para dejar de mostrarlo.
+ *  Los archivos son los del USUARIO dueño del equipo que van a todos sus
+ *  equipos o a ese equipo en concreto (se eligen en /cuenta/).
+ *
+ *  RESPUESTAS
+ *    list 200 {"ok":true,"status":"authorized","authorized":true,
+ *              "revision":"<40 hex>","items":[{"id":7,"kind":"image|video",
+ *              "mime":"image/jpeg","size":12345,"sha256":"<64 hex>","seconds":10}, ...]}
+ *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide
+ *         200 {"ok":true,"status":"pending|revoked","authorized":false,"revision":"","items":[]}
+ *    file 200 el archivo (Content-Type del archivo, Content-Length)
+ *    400 bad_request · 403 secret_mismatch | not_authorized · 404 not_registered |
+ *    not_found · 405 method · 429 rate_limited (descargas por equipo y hora) · 500 server
+ */
+
+declare(strict_types=1);
+
+require __DIR__ . '/../../private/lib.php';
+
+try {
+    Http::cors();
+    if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+        Http::json(['ok' => false, 'error' => 'method'], 405);
+    }
+
+    $id = strtoupper(trim((string) ($_POST['deviceId'] ?? '')));
+    $secret = strtolower(trim((string) ($_POST['secret'] ?? '')));
+    $action = (string) ($_POST['action'] ?? 'list');
+    if (!DeviceRepository::isValidId($id) || !DeviceRepository::isValidSecret($secret)
+        || !in_array($action, ['list', 'file'], true)) {
+        Http::json(['ok' => false, 'error' => 'bad_request'], 400);
+    }
+
+    // El equipo debe existir (lo registra api/device.php) y tener su secreto
+    $device = DeviceRepository::find($id);
+    if ($device === null) {
+        Http::json(['ok' => false, 'error' => 'not_registered'], 404);
+    }
+    if (!DeviceRepository::secretMatches($device, $secret)) {
+        Http::json(['ok' => false, 'error' => 'secret_mismatch'], 403);
+    }
+    $auth = DeviceRepository::authPayload($device);
+
+    if ($action === 'file') {
+        if (!$auth['authorized']) {
+            Http::json(['ok' => false, 'error' => 'not_authorized'], 403);
+        }
+        // Límite de descargas por equipo y hora: protege el ancho de banda
+        // si un equipo entra en bucle (lo normal es 1 descarga por archivo)
+        $perHour = (int) (AppConfig::get()['media_downloads_per_device_per_hour'] ?? 120);
+        if (!RateLimiter::hit('media:' . $id, $perHour, 3600)) {
+            Http::json(['ok' => false, 'error' => 'rate_limited'], 429);
+        }
+        $media = MediaRepository::findForDevice((int) ($_POST['id'] ?? 0), $id);
+        if ($media === null) {
+            Http::json(['ok' => false, 'error' => 'not_found'], 404);
+        }
+        MediaRepository::send($media);
+    }
+
+    // action=list: anota la consulta (como api/device.php) y responde la lista
+    DeviceRepository::touch($id, null, Http::clientIp());
+    $items = [];
+    if ($auth['authorized']) {
+        foreach (MediaRepository::forDevice($id) as $m) {
+            $items[] = [
+                'id' => (int) $m['id'],
+                'kind' => $m['kind'],
+                'mime' => $m['mime'],
+                'size' => (int) $m['size_bytes'],
+                'sha256' => $m['sha256'],
+                'seconds' => (int) $m['seconds'],
+            ];
+        }
+    }
+    // revision: huella de la lista; si el equipo ya la tiene no se reenvía
+    $revision = $auth['authorized'] ? sha1(json_encode($items)) : '';
+    $out = ['ok' => true, 'deviceId' => $id] + $auth + ['revision' => $revision];
+    if ($revision !== '' && hash_equals($revision, (string) ($_POST['rev'] ?? ''))) {
+        $out['unchanged'] = true;
+    } else {
+        $out['items'] = $items;
+    }
+    Http::json($out);
+} catch (Throwable $e) {
+    error_log('smartpizarra api/media.php: ' . $e->getMessage());
+    Http::json(['ok' => false, 'error' => 'server'], 500);
+}

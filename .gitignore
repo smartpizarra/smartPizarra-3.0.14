@@ -1,2 +1,5 @@
 # Configuración real del servidor (contraseñas de la base y del panel): nunca a git
 server/private/config.php
+
+# Archivos subidos por los usuarios (imágenes/videos de mirror.html): nunca a git
+server/private/media/

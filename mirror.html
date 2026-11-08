@@ -1,44 +1,58 @@
 <!doctype html>
 <!--
 =====================================================================
-  SMART PIZARRA - PANTALLA "MIRROR" (por ahora: "Hola mundo" animado)
+  SMART PIZARRA - PANTALLA "MIRROR": IMÁGENES Y VIDEOS DEL USUARIO
 =====================================================================
   QUE HACE
-  Muestra un "Hola mundo" animado. Funciona como las demás pantallas:
-  toma su orientación, idioma y tamaño de localStorage.
+  Muestra en carrusel (en orden) las imágenes y videos que el usuario
+  dueño de este equipo subió en https://smartpizarra.cloud/cuenta/ y
+  asignó a este equipo. Cada archivo se descarga UNA sola vez, se guarda
+  en el propio equipo (Cache Storage del WebView) y se reproduce SIEMPRE
+  desde ahí: el servidor solo recibe una consulta pequeña cada
+  SYNC.everyMs (60 s) para saber si hay archivos nuevos o retirados.
 
-  SETTINGS (localStorage) - SOLO SE LEEN, ESTA PÁGINA NO ESCRIBE NADA
-  Los crea loading.html con sus valores por defecto (CONFIG.settings y
-  PAGES, entrada "mirror").
-    "smartpizarra.orientation"    0/90/180/270  GLOBAL: gira la página
-    "smartpizarra.language"       es | en       GLOBAL: idioma del texto
-    "smartpizarra.mirror.scale"   10 a 300 (%)  tamaño de ESTA pantalla
-                                                (100 % = 90 % de la pantalla)
+  CICLO
+    1. sync(): POST api/media.php action=list (deviceId + secret + "rev").
+       Si la lista no cambió el servidor responde "unchanged" (unos bytes).
+    2. Si cambió: guarda la lista (smartpizarra.mirror.manifest), descarga
+       uno a uno los archivos que falten (action=file) y borra del equipo
+       los que ya no están en la lista.
+    3. player: muestra los archivos YA descargados, en orden. Imagen =
+       sus "seconds"; video = hasta que termina (sin sonido: el WebView no
+       permite reproducción automática con sonido).
+  Sin internet o sin respuesta: sigue mostrando lo guardado.
+  Equipo NO autorizado (pendiente / revocado / otro secreto): deja de
+  mostrar y enseña un aviso con el ID; lo descargado se conserva y se
+  vuelve a mostrar al autorizarlo.
+
+  SETTINGS (localStorage). Los crea loading.html.
+    Lee:  "smartpizarra.orientation"   0/90/180/270  GLOBAL: gira la página
+          "smartpizarra.language"      es | en       GLOBAL: idioma de los avisos
+          "smartpizarra.mirror.scale"  10 a 300 (%)  tamaño (100 % = pantalla completa)
+          "smartpizarra.deviceId" / ".deviceSecret" / ".apiUrl"   para hablar con el servidor
+          (la API de contenido es la misma ruta que apiUrl con media.php
+           en lugar de device.php)
+    Escribe: "smartpizarra.authorized"        "1" | "0" (respuesta del servidor,
+                                              como las demás páginas)
+             "smartpizarra.mirror.manifest"   última lista recibida (JSON)
   Para cambiar el tamaño: updateSettings('{"page":"mirror","scale":95}')
-  en loading.html, o su default en PAGES de loading.html.
-  Si otra página los cambia, esta los vuelve a leer cada 1 s, al
-  mostrarse y con el evento "storage".
-  Si una clave no existe (loading.html nunca se abrió): orientación 0°,
-  tamaño 100 % e idioma DISPLAY_LANGUAGE.
+  en loading.html. Los settings se releen cada 1 s.
 
-  ANIMACIÓN (pensada para el TV box: CPU baja)
-  - Entrada: las letras caen una a una con rebote (~2 s) y aparece el
-    subtítulo.
-  - Después, cada ANIMATION.waveEveryMs (8 s) pasa UNA ola por las
-    letras (~1,3 s) y la pantalla queda QUIETA hasta la siguiente.
-  - Todo lo mueve UN reloj JS a ANIMATION.fps (20 fps) solo mientras hay
-    movimiento: en el TV box cada fotograma cuesta ~4-5 % de un núcleo y
-    una animación CSS va a 60 fps (medido: la ola en CSS ~100-120 %).
-  - Solo transform y opacity; will-change solo durante el movimiento.
-    Al cambiar de idioma la entrada se repite. Parada en segundo plano.
+  RENDIMIENTO (TV box, Android WebView 101)
+  - Sin animaciones ni transiciones: cambio directo de un archivo al
+    siguiente (la imagen se decodifica ANTES de cambiarla: sin parpadeo).
+    Con una sola imagen la pantalla no se redibuja nunca.
+  - Videos con el decodificador del equipo (MP4 H.264 recomendado,
+    1080p o menos).
+  - Descargas de una en una; se para todo en segundo plano.
+  - JavaScript ES5 (var / function) + Promise / fetch / Cache Storage
+    (requiere origen seguro: http://localhost lo es).
 
-  COMPATIBILIDAD: Android WebView 101 en TV box. JavaScript ES5
-  (var / function), sin librerías externas.
+  NO envía mensajes a la app.
 
-  NO envía mensajes a la app (no hay contrato JSON todavía).
-
-  COMO PROBAR EN UN NAVEGADOR DE PC
-    Abrir antes loading.html en el mismo navegador (crea los settings).
+  FUNCIONES PÚBLICAS (para pruebas o para la app)
+    mirrorSync()    fuerza una consulta al servidor ahora.
+    mirrorStatus()  texto JSON con el estado (autorización, lista, descargados).
 =====================================================================
 -->
 <html lang="es">
@@ -50,9 +64,6 @@
     />
     <title>Mirror - Smart Pizarra</title>
     <style>
-      /* ==============================================================
-         1. BASE
-         ============================================================== */
       * {
         margin: 0;
         padding: 0;
@@ -64,13 +75,9 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
-        background-color: #141a5e;
-      }
-
-      body {
-        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
-        background: linear-gradient(135deg, #141a5e 0%, #251570 100%);
+        background: #000;
         color: #fff;
+        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
       }
 
       /* #stage: se rota 0/90/180/270 (ancho y alto se intercambian a 90/270) */
@@ -82,77 +89,88 @@
         display: flex;
         justify-content: center;
         align-items: center;
+        background: #000;
       }
 
-      /* #scaler: el JS lo escala para que la tarjeta ocupe FIT_RATIO de la
-         pantalla. Sin ancho fijo y sin encogerse: mide su tamaño natural. */
-      #scaler {
-        display: flex;
-        justify-content: center;
+      /* #frame: zona del contenido = pantalla × escala (lo calcula el JS) */
+      #frame {
+        position: relative;
         flex-shrink: 0;
-        transform-origin: 50% 50%;
+        overflow: hidden;
+        background: #000;
       }
 
-      /* ==============================================================
-         2. TARJETA Y TEXTO
-         ============================================================== */
-      #card {
-        padding: 40px 60px;
+      /* Imagen o video: ocupa el marco sin deformarse (bandas negras) */
+      #frame img,
+      #frame video {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        background: #000;
+      }
+
+      /* Aviso (sin contenido / no autorizado / descargando). El tamaño de
+         letra lo fija el JS según la pantalla. */
+      #notice {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
         text-align: center;
-        white-space: nowrap;
+        padding: 5%;
+        background: linear-gradient(135deg, #141a5e 0%, #251570 100%);
       }
 
-      /* Título: cada letra es un <span class="letter"> creado por el JS */
-      .title {
-        font-size: 96px;
-        font-weight: 800;
-        line-height: 1.2;
-        letter-spacing: 2px;
+      #notice.show {
+        display: flex;
       }
 
-      /* Cada letra la mueve el reloj JS (sección 4): transform/opacity en
-         línea. Estado inicial: invisible, arriba (antes de la entrada). */
-      .letter {
-        display: inline-block;
-        opacity: 0;
-        transform: translateY(-120px);
+      #notice .title {
+        font-size: 1.6em;
+        font-weight: 700;
+        margin-bottom: 0.6em;
       }
 
-      .letter.space {
-        width: 0.35em;
+      #notice .title.bad {
+        color: #ff8a80;
       }
 
-      /* Colores de las letras (se reparten en orden) */
-      .c0 { color: #ff6b6b; }
-      .c1 { color: #feca57; }
-      .c2 { color: #48dbfb; }
-      .c3 { color: #1dd1a1; }
-      .c4 { color: #ff9ff3; }
+      #notice .text {
+        color: rgba(255, 255, 255, 0.8);
+        margin-bottom: 0.8em;
+        max-width: 30em;
+      }
 
-      /* Subtítulo: también lo aparece el reloj JS (sin transiciones CSS) */
-      .subtitle {
-        margin-top: 16px;
-        font-size: 30px;
-        color: rgba(255, 255, 255, 0.75);
-        opacity: 0;
+      #notice .id {
+        font-family: ui-monospace, Consolas, monospace;
+        color: #48dbfb;
+        letter-spacing: 0.05em;
       }
     </style>
   </head>
   <body>
-    <!-- #stage  => se rota según la orientación global
-         #scaler => ajusta la tarjeta a la pantalla y aplica su escala -->
+    <!-- #stage => se rota según la orientación global
+         #frame => zona del contenido (escala) con la imagen/video actual -->
     <div id="stage">
-      <div id="scaler">
-        <div id="card">
-          <!-- Las letras las crea el JS a partir del texto del idioma -->
-          <div class="title" id="title"></div>
-          <div class="subtitle" id="subtitle"></div>
+      <div id="frame">
+        <div id="notice">
+          <div class="title" id="noticeTitle"></div>
+          <div class="text" id="noticeText"></div>
+          <div class="id" id="noticeId"></div>
         </div>
       </div>
     </div>
 
     <script>
-      // Todo dentro de una IIFE para no crear globales por accidente.
+      // Todo dentro de una IIFE; lo público se publica en window.*
       (function () {
         "use strict";
 
@@ -168,70 +186,116 @@
           orientation: "smartpizarra.orientation", // GLOBAL
           language: "smartpizarra.language", // GLOBAL
           ownScale: "smartpizarra." + THIS_PAGE + ".scale", // tamaño de esta pantalla
+          deviceId: "smartpizarra.deviceId",
+          deviceSecret: "smartpizarra.deviceSecret", // nunca se muestra
+          apiUrl: "smartpizarra.apiUrl", // https://smartpizarra.cloud/api/device.php
+          authorized: "smartpizarra.authorized", // "1" | "0" (la escribe esta página también)
+          manifest: "smartpizarra.mirror.manifest", // última lista del servidor (JSON)
         };
 
-        /** Orientaciones permitidas (grados). */
         var ORIENTATIONS = [0, 90, 180, 270];
-
-        /** Límites de las escalas (%), iguales a loading.html. */
         var SCALE_LIMITS = { min: 10, max: 300 };
 
-        /** Fracción de la pantalla (girada) que ocupa la tarjeta con escala 100 %. */
-        var FIT_RATIO = 0.9;
-
-        /** Cada cuántos ms se vuelve a leer localStorage y el tamaño de la ventana. */
+        /** Cada cuántos ms se releen los settings y el tamaño de la ventana. */
         var WATCH_MS = 1000;
 
-        /**
-         * Animación. Todo lo mueve UN reloj JS a ANIMATION.fps (en el TV box
-         * cada fotograma cuesta ~4-5 % de un núcleo; CSS iría a 60 fps).
-         * Entre olas el reloj se para: en reposo no se dibuja nada.
-         */
-        var ANIMATION = {
-          fps: 20, // fotogramas por segundo mientras algo se mueve
-          dropDelayMs: 90, // entrada: cada letra cae 90 ms después de la anterior
-          dropMs: 700, // entrada: duración de la caída de una letra
-          dropFromPx: -120, // entrada: altura desde la que cae
-          subtitleMs: 500, // entrada: fundido del subtítulo (al final)
-          waveEveryMs: 8000, // pausa entre olas
-          waveStepMs: 70, // ola: retraso entre letras
-          waveMs: 600, // ola: duración del salto de una letra
-          waveHeightPx: 24, // ola: altura del salto
-          waveGrow: 0.12, // ola: aumento de tamaño en lo alto (12 %)
+        /** Comunicación con el servidor. */
+        var SYNC = {
+          everyMs: 60000, // consulta normal (autorizado)
+          unauthorizedMs: 30000, // pendiente/revocado: para enterarse antes de la autorización
+          errorMs: 60000, // sin internet / error: reintento
+          listTimeoutMs: 10000, // tiempo máximo de la consulta de la lista
+          downloadBaseMs: 60000, // tiempo máximo de una descarga: base...
+          downloadBytesPerMs: 25, // ...+ tamaño / 25 KB/s (conexión muy lenta)
+          storageMargin: 0.9, // no llenar más del 90 % de la cuota del WebView
         };
+
+        /** Nombre del almacén (Cache Storage) y prefijo de las claves. */
+        var CACHE_NAME = "smartpizarra-media-v1";
+        var CACHE_PREFIX = "/__smartpizarra_media/";
+
+        /** Seguridad del reproductor. */
+        var PLAYER = {
+          minImageMs: 3000, // duración mínima de una imagen
+          videoExtraMs: 5000, // margen sobre la duración del video antes de saltarlo
+          videoMaxMs: 3600000, // tope si el video no informa su duración (1 h)
+          errorSkipMs: 2000, // pausa antes de saltar un archivo que falla
+        };
+
+        /** GIF negro de 1x1 (póster de los videos). */
+        var BLACK_PIXEL = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAkQBADs=";
 
         /** Textos por idioma (claves de idioma iguales a I18N de loading.html). */
         var I18N = {
           es: {
             title: "Mirror - Smart Pizarra",
-            hello: "¡Hola mundo!",
-            subtitle: "Smart Pizarra",
+            pending: "Equipo pendiente de autorización",
+            revoked: "Autorización revocada",
+            conflict: "Este ID está registrado con otro equipo",
+            notRegistered: "Equipo no registrado",
+            unauthorizedText: "El contenido se mostrará cuando el administrador autorice este equipo.",
+            notRegisteredText: "Abre la pantalla de inicio de la aplicación para registrarlo.",
+            noDevice: "Equipo sin identificar",
+            noDeviceText: "Abre la pantalla de inicio de la aplicación para crear su identificación.",
+            empty: "Sin contenido",
+            emptyText: "Sube imágenes o videos desde tu cuenta en smartpizarra.cloud/cuenta y asígnalos a este equipo.",
+            downloading: "Descargando contenido…",
+            downloadingText: "{total} archivo(s) por descargar.",
+            noStorage: "Almacenamiento no disponible",
+            noStorageText: "Este navegador no permite guardar archivos en el equipo.",
+            id: "ID: ",
           },
           en: {
             title: "Mirror - Smart Pizarra",
-            hello: "Hello world!",
-            subtitle: "Smart Pizarra",
+            pending: "Device pending authorization",
+            revoked: "Authorization revoked",
+            conflict: "This ID is registered to another device",
+            notRegistered: "Device not registered",
+            unauthorizedText: "Content will be shown once the administrator authorizes this device.",
+            notRegisteredText: "Open the app's start screen to register it.",
+            noDevice: "Unidentified device",
+            noDeviceText: "Open the app's start screen to create its identification.",
+            empty: "No content",
+            emptyText: "Upload images or videos from your account at smartpizarra.cloud/cuenta and assign them to this device.",
+            downloading: "Downloading content…",
+            downloadingText: "{total} file(s) to download.",
+            noStorage: "Storage not available",
+            noStorageText: "This browser does not allow saving files on the device.",
+            id: "ID: ",
           },
         };
 
-        /** Idioma con el que se MUESTRA si la clave aún no existe (no se guarda). */
+        /** Idioma si la clave aún no existe (no se guarda). */
         var DISPLAY_LANGUAGE = "en";
 
         /* ==================================================================
-           2. SETTINGS (solo lectura de localStorage)
+           2. SETTINGS (localStorage)
            ================================================================== */
 
-        /** @returns {string|null} Valor guardado, o null si no existe o no hay localStorage. */
         function readStorage(key) {
           try {
             return window.localStorage.getItem(key);
           } catch (e) {
-            console.log("No se pudo leer localStorage:", e);
             return null;
           }
         }
 
-        /** @returns {number|null} 0/90/180/270 (360 => 0, -90 => 270), o null. */
+        function writeStorage(key, value) {
+          try {
+            window.localStorage.setItem(key, value);
+          } catch (e) {
+            console.log("No se pudo guardar en localStorage:", e);
+          }
+        }
+
+        /** @returns {string|null} Texto sin espacios sobrantes, o null si falta. */
+        function readText(key) {
+          var raw = readStorage(key);
+          var text = raw === null ? "" : String(raw).trim();
+          return text !== "" ? text : null;
+        }
+
+        /** @returns {number|null} 0/90/180/270, o null. */
         function readOrientation() {
           var degrees = parseInt(readStorage(KEYS.orientation), 10);
           if (isNaN(degrees)) return null;
@@ -239,55 +303,51 @@
           return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
         }
 
-        /** @returns {number|null} Escala (%) entera dentro de SCALE_LIMITS, o null. */
+        /** @returns {number|null} Escala (%) dentro de SCALE_LIMITS, o null. */
         function readScale(key) {
           var percent = parseInt(readStorage(key), 10);
-          return percent >= SCALE_LIMITS.min && percent <= SCALE_LIMITS.max
-            ? percent
-            : null;
+          return percent >= SCALE_LIMITS.min && percent <= SCALE_LIMITS.max ? percent : null;
         }
 
         /** @returns {string} Idioma guardado (clave de I18N) o DISPLAY_LANGUAGE. */
         function readLanguage() {
           var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
-          return Object.prototype.hasOwnProperty.call(I18N, code)
-            ? code
-            : DISPLAY_LANGUAGE;
+          return Object.prototype.hasOwnProperty.call(I18N, code) ? code : DISPLAY_LANGUAGE;
+        }
+
+        function dict() {
+          return I18N[readLanguage()];
+        }
+
+        /** URL de api/media.php a partir de smartpizarra.apiUrl (…/api/device.php). */
+        function mediaApiUrl() {
+          var api = readText(KEYS.apiUrl);
+          if (!api) return null;
+          return api.replace(/[^\/?#]*([?#].*)?$/, "media.php");
         }
 
         /* ==================================================================
-           3. ORIENTACIÓN Y TAMAÑO (igual que connection.html)
+           3. ORIENTACIÓN Y TAMAÑO
+           #stage gira; #frame = pantalla girada × escala (100 % = completa).
            ================================================================== */
         var layoutManager = {
           stage: null,
-          scaler: null,
-          card: null,
-          _lastState: "", // "orientación|escala|ventana|tarjeta" aplicado por última vez
+          frame: null,
+          _lastState: "",
 
-          /** Busca los elementos. Llamar una vez al iniciar. */
           init: function () {
             this.stage = document.getElementById("stage");
-            this.scaler = document.getElementById("scaler");
-            this.card = document.getElementById("card");
+            this.frame = document.getElementById("frame");
           },
 
-          /**
-           * Aplica orientación y escala solo si cambió algo (settings, tamaño
-           * de la ventana o de la tarjeta). Con la ventana 0x0 no aplica.
-           * @param {number|null} orientation 0/90/180/270 (null => 0).
-           * @param {number|null} scale       % sobre el ajuste (null => 100).
-           */
+          /** Aplica orientación y escala solo si cambió algo. */
           apply: function (orientation, scale) {
             orientation = orientation === null ? 0 : orientation;
             scale = scale === null ? 100 : scale;
             var width = window.innerWidth || document.documentElement.clientWidth;
             var height = window.innerHeight || document.documentElement.clientHeight;
-            if (!width || !height) return;
-            var cardWidth = this.card.offsetWidth;
-            var cardHeight = this.card.offsetHeight;
-            var state =
-              orientation + "|" + scale + "|" + width + "x" + height +
-              "|" + cardWidth + "x" + cardHeight;
+            if (!width || !height) return; // WebView aún en 0x0
+            var state = orientation + "|" + scale + "|" + width + "x" + height;
             if (state === this._lastState) return;
             this._lastState = state;
 
@@ -310,218 +370,660 @@
             this.stage.style.transformOrigin = "0 0";
             this.stage.style.transform = transform;
 
-            // Ajuste a pantalla: offsetWidth/Height miden la tarjeta SIN transformaciones
-            var zoom = 1;
-            if (cardWidth > 0 && cardHeight > 0) {
-              zoom =
-                (Math.min(
-                  (stageWidth * FIT_RATIO) / cardWidth,
-                  (stageHeight * FIT_RATIO) / cardHeight
-                ) * scale) / 100;
-            }
-            this.scaler.style.transform = "scale(" + zoom.toFixed(4) + ")";
+            var frameWidth = Math.round((stageWidth * scale) / 100);
+            var frameHeight = Math.round((stageHeight * scale) / 100);
+            this.frame.style.width = frameWidth + "px";
+            this.frame.style.height = frameHeight + "px";
+            // Letra de los avisos proporcional a la zona (≈ 1/22 del lado corto)
+            this.frame.style.fontSize = Math.max(12, Math.round(Math.min(frameWidth, frameHeight) / 22)) + "px";
           },
         };
 
         /* ==================================================================
-           4. ANIMACIÓN "HOLA MUNDO"
-           Entrada (letras caen + subtítulo) -> reposo -> ola -> reposo -> ...
-           Un único reloj (setTimeout a ANIMATION.fps) solo mientras hay
-           movimiento; un solo temporizador a la vez; parado en segundo plano.
+           4. ALMACÉN LOCAL (Cache Storage del WebView)
+           Clave de cada archivo: /__smartpizarra_media/<id>-<sha256>. Si el
+           archivo cambia, cambia la huella => clave nueva.
+           ================================================================== */
+        var store = {
+          available: typeof window.caches !== "undefined",
+          ready: {}, // clave => true si está descargado y completo
+
+          /** @returns {string} Clave (URL absoluta del mismo origen) de un elemento. */
+          keyOf: function (item) {
+            return location.origin + CACHE_PREFIX + item.id + "-" + item.sha256;
+          },
+
+          open: function () {
+            return window.caches.open(CACHE_NAME);
+          },
+
+          /** Marca como listos los archivos que ya están guardados (al arrancar). */
+          scan: function () {
+            var self = this;
+            if (!this.available) return Promise.resolve();
+            return this.open()
+              .then(function (cache) {
+                return cache.keys();
+              })
+              .then(function (requests) {
+                for (var i = 0; i < requests.length; i++) self.ready[requests[i].url] = true;
+              })
+              .catch(function (e) {
+                console.log("No se pudo leer el almacén:", e);
+              });
+          },
+
+          /** @returns {Promise<string|null>} URL blob: del archivo guardado (o null). */
+          objectUrl: function (item) {
+            var key = this.keyOf(item);
+            return this.open()
+              .then(function (cache) {
+                return cache.match(key);
+              })
+              .then(function (res) {
+                return res ? res.blob() : null;
+              })
+              .then(function (blob) {
+                return blob ? URL.createObjectURL(blob) : null;
+              });
+          },
+
+          /** Guarda la respuesta de una descarga y comprueba el tamaño. */
+          put: function (item, response) {
+            var self = this;
+            var key = this.keyOf(item);
+            var cache;
+            return this.open()
+              .then(function (c) {
+                cache = c;
+                return cache.put(key, response);
+              })
+              .then(function () {
+                return cache.match(key);
+              })
+              .then(function (res) {
+                return res.blob();
+              })
+              .then(function (blob) {
+                if (blob.size !== item.size) {
+                  // Descarga incompleta: se borra y se reintenta en la próxima consulta
+                  return cache.delete(key).then(function () {
+                    throw new Error("Tamaño incorrecto " + blob.size + " / " + item.size);
+                  });
+                }
+                self.ready[key] = true;
+              });
+          },
+
+          /** Borra los archivos guardados que ya no están en la lista. */
+          purge: function (items) {
+            var self = this;
+            var keep = {};
+            for (var i = 0; i < items.length; i++) keep[this.keyOf(items[i])] = true;
+            return this.open()
+              .then(function (cache) {
+                return cache.keys().then(function (requests) {
+                  var jobs = [];
+                  for (var j = 0; j < requests.length; j++) {
+                    if (!keep[requests[j].url]) {
+                      delete self.ready[requests[j].url];
+                      jobs.push(cache.delete(requests[j]));
+                    }
+                  }
+                  return Promise.all(jobs);
+                });
+              })
+              .catch(function (e) {
+                console.log("No se pudo limpiar el almacén:", e);
+              });
+          },
+
+          /** @returns {Promise<boolean>} true si cabe un archivo de "bytes" más. */
+          hasRoom: function (bytes) {
+            if (!navigator.storage || !navigator.storage.estimate) return Promise.resolve(true);
+            return navigator.storage.estimate().then(
+              function (e) {
+                return !e.quota || e.usage + bytes <= e.quota * SYNC.storageMargin;
+              },
+              function () {
+                return true;
+              }
+            );
+          },
+        };
+
+        /* ==================================================================
+           5. SINCRONIZACIÓN CON EL SERVIDOR (api/media.php)
            ================================================================== */
 
-        /** Rebote al final de la caída (easeOutBack). @param {number} p 0..1 */
-        function easeOutBack(p) {
-          var c = 1.70158;
-          return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+        /** Lista guardada: {revision, items:[{id,kind,mime,size,sha256,seconds}]} */
+        function loadManifest() {
+          try {
+            var m = JSON.parse(readStorage(KEYS.manifest) || "null");
+            if (m && Object.prototype.toString.call(m.items) === "[object Array]") return m;
+          } catch (e) {}
+          return { revision: "", items: [] };
         }
 
-        /** Limita p a 0..1. */
-        function clamp01(p) {
-          return p < 0 ? 0 : p > 1 ? 1 : p;
-        }
+        var sync = {
+          manifest: loadManifest(),
+          // Autorización conocida: la bandera guardada hasta que responda el servidor
+          auth: readStorage(KEYS.authorized) === "1" ? "authorized" : "pending",
+          busy: false,
+          timer: null,
+          downloading: false,
+          lastError: "",
 
-        var helloAnimation = {
-          titleEl: null,
-          subtitleEl: null,
-          letters: [], // <span> de cada letra (sin espacios)
-          timer: null, // próximo fotograma o próxima ola
-          language: null, // idioma del texto puesto ahora
-          phase: "idle", // "drop" | "wave" | "idle"
-          phaseStart: 0, // Date.now() al empezar la fase
+          /** POST form-urlencoded a api/media.php (petición simple: sin CORS previo). */
+          post: function (fields, timeoutMs) {
+            var body = [];
+            for (var k in fields) {
+              if (Object.prototype.hasOwnProperty.call(fields, k)) {
+                body.push(encodeURIComponent(k) + "=" + encodeURIComponent(fields[k]));
+              }
+            }
+            var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+            var timer = controller
+              ? setTimeout(function () {
+                  controller.abort();
+                }, timeoutMs)
+              : null;
+            return fetch(mediaApiUrl(), {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: body.join("&"),
+              cache: "no-store",
+              signal: controller ? controller.signal : undefined,
+            }).then(
+              function (res) {
+                if (timer) clearTimeout(timer);
+                return res;
+              },
+              function (e) {
+                if (timer) clearTimeout(timer);
+                throw e;
+              }
+            );
+          },
+
+          /** Credenciales del equipo, o null si faltan. */
+          credentials: function () {
+            var id = readText(KEYS.deviceId);
+            var secret = readText(KEYS.deviceSecret);
+            if (!id || !secret || !mediaApiUrl()) return null;
+            return { deviceId: id, secret: secret };
+          },
+
+          /** Programa la próxima consulta. */
+          schedule: function (ms) {
+            var self = this;
+            if (this.timer) clearTimeout(this.timer);
+            this.timer = setTimeout(function () {
+              self.run();
+            }, ms);
+          },
+
+          /** Guarda el estado de autorización (y la bandera común "smartpizarra.authorized"). */
+          setAuth: function (state) {
+            this.auth = state;
+            writeStorage(KEYS.authorized, state === "authorized" ? "1" : "0");
+            player.refresh();
+          },
+
+          /** Una consulta: lista -> descargas -> limpieza. Nunca dos a la vez. */
+          run: function () {
+            var self = this;
+            if (this.busy) return;
+            if (document.hidden) {
+              this.schedule(SYNC.everyMs);
+              return;
+            }
+            var cred = this.credentials();
+            if (!cred) {
+              this.auth = "no_device";
+              player.refresh();
+              this.schedule(SYNC.errorMs);
+              return;
+            }
+            this.busy = true;
+            this.post(
+              { action: "list", deviceId: cred.deviceId, secret: cred.secret, rev: this.manifest.revision || "" },
+              SYNC.listTimeoutMs
+            )
+              .then(function (res) {
+                return res.json().then(function (data) {
+                  return { http: res.status, data: data };
+                });
+              })
+              .then(function (r) {
+                var d = r.data || {};
+                if (r.http === 403 && d.error === "secret_mismatch") {
+                  self.setAuth("conflict");
+                  return SYNC.unauthorizedMs;
+                }
+                if (r.http === 404 && d.error === "not_registered") {
+                  self.setAuth("not_registered");
+                  return SYNC.unauthorizedMs;
+                }
+                if (r.http !== 200 || !d.ok) throw new Error("Respuesta " + r.http + " " + (d.error || ""));
+                if (!d.authorized) {
+                  // Lo descargado se conserva: al autorizarlo se vuelve a mostrar
+                  self.setAuth(d.status === "revoked" ? "revoked" : "pending");
+                  return SYNC.unauthorizedMs;
+                }
+                if (!d.unchanged && d.items) {
+                  self.manifest = { revision: d.revision, items: d.items };
+                  writeStorage(KEYS.manifest, JSON.stringify(self.manifest));
+                }
+                self.setAuth("authorized");
+                return self
+                  .downloadMissing(cred)
+                  .then(function () {
+                    return store.purge(self.manifest.items);
+                  })
+                  .then(function () {
+                    return SYNC.everyMs;
+                  });
+              })
+              .then(
+                function (next) {
+                  self.lastError = "";
+                  self.busy = false;
+                  player.refresh();
+                  self.schedule(next);
+                },
+                function (e) {
+                  // Sin internet o error del servidor: se sigue con lo guardado
+                  self.lastError = String(e && e.message ? e.message : e);
+                  console.log("mirror sync:", self.lastError);
+                  self.busy = false;
+                  self.downloading = false;
+                  player.refresh();
+                  self.schedule(SYNC.errorMs);
+                }
+              );
+          },
+
+          /** Descarga en orden, de uno en uno, los archivos que falten. */
+          downloadMissing: function (cred) {
+            var self = this;
+            if (!store.available) return Promise.resolve();
+            var items = this.manifest.items.slice();
+            var i = 0;
+            self.downloading = true;
+            function next() {
+              while (i < items.length && store.ready[store.keyOf(items[i])]) i++;
+              if (i >= items.length || document.hidden) {
+                self.downloading = false;
+                return Promise.resolve();
+              }
+              var item = items[i++];
+              return store
+                .hasRoom(item.size)
+                .then(function (room) {
+                  if (!room) throw new Error("Sin espacio para el archivo " + item.id);
+                  return self.post(
+                    { action: "file", deviceId: cred.deviceId, secret: cred.secret, id: item.id },
+                    SYNC.downloadBaseMs + item.size / SYNC.downloadBytesPerMs
+                  );
+                })
+                .then(function (res) {
+                  if (res.status !== 200) throw new Error("Descarga " + item.id + ": HTTP " + res.status);
+                  return store.put(item, res);
+                })
+                .then(
+                  function () {
+                    player.refresh(); // ya se puede mostrar
+                    return next();
+                  },
+                  function (e) {
+                    // Este falla: se sigue con los demás y se reintenta en la próxima consulta
+                    console.log("mirror descarga:", e && e.message ? e.message : e);
+                    return next();
+                  }
+                );
+            }
+            return next();
+          },
+        };
+
+        /* ==================================================================
+           6. REPRODUCTOR (carrusel en orden, sin transiciones)
+           ================================================================== */
+        var player = {
+          frame: null,
+          current: null, // {key, el, url} en pantalla
+          index: -1, // posición en la lista del último mostrado
+          timer: null,
+          paused: false,
+          loading: false, // preparando el siguiente (evita dos a la vez)
 
           init: function () {
-            this.titleEl = document.getElementById("title");
-            this.subtitleEl = document.getElementById("subtitle");
+            this.frame = document.getElementById("frame");
+          },
+
+          /** Archivos que se pueden mostrar ya (descargados), en orden. */
+          playable: function () {
+            var out = [];
+            var items = sync.manifest.items;
+            for (var i = 0; i < items.length; i++) {
+              if (store.ready[store.keyOf(items[i])]) out.push(items[i]);
+            }
+            return out;
           },
 
           /**
-           * Pone el texto del idioma (si cambió) y repite la entrada.
-           * @param {string} language Clave de I18N.
-           * @returns {boolean} true si cambió el texto.
+           * Decide qué mostrar tras un cambio (autorización, lista o
+           * descarga): aviso o contenido. Si ya se está mostrando algo
+           * que sigue en la lista, no lo interrumpe.
            */
-          setLanguage: function (language) {
-            if (language === this.language) return false;
-            this.language = language;
-            var dict = I18N[language];
-            document.documentElement.lang = language;
-            document.title = dict.title;
-            this.subtitleEl.textContent = dict.subtitle;
-            this.subtitleEl.style.opacity = "0";
-            this.buildLetters(dict.hello);
-            this.startPhase("drop");
-            return true;
-          },
-
-          /** Crea un <span> por letra (textContent: sin riesgo de XSS). */
-          buildLetters: function (text) {
-            var chars = text.split("");
-            this.titleEl.textContent = "";
-            this.letters = [];
-            for (var i = 0, color = 0; i < chars.length; i++) {
-              var span = document.createElement("span");
-              if (chars[i] === " ") {
-                span.className = "letter space";
-              } else {
-                span.className = "letter c" + (color++ % 5);
-                span.textContent = chars[i];
-                this.letters.push(span);
+          refresh: function () {
+            if (this.paused) return;
+            var t = dict();
+            var id = readText(KEYS.deviceId);
+            if (!store.available) return this.notice(t.noStorage, t.noStorageText, id, true);
+            var a = sync.auth;
+            if (a === "no_device") return this.notice(t.noDevice, t.noDeviceText, "", true);
+            if (a === "not_registered") return this.notice(t.notRegistered, t.notRegisteredText, id, true);
+            if (a === "conflict") return this.notice(t.conflict, "", id, true);
+            if (a === "pending" || a === "revoked") {
+              return this.notice(a === "revoked" ? t.revoked : t.pending, t.unauthorizedText, id, true);
+            }
+            var list = this.playable();
+            if (!list.length) {
+              var total = sync.manifest.items.length;
+              if (total) {
+                return this.notice(t.downloading, t.downloadingText.replace("{total}", String(total)), id, false);
               }
-              this.titleEl.appendChild(span);
+              return this.notice(t.empty, t.emptyText, id, false);
             }
+            this.hideNotice();
+            if (this.loading) return;
+            // ¿Lo que se muestra sigue en la lista? Si no (o no hay nada), avanzar
+            if (!this.current || !this.inList(this.current.key, list)) this.next();
           },
 
-          /** Duración total (ms) de una fase con todas sus letras. */
-          phaseMs: function (phase) {
-            var n = Math.max(0, this.letters.length - 1);
-            return phase === "drop"
-              ? n * ANIMATION.dropDelayMs + ANIMATION.dropMs + ANIMATION.subtitleMs
-              : n * ANIMATION.waveStepMs + ANIMATION.waveMs;
+          inList: function (key, list) {
+            for (var i = 0; i < list.length; i++) if (store.keyOf(list[i]) === key) return true;
+            return false;
           },
 
-          /** Empieza una fase en movimiento ("drop" o "wave"). */
-          startPhase: function (phase) {
-            this.stop();
-            this.phase = phase;
-            this.phaseStart = Date.now();
-            // Capas propias solo mientras se mueven (no se repinta el fondo)
-            this.setWillChange(true);
-            this.frame();
+          /** Muestra un aviso y quita el contenido. */
+          notice: function (title, text, id, bad) {
+            this.stopTimer();
+            this.clearMedia();
+            var titleEl = document.getElementById("noticeTitle");
+            titleEl.textContent = title;
+            titleEl.className = "title" + (bad ? " bad" : "");
+            document.getElementById("noticeText").textContent = text;
+            document.getElementById("noticeId").textContent = id ? dict().id + id : "";
+            document.getElementById("notice").className = "show";
           },
 
-          /** Dibuja un fotograma y programa el siguiente o el reposo. */
-          frame: function () {
-            var self = this;
-            var t = Date.now() - this.phaseStart;
-            var done = t >= this.phaseMs(this.phase);
-            for (var i = 0; i < this.letters.length; i++) {
-              this.letters[i].style.transform = done ? "none" : this.letterTransform(i, t);
-              this.letters[i].style.opacity = done ? "1" : this.letterOpacity(i, t);
-            }
-            if (this.phase === "drop") {
-              var subStart = this.phaseMs("drop") - ANIMATION.subtitleMs;
-              this.subtitleEl.style.opacity = done
-                ? "1"
-                : clamp01((t - subStart) / ANIMATION.subtitleMs).toFixed(2);
-            }
-            if (done) {
-              this.rest();
-              return;
-            }
-            this.timer = setTimeout(function () {
-              self.frame();
-            }, 1000 / ANIMATION.fps);
+          hideNotice: function () {
+            document.getElementById("notice").className = "";
           },
 
-          /** Transform de la letra i en el instante t (ms) de la fase actual. */
-          letterTransform: function (i, t) {
-            if (this.phase === "drop") {
-              var p = clamp01((t - i * ANIMATION.dropDelayMs) / ANIMATION.dropMs);
-              return "translateY(" + (ANIMATION.dropFromPx * (1 - easeOutBack(p))).toFixed(1) + "px)";
-            }
-            var q = clamp01((t - i * ANIMATION.waveStepMs) / ANIMATION.waveMs);
-            var s = Math.sin(Math.PI * q); // 0 -> 1 -> 0
-            if (s < 0.001) return "none";
-            return "translateY(" + (-ANIMATION.waveHeightPx * s).toFixed(1) + "px) scale(" +
-              (1 + ANIMATION.waveGrow * s).toFixed(3) + ")";
-          },
-
-          /** Opacidad de la letra i (solo cambia en la entrada). */
-          letterOpacity: function (i, t) {
-            if (this.phase !== "drop") return "1";
-            var p = clamp01((t - i * ANIMATION.dropDelayMs) / (ANIMATION.dropMs * 0.6));
-            return p.toFixed(2);
-          },
-
-          /** Reposo: todo quieto, sin capas extra; la próxima ola en waveEveryMs. */
-          rest: function () {
-            var self = this;
-            this.phase = "idle";
-            this.setWillChange(false);
-            this.timer = setTimeout(function () {
-              self.startPhase("wave");
-            }, ANIMATION.waveEveryMs);
-          },
-
-          /** Activa/desactiva will-change en las letras. */
-          setWillChange: function (on) {
-            for (var i = 0; i < this.letters.length; i++) {
-              this.letters[i].style.willChange = on ? "transform, opacity" : "";
-            }
-          },
-
-          /** Detiene el reloj (segundo plano o reinicio). */
-          stop: function () {
+          stopTimer: function () {
             if (this.timer) clearTimeout(this.timer);
             this.timer = null;
           },
 
-          /** Al volver a primer plano: termina lo pendiente y queda en reposo. */
-          resume: function () {
-            this.stop();
-            if (this.phase === "idle") {
-              this.rest();
-            } else {
-              this.phaseStart = 0; // fase terminada: el fotograma la deja en su sitio
-              this.frame();
+          /** Quita la imagen/video actual y libera su memoria. */
+          clearMedia: function () {
+            if (!this.current) return;
+            this.release(this.current);
+            this.current = null;
+          },
+
+          release: function (cur) {
+            if (cur.el.tagName === "VIDEO") {
+              cur.el.onended = null;
+              cur.el.pause();
+              cur.el.removeAttribute("src");
+              cur.el.load(); // libera el decodificador
             }
+            if (cur.el.parentNode) cur.el.parentNode.removeChild(cur.el);
+            URL.revokeObjectURL(cur.url);
+          },
+
+          /** Pone el elemento nuevo encima y quita el anterior (sin parpadeo). */
+          swap: function (next) {
+            var prev = this.current;
+            this.frame.insertBefore(next.el, document.getElementById("notice"));
+            this.current = next;
+            this.loading = false;
+            if (prev) this.release(prev);
+          },
+
+          /** Programa el siguiente archivo. */
+          after: function (ms) {
+            var self = this;
+            this.stopTimer();
+            this.timer = setTimeout(function () {
+              self.next();
+            }, ms);
+          },
+
+          /** Falló preparar un archivo: se salta tras una pausa. */
+          fail: function (url) {
+            if (url) URL.revokeObjectURL(url);
+            this.loading = false;
+            this.after(PLAYER.errorSkipMs);
+          },
+
+          /** Avanza al siguiente archivo descargado (en orden, en bucle). */
+          next: function () {
+            var self = this;
+            this.stopTimer();
+            if (this.paused) return;
+            var list = this.playable();
+            if (!list.length) return this.refresh();
+            this.index = (this.index + 1) % list.length;
+            var item = list[this.index];
+            var key = store.keyOf(item);
+
+            // El mismo archivo ya en pantalla (lista de 1): nada que redibujar
+            if (this.current && this.current.key === key) {
+              if (item.kind === "video") {
+                this.current.el.currentTime = 0;
+                this.current.el.play();
+                this.watchVideo(this.current.el);
+              } else {
+                this.after(Math.max(PLAYER.minImageMs, item.seconds * 1000));
+              }
+              return;
+            }
+
+            this.loading = true;
+            store.objectUrl(item).then(
+              function (url) {
+                if (!url) {
+                  delete store.ready[key]; // ya no está: se descargará de nuevo
+                  return self.fail(null);
+                }
+                if (self.paused) {
+                  self.loading = false;
+                  return URL.revokeObjectURL(url);
+                }
+                if (item.kind === "video") self.showVideo(item, key, url);
+                else self.showImage(item, key, url);
+              },
+              function () {
+                self.fail(null);
+              }
+            );
+          },
+
+          /** Imagen: se decodifica antes de mostrarla. */
+          showImage: function (item, key, url) {
+            var self = this;
+            var img = new Image();
+            img.alt = "";
+            var done = false;
+            var shown = function () {
+              if (done) return;
+              done = true;
+              if (self.paused) {
+                self.loading = false;
+                return URL.revokeObjectURL(url);
+              }
+              self.swap({ key: key, el: img, url: url });
+              self.after(Math.max(PLAYER.minImageMs, item.seconds * 1000));
+            };
+            img.onerror = function () {
+              if (!done) {
+                done = true;
+                self.fail(url);
+              }
+            };
+            img.src = url;
+            if (img.decode) {
+              img.decode().then(shown, function () {
+                if (img.naturalWidth) shown();
+              });
+            } else {
+              img.onload = shown;
+            }
+          },
+
+          /** Video: sin sonido (autoplay permitido); se muestra al empezar a reproducirse. */
+          showVideo: function (item, key, url) {
+            var self = this;
+            var video = document.createElement("video");
+            video.muted = true;
+            video.setAttribute("muted", "");
+            video.setAttribute("playsinline", "");
+            // Póster negro de 1 px: el WebView pinta si no un icono gris de "play"
+            video.poster = BLACK_PIXEL;
+            video.preload = "auto";
+            var started = false;
+            var failed = false;
+            function failOnce() {
+              if (started || failed) return;
+              failed = true;
+              video.removeAttribute("src");
+              self.fail(url);
+            }
+            video.addEventListener("playing", function () {
+              if (started || failed) return;
+              started = true;
+              self.swap({ key: key, el: video, url: url });
+              self.watchVideo(video);
+            });
+            video.addEventListener("error", function () {
+              if (started) self.after(PLAYER.errorSkipMs);
+              else failOnce();
+            });
+            video.src = url;
+            var p = video.play();
+            if (p && p.catch) p.catch(failOnce);
+          },
+
+          /** Al terminar el video => siguiente; seguro por si nunca termina. */
+          watchVideo: function (video) {
+            var self = this;
+            video.onended = function () {
+              self.next();
+            };
+            var d = video.duration;
+            this.stopTimer();
+            this.timer = setTimeout(
+              function () {
+                self.next();
+              },
+              isFinite(d) && d > 0 ? d * 1000 + PLAYER.videoExtraMs : PLAYER.videoMaxMs
+            );
+          },
+
+          /** Segundo plano: todo parado (incluido el video). */
+          pause: function () {
+            this.paused = true;
+            this.stopTimer();
+            if (this.current && this.current.el.tagName === "VIDEO") this.current.el.pause();
+          },
+
+          resume: function () {
+            if (!this.paused) return;
+            this.paused = false;
+            this.loading = false;
+            if (this.current && this.current.el.tagName === "VIDEO") {
+              this.current.el.play();
+              this.watchVideo(this.current.el);
+            } else if (this.current) {
+              this.after(PLAYER.minImageMs);
+            }
+            this.refresh();
           },
         };
 
         /* ==================================================================
-           5. INICIO
+           7. INICIO Y API PÚBLICA
            ================================================================== */
 
-        /**
-         * Vuelve a leer los settings y aplica lo que haya cambiado:
-         * idioma (repite la entrada), orientación y tamaño. Barato si nada cambió.
-         */
-        function refresh() {
-          helloAnimation.setLanguage(readLanguage());
+        /** Releer orientación/tamaño (barato si nada cambió). */
+        function refreshLayout() {
           layoutManager.apply(readOrientation(), readScale(KEYS.ownScale));
         }
 
+        /** Idioma de los avisos (solo si cambió). */
+        var appliedLanguage = null;
+        function refreshLanguage() {
+          var language = readLanguage();
+          if (language === appliedLanguage) return;
+          appliedLanguage = language;
+          document.title = I18N[language].title;
+          document.documentElement.lang = language;
+          if (document.getElementById("notice").className === "show") player.refresh();
+        }
+
+        function watch() {
+          refreshLayout();
+          refreshLanguage();
+        }
+
+        window.mirrorSync = function () {
+          sync.run();
+        };
+
+        window.mirrorStatus = function () {
+          var ready = 0;
+          for (var i = 0; i < sync.manifest.items.length; i++) {
+            if (store.ready[store.keyOf(sync.manifest.items[i])]) ready++;
+          }
+          return JSON.stringify({
+            auth: sync.auth,
+            revision: sync.manifest.revision,
+            items: sync.manifest.items.length,
+            ready: ready,
+            downloading: sync.downloading,
+            showing: player.current ? player.current.key : null,
+            lastError: sync.lastError,
+          });
+        };
+
         function init() {
           layoutManager.init();
-          helloAnimation.init();
-          refresh(); // texto, orientación y tamaño desde localStorage
-
-          // Releer settings: cambio de tamaño, al mostrarse, si otra página
-          // los cambia y cada WATCH_MS (el WebView puede arrancar en 0x0)
-          window.addEventListener("resize", refresh);
-          window.addEventListener("orientationchange", refresh);
-          window.addEventListener("load", refresh);
-          window.addEventListener("pageshow", refresh);
-          window.addEventListener("storage", refresh);
+          player.init();
+          watch();
+          window.addEventListener("resize", refreshLayout);
+          window.addEventListener("orientationchange", refreshLayout);
+          window.addEventListener("pageshow", watch);
+          window.addEventListener("storage", watch);
+          setInterval(watch, WATCH_MS);
           document.addEventListener("visibilitychange", function () {
             if (document.hidden) {
-              helloAnimation.stop(); // en segundo plano: nada
+              player.pause();
             } else {
-              helloAnimation.resume();
-              refresh();
+              player.resume();
+              sync.run();
             }
           });
-          setInterval(refresh, WATCH_MS);
+          // Primero lo guardado (funciona sin internet), luego el servidor
+          store.scan().then(function () {
+            player.refresh();
+            sync.run();
+          });
         }
 
         if (document.readyState === "loading") {

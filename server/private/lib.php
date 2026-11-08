@@ -13,6 +13,7 @@
  *    RateLimiter       Límite de peticiones por "cubeta" (IP + motivo) y ventana.
  *    DeviceRepository  Alta, consulta y cambio de estado de los equipos.
  *    UserRepository    Usuarios (empresas) dueños de equipos y sus contraseñas.
+ *    MediaRepository   Imágenes y videos de los usuarios para mirror.html.
  *    BootLog           Historial de arranques (cada ejecución de loading.html).
  *    Http              IP del cliente, respuestas JSON y CORS.
  */
@@ -161,7 +162,7 @@ final class Database
         foreach ($pdo->query('SHOW TABLES') as $row) {
             $tables[] = (string) array_values($row)[0];
         }
-        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots', 'sp_users'], $tables);
+        $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots', 'sp_users', 'sp_media', 'sp_media_devices'], $tables);
         if (in_array('sp_devices', $missing, true)) {
             return 'Faltan las tablas: importa server/schema.sql en phpMyAdmin (pestaña Importar) sobre esta base.';
         }
@@ -169,8 +170,12 @@ final class Database
             return 'Falta la tabla sp_boots: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-boots.sql.';
         }
         $usersSql = 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-08-users.sql.';
-        if ($missing) {
+        if (in_array('sp_users', $missing, true)) {
             return 'Faltan tablas (' . implode(', ', $missing) . '): ' . $usersSql;
+        }
+        if ($missing) {
+            return 'Faltan tablas (' . implode(', ', $missing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-08-media.sql.';
         }
         $cols = [];
         foreach ($pdo->query('SHOW COLUMNS FROM sp_devices') as $row) {
@@ -641,7 +646,321 @@ final class UserRepository
      */
     public static function delete(int $id): void
     {
+        // Sus imágenes/videos (filas y ficheros) se borran con él
+        MediaRepository::deleteAllForUser($id);
         Database::pdo()->prepare('DELETE FROM sp_users WHERE id = ?')->execute([$id]);
+    }
+}
+
+/**
+ * Imágenes y videos de los usuarios (tablas sp_media + sp_media_devices)
+ * que mirror.html descarga UNA vez y reproduce desde el propio equipo.
+ *
+ * Archivos en private/media/ (o config 'media_dir'), fuera de public_html:
+ * solo se entregan por api/media.php (equipo autorizado con su secreto) o
+ * por /cuenta/ (su dueño con sesión). Cada archivo puede ir a TODOS los
+ * equipos del usuario (all_devices = 1, también los que se le asignen
+ * después) o solo a los marcados en sp_media_devices.
+ */
+final class MediaRepository
+{
+    /** Tipos admitidos: MIME => [tipo, extensión]. Videos: MP4 (H.264) o WebM. */
+    public const TYPES = [
+        'image/jpeg' => ['image', 'jpg'],
+        'image/png' => ['image', 'png'],
+        'image/webp' => ['image', 'webp'],
+        'image/gif' => ['image', 'gif'],
+        'video/mp4' => ['video', 'mp4'],
+        'video/webm' => ['video', 'webm'],
+    ];
+
+    /** Límites de la duración de una imagen en pantalla (segundos). */
+    public const MIN_SECONDS = 3;
+    public const MAX_SECONDS = 3600;
+
+    /** Carpeta de los archivos (se crea si falta). */
+    public static function dir(): string
+    {
+        $dir = (string) (AppConfig::get()['media_dir'] ?? (__DIR__ . '/media'));
+        if (!is_dir($dir) && !mkdir($dir, 0750, true) && !is_dir($dir)) {
+            throw new RuntimeException('No se pudo crear la carpeta de archivos: ' . $dir);
+        }
+        return $dir;
+    }
+
+    /** @return string Ruta completa de un archivo guardado. */
+    public static function path(array $media): string
+    {
+        return self::dir() . '/' . basename((string) $media['stored_name']);
+    }
+
+    /** Tamaño máximo de un archivo (bytes), config 'media_max_mb' (200). */
+    public static function maxBytes(): int
+    {
+        return max(1, (int) (AppConfig::get()['media_max_mb'] ?? 200)) * 1048576;
+    }
+
+    /** Espacio máximo por usuario (bytes), config 'media_user_quota_mb' (2048). */
+    public static function quotaBytes(): int
+    {
+        return max(1, (int) (AppConfig::get()['media_user_quota_mb'] ?? 2048)) * 1048576;
+    }
+
+    /**
+     * Detecta el tipo REAL del archivo por su contenido (no por el nombre).
+     * Usa fileinfo si existe; si no, los primeros bytes.
+     * @return string|null MIME admitido o null.
+     */
+    public static function detectMime(string $file): ?string
+    {
+        $mime = null;
+        if (class_exists('finfo')) {
+            $mime = (new finfo(FILEINFO_MIME_TYPE))->file($file) ?: null;
+        }
+        if ($mime === null || !isset(self::TYPES[$mime])) {
+            $head = (string) file_get_contents($file, false, null, 0, 16);
+            if (str_starts_with($head, "\xFF\xD8\xFF")) {
+                $mime = 'image/jpeg';
+            } elseif (str_starts_with($head, "\x89PNG")) {
+                $mime = 'image/png';
+            } elseif (str_starts_with($head, 'GIF8')) {
+                $mime = 'image/gif';
+            } elseif (str_starts_with($head, 'RIFF') && substr($head, 8, 4) === 'WEBP') {
+                $mime = 'image/webp';
+            } elseif (substr($head, 4, 4) === 'ftyp') {
+                $mime = 'video/mp4';
+            } elseif (str_starts_with($head, "\x1A\x45\xDF\xA3")) {
+                $mime = 'video/webm';
+            }
+        }
+        return isset(self::TYPES[$mime]) ? $mime : null;
+    }
+
+    /** @return array<string,mixed>|null Archivo de ESE usuario (null si no existe o es de otro). */
+    public static function findForUser(int $id, int $userId): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_media WHERE id = ? AND user_id = ?');
+        $stmt->execute([$id, $userId]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Archivos del usuario en orden, con la lista de equipos marcados.
+     * @return array<int,array<string,mixed>> Filas + 'devices' (lista de device_id).
+     */
+    public static function forUser(int $userId): array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_media WHERE user_id = ? ORDER BY position, id');
+        $stmt->execute([$userId]);
+        $rows = $stmt->fetchAll();
+        if (!$rows) {
+            return [];
+        }
+        $byId = [];
+        foreach ($rows as $i => $r) {
+            $rows[$i]['devices'] = [];
+            $byId[(int) $r['id']] = $i;
+        }
+        $stmt = Database::pdo()->prepare(
+            'SELECT md.media_id, md.device_id FROM sp_media_devices md
+             JOIN sp_media m ON m.id = md.media_id WHERE m.user_id = ?'
+        );
+        $stmt->execute([$userId]);
+        foreach ($stmt as $r) {
+            $rows[$byId[(int) $r['media_id']]]['devices'][] = $r['device_id'];
+        }
+        return $rows;
+    }
+
+    /** @return int Bytes que ocupan los archivos del usuario. */
+    public static function usedBytes(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare('SELECT COALESCE(SUM(size_bytes), 0) FROM sp_media WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Guarda un archivo subido (ya validado: tipo y tamaño) al final del carrusel.
+     * @param string[] $deviceIds Equipos (solo si $allDevices es false).
+     * @return int Id del archivo.
+     */
+    public static function create(int $userId, string $tmpFile, string $originalName, string $mime,
+                                  int $seconds, bool $allDevices, array $deviceIds): int
+    {
+        [$kind, $ext] = self::TYPES[$mime];
+        $stored = bin2hex(random_bytes(16)) . '.' . $ext;
+        $target = self::dir() . '/' . $stored;
+        // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
+        $moved = is_uploaded_file($tmpFile) ? move_uploaded_file($tmpFile, $target) : rename($tmpFile, $target);
+        if (!$moved) {
+            throw new RuntimeException('No se pudo guardar el archivo en ' . self::dir());
+        }
+        @chmod($target, 0640);
+        $pdo = Database::pdo();
+        try {
+            $pdo->beginTransaction();
+            $next = $pdo->prepare('SELECT COALESCE(MAX(position), 0) + 1 FROM sp_media WHERE user_id = ?');
+            $next->execute([$userId]);
+            $pdo->prepare(
+                'INSERT INTO sp_media (user_id, kind, mime, original_name, stored_name, size_bytes, sha256,
+                   seconds, position, all_devices, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute([
+                $userId, $kind, $mime, mb_substr($originalName, 0, 190), $stored, filesize($target),
+                hash_file('sha256', $target), self::cleanSeconds($seconds), (int) $next->fetchColumn(),
+                $allDevices ? 1 : 0, Database::now(),
+            ]);
+            $id = (int) $pdo->lastInsertId();
+            self::writeDevices($id, $userId, $allDevices, $deviceIds);
+            $pdo->commit();
+            return $id;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            @unlink($target);
+            throw $e;
+        }
+    }
+
+    /** Duración de imagen dentro de los límites. */
+    public static function cleanSeconds(int $seconds): int
+    {
+        return max(self::MIN_SECONDS, min(self::MAX_SECONDS, $seconds));
+    }
+
+    /**
+     * Cambia duración y equipos de un archivo del usuario.
+     * @param string[] $deviceIds Equipos marcados (se ignoran los que no son suyos).
+     */
+    public static function update(int $id, int $userId, int $seconds, bool $allDevices, array $deviceIds): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE sp_media SET seconds = ?, all_devices = ? WHERE id = ? AND user_id = ?')
+                ->execute([self::cleanSeconds($seconds), $allDevices ? 1 : 0, $id, $userId]);
+            self::writeDevices($id, $userId, $allDevices, $deviceIds);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /** Reescribe los equipos concretos de un archivo (solo los del usuario). */
+    private static function writeDevices(int $id, int $userId, bool $allDevices, array $deviceIds): void
+    {
+        $pdo = Database::pdo();
+        $pdo->prepare('DELETE FROM sp_media_devices WHERE media_id = ?')->execute([$id]);
+        if ($allDevices || !$deviceIds) {
+            return;
+        }
+        $insert = $pdo->prepare(
+            'INSERT IGNORE INTO sp_media_devices (media_id, device_id)
+             SELECT ?, device_id FROM sp_devices WHERE device_id = ? AND user_id = ?'
+        );
+        foreach (array_unique($deviceIds) as $deviceId) {
+            $insert->execute([$id, (string) $deviceId, $userId]);
+        }
+    }
+
+    /**
+     * Mueve un archivo un puesto antes (-1) o después (+1) en el carrusel.
+     */
+    public static function move(int $id, int $userId, int $direction): void
+    {
+        $list = array_map(static fn($r) => (int) $r['id'], self::forUser($userId));
+        $i = array_search($id, $list, true);
+        $j = $i === false ? false : $i + ($direction < 0 ? -1 : 1);
+        if ($i === false || $j < 0 || $j >= count($list)) {
+            return;
+        }
+        [$list[$i], $list[$j]] = [$list[$j], $list[$i]];
+        $stmt = Database::pdo()->prepare('UPDATE sp_media SET position = ? WHERE id = ? AND user_id = ?');
+        foreach ($list as $pos => $mediaId) {
+            $stmt->execute([$pos + 1, $mediaId, $userId]);
+        }
+    }
+
+    /** Borra un archivo del usuario (fila y fichero). Los equipos lo quitan en su próxima consulta. */
+    public static function delete(int $id, int $userId): void
+    {
+        $media = self::findForUser($id, $userId);
+        if ($media === null) {
+            return;
+        }
+        Database::pdo()->prepare('DELETE FROM sp_media WHERE id = ?')->execute([$id]);
+        @unlink(self::path($media));
+    }
+
+    /** Borra TODOS los archivos de un usuario (al eliminar el usuario). */
+    public static function deleteAllForUser(int $userId): void
+    {
+        foreach (self::forUser($userId) as $media) {
+            @unlink(self::path($media));
+        }
+        Database::pdo()->prepare('DELETE FROM sp_media WHERE user_id = ?')->execute([$userId]);
+    }
+
+    /**
+     * Lista que reproduce un equipo: archivos de SU usuario que van a todos
+     * sus equipos o a él en concreto, en orden. Vacía si no tiene usuario.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function forDevice(string $deviceId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT m.id, m.kind, m.mime, m.size_bytes, m.sha256, m.seconds
+             FROM sp_media m JOIN sp_devices d ON d.user_id = m.user_id
+             WHERE d.device_id = ?
+               AND (m.all_devices = 1
+                    OR EXISTS (SELECT 1 FROM sp_media_devices md WHERE md.media_id = m.id AND md.device_id = d.device_id))
+             ORDER BY m.position, m.id'
+        );
+        $stmt->execute([$deviceId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Un archivo SOLO si le toca a ese equipo (para descargarlo).
+     * @return array<string,mixed>|null
+     */
+    public static function findForDevice(int $id, string $deviceId): ?array
+    {
+        foreach (self::forDevice($deviceId) as $row) {
+            if ((int) $row['id'] === $id) {
+                $stmt = Database::pdo()->prepare('SELECT * FROM sp_media WHERE id = ?');
+                $stmt->execute([$id]);
+                return $stmt->fetch() ?: null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Envía el archivo (cabeceras + contenido) y termina. Sin buffer de PHP
+     * para no cargar videos grandes en memoria.
+     */
+    public static function send(array $media, bool $download = false): never
+    {
+        $path = self::path($media);
+        if (!is_file($path)) {
+            Http::json(['ok' => false, 'error' => 'missing_file'], 404);
+        }
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: ' . $media['mime']);
+        header('Content-Length: ' . filesize($path));
+        header('X-Content-Type-Options: nosniff');
+        header('Cache-Control: private, max-age=31536000, immutable');
+        if ($download) {
+            header('Content-Disposition: attachment');
+        }
+        readfile($path);
+        exit;
     }
 }
 

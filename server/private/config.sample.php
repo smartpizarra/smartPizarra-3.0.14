@@ -52,6 +52,21 @@ return [
     // Si el sitio va detrás de un proxy/CDN que pone la IP real en una
     // cabecera, indícala aquí (p. ej. 'HTTP_CF_CONNECTING_IP'). Si no, null.
     'client_ip_header' => null,
+
+    // Imágenes y videos que los usuarios suben en /cuenta/ para mirror.html.
+    // media_dir: carpeta de los archivos (por defecto private/media, se crea
+    //   sola; debe quedar FUERA de public_html).
+    // media_max_mb: tamaño máximo de UN archivo. Además PHP debe permitirlo:
+    //   hPanel > Avanzado > Configuración de PHP > upload_max_filesize y
+    //   post_max_size (un poco mayor).
+    // media_user_quota_mb: espacio total por usuario.
+    // media_downloads_per_device_per_hour: descargas máximas por equipo y
+    //   hora (cada equipo descarga cada archivo UNA vez; el límite solo
+    //   frena un equipo que entre en bucle).
+    // Si faltan, se usan estos valores.
+    'media_max_mb'                        => 200,
+    'media_user_quota_mb'                 => 2048,
+    'media_downloads_per_device_per_hour' => 120,
     'online_timeout_seconds' => 180,
     'boot_history_days' => 365,
      'boots_per_device_per_hour' => 30,
