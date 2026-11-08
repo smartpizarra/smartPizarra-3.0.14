@@ -1,0 +1,535 @@
+<!doctype html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA "MIRROR" (por ahora: "Hola mundo" animado)
+=====================================================================
+  QUE HACE
+  Muestra un "Hola mundo" animado. Funciona como las demás pantallas:
+  toma su orientación, idioma y tamaño de localStorage.
+
+  SETTINGS (localStorage) - SOLO SE LEEN, ESTA PÁGINA NO ESCRIBE NADA
+  Los crea loading.html con sus valores por defecto (CONFIG.settings y
+  PAGES, entrada "mirror").
+    "smartpizarra.orientation"    0/90/180/270  GLOBAL: gira la página
+    "smartpizarra.language"       es | en       GLOBAL: idioma del texto
+    "smartpizarra.mirror.scale"   10 a 300 (%)  tamaño de ESTA pantalla
+                                                (100 % = 90 % de la pantalla)
+  Para cambiar el tamaño: updateSettings('{"page":"mirror","scale":95}')
+  en loading.html, o su default en PAGES de loading.html.
+  Si otra página los cambia, esta los vuelve a leer cada 1 s, al
+  mostrarse y con el evento "storage".
+  Si una clave no existe (loading.html nunca se abrió): orientación 0°,
+  tamaño 100 % e idioma DISPLAY_LANGUAGE.
+
+  ANIMACIÓN (pensada para el TV box: CPU baja)
+  - Entrada: las letras caen una a una con rebote (~2 s) y aparece el
+    subtítulo.
+  - Después, cada ANIMATION.waveEveryMs (8 s) pasa UNA ola por las
+    letras (~1,3 s) y la pantalla queda QUIETA hasta la siguiente.
+  - Todo lo mueve UN reloj JS a ANIMATION.fps (20 fps) solo mientras hay
+    movimiento: en el TV box cada fotograma cuesta ~4-5 % de un núcleo y
+    una animación CSS va a 60 fps (medido: la ola en CSS ~100-120 %).
+  - Solo transform y opacity; will-change solo durante el movimiento.
+    Al cambiar de idioma la entrada se repite. Parada en segundo plano.
+
+  COMPATIBILIDAD: Android WebView 101 en TV box. JavaScript ES5
+  (var / function), sin librerías externas.
+
+  NO envía mensajes a la app (no hay contrato JSON todavía).
+
+  COMO PROBAR EN UN NAVEGADOR DE PC
+    Abrir antes loading.html en el mismo navegador (crea los settings).
+=====================================================================
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Mirror - Smart Pizarra</title>
+    <style>
+      /* ==============================================================
+         1. BASE
+         ============================================================== */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: #141a5e;
+      }
+
+      body {
+        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
+        background: linear-gradient(135deg, #141a5e 0%, #251570 100%);
+        color: #fff;
+      }
+
+      /* #stage: se rota 0/90/180/270 (ancho y alto se intercambian a 90/270) */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      /* #scaler: el JS lo escala para que la tarjeta ocupe FIT_RATIO de la
+         pantalla. Sin ancho fijo y sin encogerse: mide su tamaño natural. */
+      #scaler {
+        display: flex;
+        justify-content: center;
+        flex-shrink: 0;
+        transform-origin: 50% 50%;
+      }
+
+      /* ==============================================================
+         2. TARJETA Y TEXTO
+         ============================================================== */
+      #card {
+        padding: 40px 60px;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      /* Título: cada letra es un <span class="letter"> creado por el JS */
+      .title {
+        font-size: 96px;
+        font-weight: 800;
+        line-height: 1.2;
+        letter-spacing: 2px;
+      }
+
+      /* Cada letra la mueve el reloj JS (sección 4): transform/opacity en
+         línea. Estado inicial: invisible, arriba (antes de la entrada). */
+      .letter {
+        display: inline-block;
+        opacity: 0;
+        transform: translateY(-120px);
+      }
+
+      .letter.space {
+        width: 0.35em;
+      }
+
+      /* Colores de las letras (se reparten en orden) */
+      .c0 { color: #ff6b6b; }
+      .c1 { color: #feca57; }
+      .c2 { color: #48dbfb; }
+      .c3 { color: #1dd1a1; }
+      .c4 { color: #ff9ff3; }
+
+      /* Subtítulo: también lo aparece el reloj JS (sin transiciones CSS) */
+      .subtitle {
+        margin-top: 16px;
+        font-size: 30px;
+        color: rgba(255, 255, 255, 0.75);
+        opacity: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- #stage  => se rota según la orientación global
+         #scaler => ajusta la tarjeta a la pantalla y aplica su escala -->
+    <div id="stage">
+      <div id="scaler">
+        <div id="card">
+          <!-- Las letras las crea el JS a partir del texto del idioma -->
+          <div class="title" id="title"></div>
+          <div class="subtitle" id="subtitle"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Todo dentro de una IIFE para no crear globales por accidente.
+      (function () {
+        "use strict";
+
+        /* ==================================================================
+           1. CONFIGURACIÓN
+           ================================================================== */
+
+        /** Esta pantalla: su tamaño se lee de "smartpizarra.mirror.scale". */
+        var THIS_PAGE = "mirror";
+
+        /** Claves de localStorage (iguales a CONFIG.settings de loading.html). */
+        var KEYS = {
+          orientation: "smartpizarra.orientation", // GLOBAL
+          language: "smartpizarra.language", // GLOBAL
+          ownScale: "smartpizarra." + THIS_PAGE + ".scale", // tamaño de esta pantalla
+        };
+
+        /** Orientaciones permitidas (grados). */
+        var ORIENTATIONS = [0, 90, 180, 270];
+
+        /** Límites de las escalas (%), iguales a loading.html. */
+        var SCALE_LIMITS = { min: 10, max: 300 };
+
+        /** Fracción de la pantalla (girada) que ocupa la tarjeta con escala 100 %. */
+        var FIT_RATIO = 0.9;
+
+        /** Cada cuántos ms se vuelve a leer localStorage y el tamaño de la ventana. */
+        var WATCH_MS = 1000;
+
+        /**
+         * Animación. Todo lo mueve UN reloj JS a ANIMATION.fps (en el TV box
+         * cada fotograma cuesta ~4-5 % de un núcleo; CSS iría a 60 fps).
+         * Entre olas el reloj se para: en reposo no se dibuja nada.
+         */
+        var ANIMATION = {
+          fps: 20, // fotogramas por segundo mientras algo se mueve
+          dropDelayMs: 90, // entrada: cada letra cae 90 ms después de la anterior
+          dropMs: 700, // entrada: duración de la caída de una letra
+          dropFromPx: -120, // entrada: altura desde la que cae
+          subtitleMs: 500, // entrada: fundido del subtítulo (al final)
+          waveEveryMs: 8000, // pausa entre olas
+          waveStepMs: 70, // ola: retraso entre letras
+          waveMs: 600, // ola: duración del salto de una letra
+          waveHeightPx: 24, // ola: altura del salto
+          waveGrow: 0.12, // ola: aumento de tamaño en lo alto (12 %)
+        };
+
+        /** Textos por idioma (claves de idioma iguales a I18N de loading.html). */
+        var I18N = {
+          es: {
+            title: "Mirror - Smart Pizarra",
+            hello: "¡Hola mundo!",
+            subtitle: "Smart Pizarra",
+          },
+          en: {
+            title: "Mirror - Smart Pizarra",
+            hello: "Hello world!",
+            subtitle: "Smart Pizarra",
+          },
+        };
+
+        /** Idioma con el que se MUESTRA si la clave aún no existe (no se guarda). */
+        var DISPLAY_LANGUAGE = "en";
+
+        /* ==================================================================
+           2. SETTINGS (solo lectura de localStorage)
+           ================================================================== */
+
+        /** @returns {string|null} Valor guardado, o null si no existe o no hay localStorage. */
+        function readStorage(key) {
+          try {
+            return window.localStorage.getItem(key);
+          } catch (e) {
+            console.log("No se pudo leer localStorage:", e);
+            return null;
+          }
+        }
+
+        /** @returns {number|null} 0/90/180/270 (360 => 0, -90 => 270), o null. */
+        function readOrientation() {
+          var degrees = parseInt(readStorage(KEYS.orientation), 10);
+          if (isNaN(degrees)) return null;
+          degrees = ((degrees % 360) + 360) % 360;
+          return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
+        }
+
+        /** @returns {number|null} Escala (%) entera dentro de SCALE_LIMITS, o null. */
+        function readScale(key) {
+          var percent = parseInt(readStorage(key), 10);
+          return percent >= SCALE_LIMITS.min && percent <= SCALE_LIMITS.max
+            ? percent
+            : null;
+        }
+
+        /** @returns {string} Idioma guardado (clave de I18N) o DISPLAY_LANGUAGE. */
+        function readLanguage() {
+          var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(I18N, code)
+            ? code
+            : DISPLAY_LANGUAGE;
+        }
+
+        /* ==================================================================
+           3. ORIENTACIÓN Y TAMAÑO (igual que connection.html)
+           ================================================================== */
+        var layoutManager = {
+          stage: null,
+          scaler: null,
+          card: null,
+          _lastState: "", // "orientación|escala|ventana|tarjeta" aplicado por última vez
+
+          /** Busca los elementos. Llamar una vez al iniciar. */
+          init: function () {
+            this.stage = document.getElementById("stage");
+            this.scaler = document.getElementById("scaler");
+            this.card = document.getElementById("card");
+          },
+
+          /**
+           * Aplica orientación y escala solo si cambió algo (settings, tamaño
+           * de la ventana o de la tarjeta). Con la ventana 0x0 no aplica.
+           * @param {number|null} orientation 0/90/180/270 (null => 0).
+           * @param {number|null} scale       % sobre el ajuste (null => 100).
+           */
+          apply: function (orientation, scale) {
+            orientation = orientation === null ? 0 : orientation;
+            scale = scale === null ? 100 : scale;
+            var width = window.innerWidth || document.documentElement.clientWidth;
+            var height = window.innerHeight || document.documentElement.clientHeight;
+            if (!width || !height) return;
+            var cardWidth = this.card.offsetWidth;
+            var cardHeight = this.card.offsetHeight;
+            var state =
+              orientation + "|" + scale + "|" + width + "x" + height +
+              "|" + cardWidth + "x" + cardHeight;
+            if (state === this._lastState) return;
+            this._lastState = state;
+
+            var stageWidth = width;
+            var stageHeight = height;
+            var transform = "none";
+            if (orientation === 90) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(" + width + "px, 0px) rotate(90deg)";
+            } else if (orientation === 180) {
+              transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            } else if (orientation === 270) {
+              stageWidth = height;
+              stageHeight = width;
+              transform = "translate(0px, " + height + "px) rotate(270deg)";
+            }
+            this.stage.style.width = stageWidth + "px";
+            this.stage.style.height = stageHeight + "px";
+            this.stage.style.transformOrigin = "0 0";
+            this.stage.style.transform = transform;
+
+            // Ajuste a pantalla: offsetWidth/Height miden la tarjeta SIN transformaciones
+            var zoom = 1;
+            if (cardWidth > 0 && cardHeight > 0) {
+              zoom =
+                (Math.min(
+                  (stageWidth * FIT_RATIO) / cardWidth,
+                  (stageHeight * FIT_RATIO) / cardHeight
+                ) * scale) / 100;
+            }
+            this.scaler.style.transform = "scale(" + zoom.toFixed(4) + ")";
+          },
+        };
+
+        /* ==================================================================
+           4. ANIMACIÓN "HOLA MUNDO"
+           Entrada (letras caen + subtítulo) -> reposo -> ola -> reposo -> ...
+           Un único reloj (setTimeout a ANIMATION.fps) solo mientras hay
+           movimiento; un solo temporizador a la vez; parado en segundo plano.
+           ================================================================== */
+
+        /** Rebote al final de la caída (easeOutBack). @param {number} p 0..1 */
+        function easeOutBack(p) {
+          var c = 1.70158;
+          return 1 + (c + 1) * Math.pow(p - 1, 3) + c * Math.pow(p - 1, 2);
+        }
+
+        /** Limita p a 0..1. */
+        function clamp01(p) {
+          return p < 0 ? 0 : p > 1 ? 1 : p;
+        }
+
+        var helloAnimation = {
+          titleEl: null,
+          subtitleEl: null,
+          letters: [], // <span> de cada letra (sin espacios)
+          timer: null, // próximo fotograma o próxima ola
+          language: null, // idioma del texto puesto ahora
+          phase: "idle", // "drop" | "wave" | "idle"
+          phaseStart: 0, // Date.now() al empezar la fase
+
+          init: function () {
+            this.titleEl = document.getElementById("title");
+            this.subtitleEl = document.getElementById("subtitle");
+          },
+
+          /**
+           * Pone el texto del idioma (si cambió) y repite la entrada.
+           * @param {string} language Clave de I18N.
+           * @returns {boolean} true si cambió el texto.
+           */
+          setLanguage: function (language) {
+            if (language === this.language) return false;
+            this.language = language;
+            var dict = I18N[language];
+            document.documentElement.lang = language;
+            document.title = dict.title;
+            this.subtitleEl.textContent = dict.subtitle;
+            this.subtitleEl.style.opacity = "0";
+            this.buildLetters(dict.hello);
+            this.startPhase("drop");
+            return true;
+          },
+
+          /** Crea un <span> por letra (textContent: sin riesgo de XSS). */
+          buildLetters: function (text) {
+            var chars = text.split("");
+            this.titleEl.textContent = "";
+            this.letters = [];
+            for (var i = 0, color = 0; i < chars.length; i++) {
+              var span = document.createElement("span");
+              if (chars[i] === " ") {
+                span.className = "letter space";
+              } else {
+                span.className = "letter c" + (color++ % 5);
+                span.textContent = chars[i];
+                this.letters.push(span);
+              }
+              this.titleEl.appendChild(span);
+            }
+          },
+
+          /** Duración total (ms) de una fase con todas sus letras. */
+          phaseMs: function (phase) {
+            var n = Math.max(0, this.letters.length - 1);
+            return phase === "drop"
+              ? n * ANIMATION.dropDelayMs + ANIMATION.dropMs + ANIMATION.subtitleMs
+              : n * ANIMATION.waveStepMs + ANIMATION.waveMs;
+          },
+
+          /** Empieza una fase en movimiento ("drop" o "wave"). */
+          startPhase: function (phase) {
+            this.stop();
+            this.phase = phase;
+            this.phaseStart = Date.now();
+            // Capas propias solo mientras se mueven (no se repinta el fondo)
+            this.setWillChange(true);
+            this.frame();
+          },
+
+          /** Dibuja un fotograma y programa el siguiente o el reposo. */
+          frame: function () {
+            var self = this;
+            var t = Date.now() - this.phaseStart;
+            var done = t >= this.phaseMs(this.phase);
+            for (var i = 0; i < this.letters.length; i++) {
+              this.letters[i].style.transform = done ? "none" : this.letterTransform(i, t);
+              this.letters[i].style.opacity = done ? "1" : this.letterOpacity(i, t);
+            }
+            if (this.phase === "drop") {
+              var subStart = this.phaseMs("drop") - ANIMATION.subtitleMs;
+              this.subtitleEl.style.opacity = done
+                ? "1"
+                : clamp01((t - subStart) / ANIMATION.subtitleMs).toFixed(2);
+            }
+            if (done) {
+              this.rest();
+              return;
+            }
+            this.timer = setTimeout(function () {
+              self.frame();
+            }, 1000 / ANIMATION.fps);
+          },
+
+          /** Transform de la letra i en el instante t (ms) de la fase actual. */
+          letterTransform: function (i, t) {
+            if (this.phase === "drop") {
+              var p = clamp01((t - i * ANIMATION.dropDelayMs) / ANIMATION.dropMs);
+              return "translateY(" + (ANIMATION.dropFromPx * (1 - easeOutBack(p))).toFixed(1) + "px)";
+            }
+            var q = clamp01((t - i * ANIMATION.waveStepMs) / ANIMATION.waveMs);
+            var s = Math.sin(Math.PI * q); // 0 -> 1 -> 0
+            if (s < 0.001) return "none";
+            return "translateY(" + (-ANIMATION.waveHeightPx * s).toFixed(1) + "px) scale(" +
+              (1 + ANIMATION.waveGrow * s).toFixed(3) + ")";
+          },
+
+          /** Opacidad de la letra i (solo cambia en la entrada). */
+          letterOpacity: function (i, t) {
+            if (this.phase !== "drop") return "1";
+            var p = clamp01((t - i * ANIMATION.dropDelayMs) / (ANIMATION.dropMs * 0.6));
+            return p.toFixed(2);
+          },
+
+          /** Reposo: todo quieto, sin capas extra; la próxima ola en waveEveryMs. */
+          rest: function () {
+            var self = this;
+            this.phase = "idle";
+            this.setWillChange(false);
+            this.timer = setTimeout(function () {
+              self.startPhase("wave");
+            }, ANIMATION.waveEveryMs);
+          },
+
+          /** Activa/desactiva will-change en las letras. */
+          setWillChange: function (on) {
+            for (var i = 0; i < this.letters.length; i++) {
+              this.letters[i].style.willChange = on ? "transform, opacity" : "";
+            }
+          },
+
+          /** Detiene el reloj (segundo plano o reinicio). */
+          stop: function () {
+            if (this.timer) clearTimeout(this.timer);
+            this.timer = null;
+          },
+
+          /** Al volver a primer plano: termina lo pendiente y queda en reposo. */
+          resume: function () {
+            this.stop();
+            if (this.phase === "idle") {
+              this.rest();
+            } else {
+              this.phaseStart = 0; // fase terminada: el fotograma la deja en su sitio
+              this.frame();
+            }
+          },
+        };
+
+        /* ==================================================================
+           5. INICIO
+           ================================================================== */
+
+        /**
+         * Vuelve a leer los settings y aplica lo que haya cambiado:
+         * idioma (repite la entrada), orientación y tamaño. Barato si nada cambió.
+         */
+        function refresh() {
+          helloAnimation.setLanguage(readLanguage());
+          layoutManager.apply(readOrientation(), readScale(KEYS.ownScale));
+        }
+
+        function init() {
+          layoutManager.init();
+          helloAnimation.init();
+          refresh(); // texto, orientación y tamaño desde localStorage
+
+          // Releer settings: cambio de tamaño, al mostrarse, si otra página
+          // los cambia y cada WATCH_MS (el WebView puede arrancar en 0x0)
+          window.addEventListener("resize", refresh);
+          window.addEventListener("orientationchange", refresh);
+          window.addEventListener("load", refresh);
+          window.addEventListener("pageshow", refresh);
+          window.addEventListener("storage", refresh);
+          document.addEventListener("visibilitychange", function () {
+            if (document.hidden) {
+              helloAnimation.stop(); // en segundo plano: nada
+            } else {
+              helloAnimation.resume();
+              refresh();
+            }
+          });
+          setInterval(refresh, WATCH_MS);
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>
