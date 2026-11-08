@@ -15,6 +15,10 @@
  *  - Cada equipo muestra su fecha de registro y su "Última conexión"
  *    (arranque de loading.html o señal de la app nativa, api/ping.php).
  *  - Historial de arranques (?history=SP-...).
+ *  - CONTENIDO (imágenes/videos de mirror.html): permiso aparte de la
+ *    autorización, botón "Habilitar contenido" en cada equipo. Un equipo
+ *    solo muestra el contenido de su usuario si está autorizado Y tiene el
+ *    contenido habilitado.
  *
  *  - USUARIOS (botón "Usuarios", ?view=users): el administrador crea
  *    usuarios con email, teléfono y empresa. El sistema genera una
@@ -198,6 +202,14 @@ try {
                 case 'label':
                     DeviceRepository::setLabel($id, trim(param($_POST, 'label')));
                     redirectWith("Alias de $id guardado.", $back);
+                case 'media_enable':
+                case 'media_disable':
+                    // Permiso de contenido (imágenes/videos de mirror.html), aparte de la autorización
+                    $on = $action === 'media_enable';
+                    DeviceRepository::setMediaEnabled($id, $on);
+                    redirectWith($on
+                        ? "Contenido habilitado en $id: mostrará las imágenes/videos de su usuario si está autorizado."
+                        : "Contenido deshabilitado en $id: dejará de mostrarlo en su próxima consulta.", $back);
                 case 'set_user':
                     // "" = sin asignar
                     $raw = param($_POST, 'userId');
@@ -308,6 +320,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .header-nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .header-nav a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
     .owner { font-size: .85rem; color: var(--muted); }
+    .badge.off { color: var(--muted); } /* contenido no habilitado */
     .user-form { display: flex; gap: 6px; }
     /* Usuarios */
     .user-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-bottom: 10px; }
@@ -527,6 +540,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php foreach ($devices as $d):
       $id = $d['device_id'];
       $st = $d['status'];
+      $mediaOn = DeviceRepository::mediaEnabled($d); // permiso de contenido (mirror.html)
   ?>
     <section class="card device">
       <div class="device-head">
@@ -534,7 +548,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <?= $d['label'] ? '<span class="alias">' . h($d['label']) . '</span>' : '' ?>
           <span class="device-id"><?= h($id) ?></span>
         </span>
-        <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
+        <span>
+          <!-- Permiso de contenido (mirror.html): independiente de la autorización -->
+          <span class="badge <?= $mediaOn ? 'authorized' : 'off' ?>"><?= $mediaOn ? 'Contenido habilitado' : 'Contenido no habilitado' ?></span>
+          <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
+        </span>
       </div>
       <div class="meta">
         Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>' : '<em>sin asignar</em>' ?><br>
@@ -558,6 +576,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
             <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
             <button class="bad" type="submit">Revocar</button></form>
         <?php endif; ?>
+        <!-- Habilitar/deshabilitar la función de contenido (imágenes/videos) -->
+        <form method="post" <?= $mediaOn ? 'data-confirm="¿Deshabilitar el contenido en ' . h($id) . '? Dejará de mostrar imágenes y videos."' : '' ?>><?= csrfField() ?>
+          <input type="hidden" name="action" value="<?= $mediaOn ? 'media_disable' : 'media_enable' ?>">
+          <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
+          <button class="<?= $mediaOn ? 'bad' : 'ok' ?>" type="submit"><?= $mediaOn ? 'Deshabilitar contenido' : 'Habilitar contenido' ?></button></form>
         <form method="post" class="label-form"><?= csrfField() ?><input type="hidden" name="action" value="label">
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
           <input type="text" name="label" value="<?= h($d['label']) ?>" maxlength="100" placeholder="Alias (p. ej. Local Centro)" aria-label="Alias">

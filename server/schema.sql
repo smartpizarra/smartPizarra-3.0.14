@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   device_id     VARCHAR(32)  NOT NULL,          -- "SP-XXXX-XXXX-XXXX" (localStorage smartpizarra.deviceId)
   secret_hash   CHAR(64)     NOT NULL,          -- SHA-256 del secreto del equipo (nunca el secreto)
   status        VARCHAR(10)  NOT NULL DEFAULT 'pending', -- pending | authorized | revoked
+  media_enabled TINYINT(1)   NOT NULL DEFAULT 0, -- 1 = el administrador le permite mostrar imágenes/videos (mirror.html)
+  media_enabled_at DATETIME  NULL,              -- último cambio de ese permiso (UTC)
   user_id       INT UNSIGNED NULL,              -- usuario dueño (sp_users.id); NULL = sin asignar
   label         VARCHAR(100) NULL,              -- ALIAS libre puesto desde el panel
   app_version   VARCHAR(20)  NULL,              -- versión que informó el equipo

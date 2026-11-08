@@ -187,6 +187,10 @@ final class Database
         if (!in_array('user_id', $cols, true)) {
             return 'Falta la columna user_id: ' . $usersSql;
         }
+        if (!in_array('media_enabled', $cols, true)) {
+            return 'Falta la columna media_enabled: ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-08-media-enabled.sql.';
+        }
         return null;
     }
 
@@ -397,6 +401,26 @@ final class DeviceRepository
         );
         $stmt->execute([Database::now(), $userId]);
         return $stmt->rowCount();
+    }
+
+    /**
+     * Permiso de CONTENIDO (imágenes/videos de mirror.html), aparte de la
+     * autorización: solo lo cambia el administrador. Sin él, el equipo no
+     * recibe la lista ni descarga archivos aunque esté autorizado.
+     */
+    public static function setMediaEnabled(string $id, bool $enabled): bool
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE sp_devices SET media_enabled = ?, media_enabled_at = ? WHERE device_id = ?'
+        );
+        $stmt->execute([$enabled ? 1 : 0, Database::now(), $id]);
+        return $stmt->rowCount() > 0;
+    }
+
+    /** @param array<string,mixed> $device Fila de find()/search(). */
+    public static function mediaEnabled(array $device): bool
+    {
+        return (int) ($device['media_enabled'] ?? 0) === 1;
     }
 
     /** Guarda el alias del equipo ("" lo borra). Máx. 100 caracteres. */

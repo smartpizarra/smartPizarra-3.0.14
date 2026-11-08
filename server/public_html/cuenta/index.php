@@ -81,7 +81,8 @@ function targetFields(array $devices, bool $all, array $selected, string $uid): 
         $id = (string) $d['device_id'];
         $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '" id="d-' . h($uid . $id) . '"'
             . (in_array($id, $selected, true) ? ' checked' : '') . '> '
-            . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id) . '</label>';
+            . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
+            . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
     }
     return $html . '</div></fieldset>';
 }
@@ -355,6 +356,8 @@ $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizad
         </div>
         <div class="meta">
           Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
+          <!-- Permiso de contenido: lo habilita el administrador -->
+          Contenido (imágenes y videos): <?= DeviceRepository::mediaEnabled($d) ? 'habilitado' : '<strong>no habilitado</strong> — pídeselo al administrador' ?><br>
           Registrado el <?= dateTag($d['created_at']) ?>
           · Arranques: <?= (int) ($d['boots'] ?? 0) ?>
           <?= !empty($d['last_boot_at']) ? '(último ' . dateTag($d['last_boot_at']) . ')' : '' ?>
@@ -369,7 +372,8 @@ $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizad
     <h2>Contenido de mis pantallas (<?= count($mediaList) ?>)</h2>
     <p class="hint">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes(MediaRepository::quotaBytes())) ?>.
       Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
-      Los videos se reproducen sin sonido. Los equipos se actualizan solos en un minuto aproximadamente.</p>
+      Los videos se reproducen sin sonido. Los equipos se actualizan solos en un minuto aproximadamente.
+      Solo lo muestran los equipos autorizados con el contenido habilitado por el administrador.</p>
     <form class="card block" method="post" enctype="multipart/form-data" id="uploadForm">
       <?= csrfField() ?>
       <input type="hidden" name="action" value="media_upload">

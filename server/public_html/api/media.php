@@ -18,8 +18,11 @@
  *    action=file        descarga un archivo
  *      id             id del archivo (de la lista)
  *
- *  SOLO equipos AUTORIZADOS reciben contenido. Un equipo pendiente o
- *  revocado recibe la lista vacía (y su estado) para dejar de mostrarlo.
+ *  Solo reciben contenido los equipos AUTORIZADOS y con el permiso de
+ *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled,
+ *  botón "Habilitar contenido" del panel). Si falta cualquiera de los dos,
+ *  la lista llega vacía (con "authorized" y "mediaEnabled") para que el
+ *  equipo deje de mostrarlo.
  *  Los archivos son los del USUARIO dueño del equipo que van a todos sus
  *  equipos o a ese equipo en concreto (se eligen en /cuenta/).
  *
@@ -28,9 +31,10 @@
  *              "revision":"<40 hex>","items":[{"id":7,"kind":"image|video",
  *              "mime":"image/jpeg","size":12345,"sha256":"<64 hex>","seconds":10}, ...]}
  *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide
- *         200 {"ok":true,"status":"pending|revoked","authorized":false,"revision":"","items":[]}
+ *         200 {"ok":true,"status":"pending|revoked","authorized":false,"mediaEnabled":…,"revision":"","items":[]}
+ *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"","items":[]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
- *    400 bad_request · 403 secret_mismatch | not_authorized · 404 not_registered |
+ *    400 bad_request · 403 secret_mismatch | not_authorized | media_disabled · 404 not_registered |
  *    not_found · 405 method · 429 rate_limited (descargas por equipo y hora) · 500 server
  */
 
@@ -61,10 +65,16 @@ try {
         Http::json(['ok' => false, 'error' => 'secret_mismatch'], 403);
     }
     $auth = DeviceRepository::authPayload($device);
+    // Permiso de contenido (aparte de la autorización); solo lo da el administrador
+    $mediaEnabled = DeviceRepository::mediaEnabled($device);
+    $allowed = $auth['authorized'] && $mediaEnabled;
 
     if ($action === 'file') {
         if (!$auth['authorized']) {
             Http::json(['ok' => false, 'error' => 'not_authorized'], 403);
+        }
+        if (!$mediaEnabled) {
+            Http::json(['ok' => false, 'error' => 'media_disabled'], 403);
         }
         // Límite de descargas por equipo y hora: protege el ancho de banda
         // si un equipo entra en bucle (lo normal es 1 descarga por archivo)
@@ -82,7 +92,7 @@ try {
     // action=list: anota la consulta (como api/device.php) y responde la lista
     DeviceRepository::touch($id, null, Http::clientIp());
     $items = [];
-    if ($auth['authorized']) {
+    if ($allowed) {
         foreach (MediaRepository::forDevice($id) as $m) {
             $items[] = [
                 'id' => (int) $m['id'],
@@ -95,8 +105,8 @@ try {
         }
     }
     // revision: huella de la lista; si el equipo ya la tiene no se reenvía
-    $revision = $auth['authorized'] ? sha1(json_encode($items)) : '';
-    $out = ['ok' => true, 'deviceId' => $id] + $auth + ['revision' => $revision];
+    $revision = $allowed ? sha1(json_encode($items)) : '';
+    $out = ['ok' => true, 'deviceId' => $id] + $auth + ['mediaEnabled' => $mediaEnabled, 'revision' => $revision];
     if ($revision !== '' && hash_equals($revision, (string) ($_POST['rev'] ?? ''))) {
         $out['unchanged'] = true;
     } else {
