@@ -10,6 +10,7 @@
  *    - csrfToken/Field()   token anti-CSRF por sesión
  *    - redirectWith()      mensaje "flash" + Post/Redirect/Get
  *    - ago/agoTag/dateTag/onlineTag  fechas UTC => texto
+ *    - formatBytes()       tamaño legible (KB / MB / GB)
  *    - baseStyles(), timeScript()    CSS y JS compartidos
  *  Va en private/ junto a lib.php.
  */
@@ -156,6 +157,18 @@ function onlineTag(?string $utc, int $timeout): string
     return '<span class="online ' . ($on ? 'on' : 'off') . '" data-online="' . $t . '">'
         . ($on ? 'En línea · ' : 'Desconectado · ')
         . '<span data-ago="' . $t . '">' . h(ago($utc)) . '</span></span>';
+}
+
+/** Tamaño legible: 1.5 MB, 820 KB... */
+function formatBytes(int $bytes): string
+{
+    if ($bytes >= 1073741824) {
+        return number_format($bytes / 1073741824, 2, ',', '.') . ' GB';
+    }
+    if ($bytes >= 1048576) {
+        return number_format($bytes / 1048576, 1, ',', '.') . ' MB';
+    }
+    return max(1, (int) round($bytes / 1024)) . ' KB';
 }
 
 /** Segundos sin señal para considerar un equipo desconectado (config, mín. 30). */

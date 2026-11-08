@@ -29,6 +29,12 @@
  *    REVOCAR TODOS sus equipos de una vez (o uno a uno en cada tarjeta). Al eliminar un usuario sus equipos quedan
  *    sin asignar, con el estado que tenían.
  *
+ *  - CONTENIDO DE LOS USUARIOS (botón "Contenido", ?view=media): todas
+ *    las imágenes/videos subidos en /cuenta/, filtrables por usuario, con
+ *    vista previa (?file=ID), descarga con su nombre original
+ *    (?file=ID&dl=1) y ELIMINAR (las pantallas lo quitan en su próxima
+ *    consulta). El administrador no los edita: eso lo hace su dueño.
+ *
  *  Seguridad: sesión con cookie segura, token CSRF en cada formulario,
  *  límite de intentos de login por IP, consultas preparadas, salida
  *  escapada y CSP con nonce (private/web.php).
@@ -93,6 +99,16 @@ try {
         // Sin configuración válida no se puede hacer nada más
         throw new RuntimeException($setupError);
     }
+    // Archivo de un usuario: vista previa (?file=ID) o descarga (&dl=1), solo administrador
+    if ($loggedIn && isset($_GET['file'])) {
+        $media = MediaRepository::find((int) param($_GET, 'file'));
+        if ($media === null) {
+            http_response_code(404);
+            exit('No encontrado');
+        }
+        MediaRepository::send($media, param($_GET, 'dl') === '1');
+    }
+
     /* -----------------------------------------------------------------
        Acciones (POST)
        ----------------------------------------------------------------- */
@@ -129,6 +145,14 @@ try {
             session_destroy();
             header('Location: ./', true, 303);
             exit;
+        } elseif ($action === 'media_delete') {
+            /* ---- Eliminar un archivo de un usuario (vista ?view=media) ---- */
+            $back = param($_POST, 'back') !== '' ? param($_POST, 'back') : 'view=media';
+            $gone = MediaRepository::deleteById((int) param($_POST, 'mediaId'));
+            redirectWith($gone === null
+                ? 'Ese archivo ya no existe.'
+                : '«' . $gone['original_name'] . '» de «' . $gone['user_company'] . '» eliminado. '
+                    . 'Sus pantallas dejarán de mostrarlo en su próxima consulta.', $back);
         } elseif (str_starts_with($action, 'user_')) {
             /* ---- Acciones sobre USUARIOS (vista ?view=users) ---- */
             $uid = (int) param($_POST, 'userId');
@@ -233,8 +257,8 @@ try {
         $filter = 'pending';
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
-    // Vista: lista de equipos (por defecto) o gestión de usuarios (?view=users)
-    $view = param($_GET, 'view') === 'users' ? 'users' : 'list';
+    // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
+    $view = in_array(param($_GET, 'view'), ['users', 'media'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -251,6 +275,11 @@ try {
     $back = http_build_query(array_filter(['filter' => $filter, 'q' => $q, 'user' => $userParam]));
     $devices = $loggedIn && $view === 'list' ? DeviceRepository::search($filter === 'all' ? null : $filter, $q, $userFilter) : [];
     $counts = $loggedIn ? DeviceRepository::counts($userFilter) : [];
+    // Contenido de los usuarios (?view=media[&user=ID])
+    $mediaUser = $userFilter !== null && $userFilter > 0 ? $userFilter : null;
+    $mediaAll = $loggedIn && $view === 'media' ? MediaRepository::allForAdmin($mediaUser) : [];
+    $mediaTotals = $loggedIn && $view === 'media' ? MediaRepository::totals($mediaUser) : [0, 0];
+    $mediaBack = http_build_query(array_filter(['view' => 'media', 'user' => $mediaUser]));
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
     // Contraseña temporal recién creada/restablecida (se muestra una vez)
@@ -292,6 +321,9 @@ try {
     $usersById = [];
     $userFilter = null;
     $userParam = null;
+    $mediaAll = [];
+    $mediaTotals = [0, 0];
+    $mediaBack = '';
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -321,6 +353,12 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .header-nav a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
     .owner { font-size: .85rem; color: var(--muted); }
     .badge.off { color: var(--muted); } /* contenido no habilitado */
+    /* Contenido de los usuarios (?view=media) */
+    .media { display: flex; gap: 12px; flex-wrap: wrap; }
+    .thumb { width: 160px; height: 90px; border-radius: 8px; background: #000; object-fit: contain; flex: 0 0 auto;
+      display: flex; align-items: center; justify-content: center; color: #fff; font-size: .9rem; text-decoration: none; }
+    .media-body { flex: 1 1 260px; min-width: 0; }
+    .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
     /* Usuarios */
     .user-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-bottom: 10px; }
@@ -367,6 +405,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <!-- Vistas: equipos / usuarios -->
       <a class="btn <?= $view === 'list' && !$historyDevice ? 'on' : '' ?>" href="./">Dispositivos</a>
       <a class="btn <?= $view === 'users' ? 'on' : '' ?>" href="?view=users">Usuarios</a>
+      <a class="btn <?= $view === 'media' ? 'on' : '' ?>" href="?view=media">Contenido</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
   </header>
@@ -393,6 +432,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <?php endforeach; ?>
     </select>
     <?php if ($view === 'list' && isset($_GET['filter'])): ?><input type="hidden" name="filter" value="<?= h($filter) ?>"><?php endif; ?>
+    <?php if ($view === 'media'): ?><input type="hidden" name="view" value="media"><?php endif; ?>
     <button type="submit">Buscar</button>
     <button type="button" id="scanBtn" class="primary">Escanear QR</button>
   </form>
@@ -442,6 +482,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <div class="actions">
             <button type="submit">Guardar datos</button>
             <a class="btn" href="<?= h(panelUrl(['user' => $uid])) ?>">Ver equipos</a>
+            <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver contenido (<?= (int) $u['media'] ?>)</a>
           </div>
         </form>
         <div class="actions">
@@ -457,6 +498,50 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <form method="post" data-confirm="¿Eliminar el usuario «<?= h($u['company']) ?>»? Sus <?= (int) $u['devices'] ?> equipo(s) quedarán sin asignar CONSERVANDO su autorización."><?= csrfField() ?>
             <input type="hidden" name="action" value="user_delete"><input type="hidden" name="userId" value="<?= $uid ?>">
             <button type="submit">Eliminar usuario</button></form>
+        </div>
+      </section>
+    <?php endforeach; ?>
+
+  <?php elseif ($view === 'media' && !$historyDevice): ?>
+    <!-- ============ CONTENIDO SUBIDO POR LOS USUARIOS ============
+         Solo ver, descargar o eliminar; ordenar/asignar lo hace su dueño. -->
+    <section class="card focus-user">
+      <div class="user-head">
+        <span class="user-name">Contenido de <?= $mediaUser !== null ? h($usersById[$mediaUser]['company'] ?? '') : 'todos los usuarios' ?></span>
+        <span class="owner"><?= (int) $mediaTotals[0] ?> archivo(s) · <?= h(formatBytes((int) $mediaTotals[1])) ?></span>
+      </div>
+      <div class="meta">Elige un usuario en el selector de arriba para ver solo su contenido. Al eliminar un archivo,
+        las pantallas dejan de mostrarlo en su próxima consulta (≈ 1 min).</div>
+    </section>
+    <?php if (!$mediaAll): ?><div class="card empty">No hay archivos.</div><?php endif; ?>
+    <?php foreach ($mediaAll as $m): $mid = (int) $m['id']; $isImg = $m['kind'] === 'image'; ?>
+      <section class="card device">
+        <div class="media">
+          <?php if ($isImg): ?>
+            <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?file=<?= $mid ?>" alt="" loading="lazy"></a>
+          <?php else: ?>
+            <a class="thumb" href="?file=<?= $mid ?>" target="_blank" rel="noopener">&#9654; Video</a>
+          <?php endif; ?>
+          <div class="media-body">
+            <div class="media-name"><?= h($m['original_name']) ?></div>
+            <div class="meta">
+              Usuario: <a href="<?= h(panelUrl(['view' => 'media', 'user' => (int) $m['user_id']])) ?>"><?= h($m['user_company']) ?></a>
+              <span class="owner">(<?= h($m['user_email']) ?>)</span><br>
+              <?= $isImg ? 'Imagen · ' . (int) $m['seconds'] . ' s en pantalla' : 'Video' ?>
+              · <?= h(formatBytes((int) $m['size_bytes'])) ?> · <?= h($m['mime']) ?>
+              · Puesto <?= (int) $m['position'] ?><br>
+              Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos sus equipos' : (int) $m['devices_count'] . ' equipo(s) elegido(s)' ?>
+              · Subido el <?= dateTag($m['created_at']) ?>
+            </div>
+            <div class="actions">
+              <a class="btn" href="?file=<?= $mid ?>" target="_blank" rel="noopener">Ver</a>
+              <a class="btn" href="?file=<?= $mid ?>&amp;dl=1">Descargar</a>
+              <form method="post" data-confirm="¿Eliminar «<?= h($m['original_name']) ?>» de «<?= h($m['user_company']) ?>»? Se borra del servidor y sus pantallas dejarán de mostrarlo."><?= csrfField() ?>
+                <input type="hidden" name="action" value="media_delete"><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <input type="hidden" name="back" value="<?= h($mediaBack) ?>">
+                <button class="bad" type="submit">Eliminar</button></form>
+            </div>
+          </div>
         </div>
       </section>
     <?php endforeach; ?>

@@ -41,6 +41,14 @@ Conocer el ID no basta para consultar ni suplantar un equipo: hace falta el secr
 
 **Permiso del administrador:** un equipo solo muestra contenido si está **autorizado** y además tiene el **contenido habilitado**. En el panel cada equipo muestra la insignia *Contenido habilitado / no habilitado* y el botón *Habilitar contenido* / *Deshabilitar contenido*. Los equipos nuevos llegan sin el permiso. Sin él, `api/media.php` devuelve la lista vacía con `"mediaEnabled":false`, la descarga responde `403 media_disabled` y la TV muestra el aviso *Contenido no habilitado*. Lo ya descargado se conserva, así que al habilitarlo vuelve sin descargarse otra vez. El usuario ve en `/cuenta/` qué equipos tienen el permiso, pero no puede cambiarlo.
 
+**Acceso del administrador:** el botón *Contenido* del panel (`?view=media`) lista todo lo subido por los usuarios. Se puede filtrar con el selector de usuario o con *Ver contenido (N)* en la vista *Usuarios*. De cada archivo se ve el dueño, el tipo, el tamaño, los segundos, en qué equipos se muestra y la fecha de subida. Tiene tres botones:
+
+- **Ver:** vista previa.
+- **Descargar:** con su nombre original.
+- **Eliminar:** borra la fila y el fichero, y las pantallas lo quitan en su próxima consulta.
+
+El administrador no ordena ni reasigna archivos: eso lo hace su dueño.
+
 Cada usuario sube **imágenes** (JPG, PNG, WEBP, GIF) y **videos** (MP4 H.264 o WEBM) en `https://smartpizarra.cloud/cuenta/`, sección *Contenido de mis pantallas*:
 
 - **Mostrar en:** *Todos mis equipos* (incluye los que se le asignen después) o *Solo en:* los equipos marcados.
@@ -148,7 +156,7 @@ Para los usuarios (si la tabla `sp_users` no existe todavía):
 Para el contenido de `mirror.html` (si la tabla `sp_media` no existe todavía):
 
 1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-08-media.sql`, después de la de usuarios. Se puede repetir sin riesgo.
-2. Sube `private/lib.php`, `api/media.php` (nuevo) y `cuenta/index.php`. La carpeta `private/media/` se crea sola al subir el primer archivo. Si no tiene permiso, créala a mano junto a `lib.php`.
+2. Sube `private/lib.php`, `private/web.php`, `api/media.php` (nuevo), `admin/index.php` y `cuenta/index.php`. La carpeta `private/media/` se crea sola al subir el primer archivo. Si no tiene permiso, créala a mano junto a `lib.php`.
 3. Opcional: añade a `config.php` las claves `media_*` de `config.sample.php` y ajusta `upload_max_filesize` / `post_max_size` de PHP.
 4. Ejecuta también `migrations/2026-11-08-media-enabled.sql` (permiso de contenido por equipo; todos empiezan sin él) y sube `admin/index.php`.
 5. Sube `mirror.html` y el `loading.html` actual a los assets de Kodular. `loading.html` crea `smartpizarra.mirror.scale`, la API y las credenciales del equipo.

@@ -35,18 +35,6 @@ function passwordStamp(array $user): string
     return hash('sha256', (string) $user['password_hash']);
 }
 
-/** Tamaño legible: 1.5 MB, 820 KB... */
-function formatBytes(int $bytes): string
-{
-    if ($bytes >= 1073741824) {
-        return number_format($bytes / 1073741824, 2, ',', '.') . ' GB';
-    }
-    if ($bytes >= 1048576) {
-        return number_format($bytes / 1048576, 1, ',', '.') . ' MB';
-    }
-    return max(1, (int) round($bytes / 1024)) . ' KB';
-}
-
 /**
  * Equipos marcados en un formulario de contenido: "all" = todos (también
  * los futuros) o la lista de casillas "devices[]".

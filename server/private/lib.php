@@ -556,7 +556,8 @@ final class UserRepository
         return Database::pdo()->query(
             'SELECT u.*,
                (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id) AS devices,
-               (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id AND d.status = \'authorized\') AS authorized
+               (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id AND d.status = \'authorized\') AS authorized,
+               (SELECT COUNT(*) FROM sp_media m WHERE m.user_id = u.id) AS media
              FROM sp_users u ORDER BY u.company, u.email'
         )->fetchAll();
     }
@@ -814,6 +815,11 @@ final class MediaRepository
                                   int $seconds, bool $allDevices, array $deviceIds): int
     {
         [$kind, $ext] = self::TYPES[$mime];
+        // Nombre original: si no llega en UTF-8 (algunos clientes de Windows) se convierte
+        $originalName = basename(str_replace('\\', '/', $originalName));
+        if (!mb_check_encoding($originalName, 'UTF-8')) {
+            $originalName = mb_convert_encoding($originalName, 'UTF-8', 'Windows-1252');
+        }
         $stored = bin2hex(random_bytes(16)) . '.' . $ext;
         $target = self::dir() . '/' . $stored;
         // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
@@ -919,6 +925,65 @@ final class MediaRepository
         @unlink(self::path($media));
     }
 
+    /** @return array<string,mixed>|null Archivo (de cualquier usuario) con empresa/email del dueño. */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT m.*, u.company AS user_company, u.email AS user_email
+             FROM sp_media m JOIN sp_users u ON u.id = m.user_id WHERE m.id = ?'
+        );
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Archivos de TODOS los usuarios (o de uno) para el panel del
+     * administrador: por empresa y orden de carrusel, con el dueño y los
+     * equipos concretos (devices_count) si no van a todos.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function allForAdmin(?int $userId = null): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT m.*, u.company AS user_company, u.email AS user_email,
+               (SELECT COUNT(*) FROM sp_media_devices md WHERE md.media_id = m.id) AS devices_count
+             FROM sp_media m JOIN sp_users u ON u.id = m.user_id'
+            . ($userId !== null ? ' WHERE m.user_id = ?' : '')
+            . ' ORDER BY u.company, u.id, m.position, m.id LIMIT 1000'
+        );
+        $stmt->execute($userId !== null ? [$userId] : []);
+        return $stmt->fetchAll();
+    }
+
+    /** @return array{0:int,1:int} [archivos, bytes] de todos los usuarios (o de uno). */
+    public static function totals(?int $userId = null): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM sp_media'
+            . ($userId !== null ? ' WHERE user_id = ?' : '')
+        );
+        $stmt->execute($userId !== null ? [$userId] : []);
+        $row = $stmt->fetch(PDO::FETCH_NUM);
+        return [(int) $row[0], (int) $row[1]];
+    }
+
+    /**
+     * Borra un archivo de cualquier usuario (administrador). Los equipos
+     * lo quitan en su próxima consulta.
+     * @return array<string,mixed>|null El archivo borrado (null si no existía).
+     */
+    public static function deleteById(int $id): ?array
+    {
+        $media = self::find($id);
+        if ($media === null) {
+            return null;
+        }
+        Database::pdo()->prepare('DELETE FROM sp_media WHERE id = ?')->execute([$id]);
+        @unlink(self::path($media));
+        return $media;
+    }
+
     /** Borra TODOS los archivos de un usuario (al eliminar el usuario). */
     public static function deleteAllForUser(int $userId): void
     {
@@ -981,7 +1046,10 @@ final class MediaRepository
         header('X-Content-Type-Options: nosniff');
         header('Cache-Control: private, max-age=31536000, immutable');
         if ($download) {
-            header('Content-Disposition: attachment');
+            // Descarga con el nombre original (ASCII seguro + UTF-8 según RFC 6266)
+            $name = (string) ($media['original_name'] ?? 'archivo');
+            $ascii = preg_replace('/[^A-Za-z0-9._ -]/u', '_', $name) ?: 'archivo';
+            header('Content-Disposition: attachment; filename="' . $ascii . '"; filename*=UTF-8\'\'' . rawurlencode($name));
         }
         readfile($path);
         exit;
