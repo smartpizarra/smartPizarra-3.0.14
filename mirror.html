@@ -54,7 +54,27 @@
   - JavaScript ES5 (var / function) + Promise / fetch / Cache Storage
     (requiere origen seguro: http://localhost lo es).
 
-  NO envía mensajes a la app.
+  MENSAJE A LA APP (Kodular, WebViewer.WebViewStringChange): UN JSON tras
+  CADA consulta a api/media.php (cada 60 s, o 30 s si no autorizado),
+  con la misma estructura base que las demás páginas:
+    {"origin":"mirror","action":"sync","status":"ok|error",
+     "internetStatus":"online|offline",
+     "authorized":true|false,"authStatus":"authorized|pending|revoked|conflict|
+       not_registered|unknown|offline",
+     "contentStatus":"showing|downloading|empty|media_disabled|expired|pending|
+       revoked|conflict|not_registered",
+     "mediaEnabled":true|false|null,"contentActive":true|false|null,
+     "secondsLeft":N (vigencia restante, s),"changed":true|false (lista nueva),
+     "items":N,"ready":N (descargados),"downloading":true|false,
+     "httpStatus":200|403|404|0,"error":"" ,
+     "version","url","email","deviceId","league","leagues","orientation",
+     "language","scale" (settings leídos AHORA de localStorage, como
+     connection.html; null si no existen)}
+  status "error" = sin respuesta válida del servidor: authStatus "unknown"
+  (u "offline" si el equipo no tiene red), authorized = última bandera
+  guardada; internetStatus "online" si hubo respuesta HTTP (httpStatus,
+  p. ej. 500) y "offline" si no la hubo (httpStatus 0).
+  Sin deviceId/secreto no hay consulta y no se envía nada.
 
   FUNCIONES PÚBLICAS (para pruebas o para la app)
     mirrorSync()    fuerza una consulta al servidor ahora.
@@ -197,6 +217,23 @@
           apiUrl: "smartpizarra.apiUrl", // https://smartpizarra.cloud/api/device.php
           authorized: "smartpizarra.authorized", // "1" | "0" (la escribe esta página también)
           manifest: "smartpizarra.mirror.manifest", // última lista del servidor (JSON)
+          // Solo viajan en el JSON a la app (igual que en connection.html)
+          version: "smartpizarra.version",
+          url: "smartpizarra.url",
+          email: "smartpizarra.email",
+          league: "smartpizarra.league",
+          appScale: "smartpizarra.scale", // escala para la app (factor % / 100)
+        };
+
+        /**
+         * Ligas de cada opción (para "leagues" en el JSON). IGUALES a
+         * LEAGUE_OPTIONS de loading.html. "todos" = "" (sin filtro).
+         */
+        var LEAGUE_OPTIONS = {
+          mlb: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+          nba: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK",
+          nflnhl: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
+          todos: "",
         };
 
         var ORIENTATIONS = [0, 90, 180, 270];
@@ -331,6 +368,52 @@
 
         function dict() {
           return I18N[readLanguage()];
+        }
+
+        /** @returns {string|null} Clave de LEAGUE_OPTIONS guardada, o null. */
+        function readLeague() {
+          var option = (readStorage(KEYS.league) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, option) ? option : null;
+        }
+
+        /**
+         * Agrega a un mensaje los settings leídos AHORA de localStorage
+         * (null en los que no existen). Mismos nombres que las demás páginas.
+         */
+        function withSettings(msg) {
+          var league = readLeague();
+          var appScale = readScale(KEYS.appScale);
+          var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
+          msg.version = readText(KEYS.version);
+          msg.url = readText(KEYS.url);
+          msg.email = readText(KEYS.email);
+          msg.deviceId = readText(KEYS.deviceId);
+          msg.league = league;
+          msg.leagues = league === null ? null : LEAGUE_OPTIONS[league];
+          msg.orientation = readOrientation(); // global
+          msg.language = Object.prototype.hasOwnProperty.call(I18N, code) ? code : null; // global
+          msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
+          return msg;
+        }
+
+        /**
+         * Envía un texto a la app probando 4 métodos (igual que las demás
+         * páginas). En Kodular lo recibe "WebViewer.WebViewStringChange".
+         */
+        function sendToAppInventor(message) {
+          try {
+            if (window.AppInventor && window.AppInventor.setWebViewString) {
+              window.AppInventor.setWebViewString(message); // Kodular / App Inventor
+            } else if (window.android && window.android.onReceiveValue) {
+              window.android.onReceiveValue(message); // Android (versiones nuevas)
+            } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
+              window.androidInterface.onReceiveValue(message); // Interface estándar
+            } else {
+              window.postMessage(message, "*"); // Navegador normal (pruebas)
+            }
+          } catch (e) {
+            console.log("Error enviando a AppInventor:", e);
+          }
         }
 
         /** URL de api/media.php a partir de smartpizarra.apiUrl (…/api/device.php). */
@@ -618,6 +701,50 @@
             }, Math.min(left, 3600000));
           },
 
+          /**
+           * JSON a la app tras una consulta al servidor (ver cabecera).
+           * @param {number} http   Código HTTP (0 = sin respuesta).
+           * @param {object|null} d Respuesta de api/media.php (null si falló).
+           * @param {string} error  Motivo del fallo ("" si respondió).
+           */
+          report: function (http, d, error) {
+            var ok = !error;
+            var a = this.auth;
+            var authStatus;
+            if (!ok) authStatus = http || navigator.onLine !== false ? "unknown" : "offline";
+            else if (a === "conflict" || a === "not_registered" || a === "pending" || a === "revoked") authStatus = a;
+            else authStatus = "authorized"; // authorized / media_disabled / expired: el equipo SÍ está autorizado
+            var ready = 0;
+            var items = this.manifest.items;
+            for (var i = 0; i < items.length; i++) if (store.ready[store.keyOf(items[i])]) ready++;
+            var contentStatus = a;
+            if (a === "authorized") contentStatus = ready ? "showing" : items.length ? "downloading" : "empty";
+            sendToAppInventor(
+              JSON.stringify(
+                withSettings({
+                  origin: "mirror",
+                  action: "sync",
+                  status: ok ? "ok" : "error",
+                  // Hubo respuesta HTTP (aunque sea de error) => hay internet
+                  internetStatus: ok || http ? "online" : "offline",
+                  authorized: ok ? authStatus === "authorized" : readStorage(KEYS.authorized) === "1",
+                  authStatus: authStatus,
+                  contentStatus: contentStatus,
+                  mediaEnabled: d && typeof d.mediaEnabled === "boolean" ? d.mediaEnabled : null,
+                  contentActive: d && typeof d.contentActive === "boolean" ? d.contentActive : null,
+                  secondsLeft: d ? Math.max(0, +d.secondsLeft || 0) : Math.max(0, Math.round(((+this.manifest.expiresAt || 0) - Date.now()) / 1000)),
+                  // Lista nueva APLICADA (solo con autorización, permiso y vigencia)
+                  changed: !!(d && d.items && !d.unchanged && a === "authorized"),
+                  items: items.length,
+                  ready: ready,
+                  downloading: this.downloading,
+                  httpStatus: http,
+                  error: error || "",
+                })
+              )
+            );
+          },
+
           /** Una consulta: lista -> descargas -> limpieza. Nunca dos a la vez. */
           run: function () {
             var self = this;
@@ -634,11 +761,19 @@
               return;
             }
             this.busy = true;
+            // Un JSON a la app por consulta (ver report())
+            var reported = false;
+            var lastHttp = 0; // código HTTP recibido (0 = sin respuesta)
+            function sendReport(http, d, error) {
+              reported = true;
+              self.report(http, d, error || "");
+            }
             this.post(
               { action: "list", deviceId: cred.deviceId, secret: cred.secret, rev: this.manifest.revision || "" },
               SYNC.listTimeoutMs
             )
               .then(function (res) {
+                lastHttp = res.status;
                 return res.json().then(function (data) {
                   return { http: res.status, data: data };
                 });
@@ -647,21 +782,25 @@
                 var d = r.data || {};
                 if (r.http === 403 && d.error === "secret_mismatch") {
                   self.setAuth("conflict");
+                  sendReport(r.http, d);
                   return SYNC.unauthorizedMs;
                 }
                 if (r.http === 404 && d.error === "not_registered") {
                   self.setAuth("not_registered");
+                  sendReport(r.http, d);
                   return SYNC.unauthorizedMs;
                 }
                 if (r.http !== 200 || !d.ok) throw new Error("Respuesta " + r.http + " " + (d.error || ""));
                 if (!d.authorized) {
                   // Lo descargado se conserva: al autorizarlo se vuelve a mostrar
                   self.setAuth(d.status === "revoked" ? "revoked" : "pending");
+                  sendReport(r.http, d);
                   return SYNC.unauthorizedMs;
                 }
                 if (d.mediaEnabled === false) {
                   // Autorizado pero sin el permiso de contenido: aviso; lo guardado se conserva
                   self.setAuth("media_disabled");
+                  sendReport(r.http, d);
                   return SYNC.unauthorizedMs;
                 }
                 if (d.contentActive === false) {
@@ -669,6 +808,7 @@
                   self.manifest.expiresAt = Date.now();
                   writeStorage(KEYS.manifest, JSON.stringify(self.manifest));
                   self.setAuth("expired");
+                  sendReport(r.http, d);
                   return SYNC.unauthorizedMs;
                 }
                 // Vigencia activa: hora de fin con el reloj de ESTE equipo
@@ -679,6 +819,10 @@
                 self.manifest.expiresAt = expiresAt;
                 writeStorage(KEYS.manifest, JSON.stringify(self.manifest));
                 self.setAuth("authorized");
+                // JSON en cuanto responde el servidor (antes de las descargas,
+                // que pueden tardar): "downloading"/"ready" del momento
+                self.downloading = store.available && self.playableMissing() > 0;
+                sendReport(r.http, d);
                 return self
                   .downloadMissing(cred)
                   .then(function () {
@@ -701,10 +845,21 @@
                   console.log("mirror sync:", self.lastError);
                   self.busy = false;
                   self.downloading = false;
+                  // Sin respuesta válida del servidor: también se informa a la app
+                  if (!reported) sendReport(lastHttp, null, self.lastError);
                   player.refresh();
                   self.schedule(SYNC.errorMs);
                 }
               );
+          },
+
+          /** @returns {number} Archivos de la lista que aún no están descargados. */
+          playableMissing: function () {
+            var n = 0;
+            for (var i = 0; i < this.manifest.items.length; i++) {
+              if (!store.ready[store.keyOf(this.manifest.items[i])]) n++;
+            }
+            return n;
           },
 
           /** Descarga en orden, de uno en uno, los archivos que falten. */
