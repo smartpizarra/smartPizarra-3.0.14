@@ -41,6 +41,14 @@ Conocer el ID no basta para consultar ni suplantar un equipo: hace falta el secr
 
 **Permiso del administrador:** un equipo solo muestra contenido si está **autorizado** y además tiene el **contenido habilitado**. En el panel cada equipo muestra la insignia *Contenido habilitado / no habilitado* y el botón *Habilitar contenido* / *Deshabilitar contenido*. Los equipos nuevos llegan sin el permiso. Sin él, `api/media.php` devuelve la lista vacía con `"mediaEnabled":false`, la descarga responde `403 media_disabled` y la TV muestra el aviso *Contenido no habilitado*. Lo ya descargado se conserva, así que al habilitarlo vuelve sin descargarse otra vez. El usuario ve en `/cuenta/` qué equipos tienen el permiso, pero no puede cambiarlo.
 
+**Vigencia por usuario:** cada usuario tiene una fecha hasta la que sus pantallas muestran el contenido. Se gestiona en *Usuarios*, en el recuadro de vigencia de cada usuario (también aparece en la ficha de sus equipos):
+
+- **+ Sumar N días:** si la vigencia está vencida o sin asignar, cuenta desde ahora. Si está vigente, alarga la fecha de fin.
+- **− Restar N días:** acorta la fecha de fin y puede dejarla vencida.
+- **Quitar vigencia:** deja al usuario sin vigencia.
+
+El cambio llega a **todos los equipos del usuario** en su próxima consulta (≈ 1 min). Sin vigencia, `api/media.php` devuelve la lista vacía con `"contentActive":false`, la descarga responde `403 content_expired` y la TV muestra *Vigencia del contenido vencida*. Con vigencia, la API envía `"secondsLeft"` y la TV **deja de mostrar el contenido al vencer aunque no tenga internet**. Lo descargado se conserva para cuando se renueve. El usuario ve su vigencia en `/cuenta/` (Inicio y Mi cuenta), pero no puede cambiarla. Los usuarios empiezan **sin vigencia**.
+
 **Acceso del administrador:** el botón *Contenido* del panel (`?view=media`) lista todo lo subido por los usuarios. Se puede filtrar con el selector de usuario o con *Ver contenido (N)* en la vista *Usuarios*. De cada archivo se ve el dueño, el tipo, el tamaño, los segundos, en qué equipos se muestra y la fecha de subida. Tiene tres botones:
 
 - **Ver:** vista previa.
@@ -158,8 +166,9 @@ Para el contenido de `mirror.html` (si la tabla `sp_media` no existe todavía):
 1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-08-media.sql`, después de la de usuarios. Se puede repetir sin riesgo.
 2. Sube `private/lib.php`, `private/web.php`, `api/media.php` (nuevo), `admin/index.php` y `cuenta/index.php`. La carpeta `private/media/` se crea sola al subir el primer archivo. Si no tiene permiso, créala a mano junto a `lib.php`.
 3. Opcional: añade a `config.php` las claves `media_*` de `config.sample.php` y ajusta `upload_max_filesize` / `post_max_size` de PHP.
-4. Ejecuta también `migrations/2026-11-08-media-enabled.sql` (permiso de contenido por equipo; todos empiezan sin él) y sube `admin/index.php`.
-5. Sube `mirror.html` y el `loading.html` actual a los assets de Kodular. `loading.html` crea `smartpizarra.mirror.scale`, la API y las credenciales del equipo.
+4. Ejecuta después `migrations/2026-11-08-content-until.sql` (vigencia por usuario; todos empiezan sin vigencia: súmales días en *Usuarios*).
+5. Ejecuta también `migrations/2026-11-08-media-enabled.sql` (permiso de contenido por equipo; todos empiezan sin él) y sube `admin/index.php`.
+6. Sube `mirror.html` y el `loading.html` actual a los assets de Kodular. `loading.html` crea `smartpizarra.mirror.scale`, la API y las credenciales del equipo.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 

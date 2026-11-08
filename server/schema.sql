@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS sp_users (
   created_at           DATETIME     NOT NULL,          -- alta (UTC)
   password_changed_at  DATETIME     NULL,              -- último cambio de contraseña (UTC)
   last_login_at        DATETIME     NULL,              -- último acceso a /cuenta/ (UTC)
+  content_until        DATETIME     NULL,              -- VIGENCIA: el contenido se muestra hasta esta fecha (UTC); NULL = sin vigencia
+  content_changed_at   DATETIME     NULL,              -- último cambio de la vigencia (UTC)
   PRIMARY KEY (id),
   UNIQUE KEY uq_user_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

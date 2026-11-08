@@ -29,6 +29,10 @@
  *    REVOCAR TODOS sus equipos de una vez (o uno a uno en cada tarjeta). Al eliminar un usuario sus equipos quedan
  *    sin asignar, con el estado que tenían.
  *
+ *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
+ *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
+ *    equipos solo muestran imágenes/videos mientras la vigencia está
+ *    activa; el cambio llega a todos sus equipos en su próxima consulta.
  *  - CONTENIDO DE LOS USUARIOS (botón "Contenido", ?view=media): todas
  *    las imágenes/videos subidos en /cuenta/, filtrables por usuario, con
  *    vista previa (?file=ID), descarga con su nombre original
@@ -65,6 +69,37 @@ function panelUrl(array $params): string
 {
     $query = http_build_query(array_filter($params, static fn($v) => $v !== null && $v !== ''));
     return './' . ($query !== '' ? '?' . $query : '');
+}
+
+/**
+ * Bloque de VIGENCIA de un usuario: estado + sumar/restar días + quitar.
+ * @param array<string,mixed> $u    Fila de UserRepository::all().
+ * @param string              $back Consulta a la que volver tras el cambio.
+ */
+function validityBlock(array $u, string $back): string
+{
+    $v = contentValidity($u['content_until'] ?? null);
+    $badge = ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$v['state']];
+    $label = ['active' => 'Vigente', 'expired' => 'Vencida', 'none' => 'Sin vigencia'][$v['state']];
+    $uid = (int) $u['id'];
+    $html = '<div class="validity"><div class="validity-head"><span class="badge ' . $badge . '">' . $label . '</span> '
+        . '<span class="owner">' . $v['text'] . '</span></div>'
+        . '<form method="post" class="days-form">' . csrfField()
+        . '<input type="hidden" name="action" value="user_days"><input type="hidden" name="userId" value="' . $uid . '">'
+        . '<input type="hidden" name="back" value="' . h($back) . '">'
+        . '<label for="days' . $uid . '" class="sr">Días</label>'
+        . '<input type="number" id="days' . $uid . '" name="days" value="30" min="1" max="' . UserRepository::MAX_DAYS . '" required>'
+        . '<span class="owner">días</span>'
+        . '<button class="ok" type="submit" name="op" value="add">+ Sumar</button>'
+        . '<button class="bad" type="submit" name="op" value="sub"' . ($v['state'] === 'none' ? ' disabled' : '') . '>− Restar</button>'
+        . '</form>';
+    if ($v['state'] !== 'none') {
+        $html .= '<form method="post" data-confirm="¿Quitar la vigencia de «' . h($u['company']) . '»? Sus equipos dejarán de mostrar el contenido.">'
+            . csrfField() . '<input type="hidden" name="action" value="user_clear_content">'
+            . '<input type="hidden" name="userId" value="' . $uid . '"><input type="hidden" name="back" value="' . h($back) . '">'
+            . '<button type="submit">Quitar vigencia</button></form>';
+    }
+    return $html . '</div>';
 }
 
 /** Texto de un usuario para listas: "Empresa — email". */
@@ -192,6 +227,26 @@ try {
                     $password = UserRepository::resetPassword($uid);
                     $_SESSION['newPassword'] = ['email' => $user['email'], 'company' => $user['company'], 'password' => $password];
                     redirectWith("Contraseña de «{$user['company']}» restablecida; su sesión abierta se cierra.", $back);
+                case 'user_days':
+                    // Sumar o restar días de vigencia (afecta a todos sus equipos)
+                    $days = (int) param($_POST, 'days');
+                    if ($days < 1 || $days > UserRepository::MAX_DAYS) {
+                        redirectWith('Indica entre 1 y ' . UserRepository::MAX_DAYS . ' días.', $back);
+                    }
+                    $sub = param($_POST, 'op') === 'sub';
+                    $new = UserRepository::addContentDays($uid, $sub ? -$days : $days);
+                    if ($new === null) {
+                        redirectWith("«{$user['company']}» no tiene vigencia de la que restar días.", $back);
+                    }
+                    $active = UserRepository::contentActive($new);
+                    redirectWith(($sub ? "Restados {$days} día(s)" : "Sumados {$days} día(s)") . " a «{$user['company']}». "
+                        . ($active
+                            ? 'Vigente hasta el ' . gmdate('d/m/Y H:i', (int) strtotime($new . ' UTC')) . ' UTC.'
+                            : 'La vigencia quedó VENCIDA: sus equipos dejan de mostrar el contenido.')
+                        . ' Se aplica a todos sus equipos en su próxima consulta.', $back);
+                case 'user_clear_content':
+                    UserRepository::clearContent($uid);
+                    redirectWith("Vigencia de «{$user['company']}» quitada: sus equipos dejan de mostrar el contenido.", $back);
                 case 'user_revoke_all':
                     $n = DeviceRepository::revokeAllForUser($uid);
                     redirectWith("Revocados {$n} equipo(s) de «{$user['company']}». "
@@ -352,7 +407,16 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .header-nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .header-nav a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
     .owner { font-size: .85rem; color: var(--muted); }
-    .badge.off { color: var(--muted); } /* contenido no habilitado */
+    .badge.off { color: var(--muted); } /* contenido no habilitado / sin vigencia */
+    /* Vigencia (días) */
+    .validity { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0 10px;
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .validity-head { flex: 1 1 100%; }
+    .validity form { margin: 0; }
+    .days-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .days-form input[type=number] { width: 90px; padding: 8px 10px; font: inherit; color: var(--text);
+      background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     /* Contenido de los usuarios (?view=media) */
     .media { display: flex; gap: 12px; flex-wrap: wrap; }
     .thumb { width: 160px; height: 90px; border-radius: 8px; background: #000; object-fit: contain; flex: 0 0 auto;
@@ -468,6 +532,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           · Último acceso: <?= $u['last_login_at'] ? dateTag($u['last_login_at']) : 'nunca' ?>
           <?= (int) $u['must_change_password'] === 1 ? ' · <strong>contraseña temporal sin cambiar</strong>' : '' ?>
         </div>
+        <!-- Vigencia del contenido (días) -->
+        <?= validityBlock($u, 'view=users') ?>
         <!-- Editar datos -->
         <form method="post" autocomplete="off"><?= csrfField() ?>
           <input type="hidden" name="action" value="user_update"><input type="hidden" name="userId" value="<?= $uid ?>">
@@ -594,6 +660,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </div>
       <div class="meta"><?= h($focusUser['email']) ?> · Tel. <?= h($focusUser['phone']) ?>
         · <?= (int) $focusUser['devices'] ?> equipo(s), <?= (int) $focusUser['authorized'] ?> autorizado(s)</div>
+      <?= validityBlock($focusUser, $back) ?>
       <!-- Todos a la vez; cada equipo se sigue pudiendo cambiar con sus botones de abajo -->
       <div class="actions">
         <form method="post" data-confirm="¿Autorizar TODOS los equipos de «<?= h($focusUser['company']) ?>»?"><?= csrfField() ?>
@@ -640,7 +707,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         </span>
       </div>
       <div class="meta">
-        Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>' : '<em>sin asignar</em>' ?><br>
+        Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>'
+          . ' · <span class="owner">' . contentValidity($d['user_content_until'] ?? null)['text'] . '</span>' : '<em>sin asignar</em>' ?><br>
         <!-- Última conexión: arranque de loading.html o señal de la app nativa -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>

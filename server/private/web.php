@@ -171,6 +171,25 @@ function formatBytes(int $bytes): string
     return max(1, (int) round($bytes / 1024)) . ' KB';
 }
 
+/**
+ * Vigencia del contenido de un usuario, para mostrarla.
+ * @param string|null $until content_until (UTC).
+ * @return array{state:string,days:int,text:string} state: active | expired | none
+ */
+function contentValidity(?string $until): array
+{
+    if (!$until) {
+        return ['state' => 'none', 'days' => 0, 'text' => 'Sin vigencia asignada'];
+    }
+    $left = utcTs($until) - time();
+    if ($left <= 0) {
+        return ['state' => 'expired', 'days' => 0, 'text' => 'Vencida el ' . dateTag($until)];
+    }
+    $days = (int) ceil($left / 86400);
+    return ['state' => 'active', 'days' => $days,
+        'text' => 'Vigente hasta el ' . dateTag($until) . ' (' . ($days === 1 ? 'queda 1 día' : 'quedan ' . $days . ' días') . ')'];
+}
+
 /** Segundos sin señal para considerar un equipo desconectado (config, mín. 30). */
 function onlineTimeout(array $config): int
 {

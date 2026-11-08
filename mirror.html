@@ -21,11 +21,15 @@
        sus "seconds"; video = hasta que termina (sin sonido: el WebView no
        permite reproducción automática con sonido).
   Sin internet o sin respuesta: sigue mostrando lo guardado.
-  Equipo NO autorizado (pendiente / revocado / otro secreto) o SIN el
+  Equipo NO autorizado (pendiente / revocado / otro secreto), SIN el
   permiso de contenido (el administrador lo habilita por equipo en el
-  panel, aparte de la autorización): deja de mostrar y enseña un aviso
-  con el ID; lo descargado se conserva y se vuelve a mostrar al
-  autorizarlo / habilitarlo.
+  panel) o con la VIGENCIA de su usuario vencida (días que el
+  administrador suma/resta al usuario): deja de mostrar y enseña un
+  aviso con el ID; lo descargado se conserva y se vuelve a mostrar al
+  autorizarlo / habilitarlo / renovar la vigencia.
+  VIGENCIA SIN INTERNET: el servidor envía "secondsLeft"; el equipo guarda
+  la hora de fin (manifest.expiresAt, reloj del equipo) y al llegar deja
+  de mostrar el contenido aunque no pueda consultar al servidor.
 
   SETTINGS (localStorage). Los crea loading.html.
     Lee:  "smartpizarra.orientation"   0/90/180/270  GLOBAL: gira la página
@@ -237,6 +241,8 @@
             notRegistered: "Equipo no registrado",
             unauthorizedText: "El contenido se mostrará cuando el administrador autorice este equipo.",
             notRegisteredText: "Abre la pantalla de inicio de la aplicación para registrarlo.",
+            expired: "Vigencia del contenido vencida",
+            expiredText: "Pide al administrador que renueve la vigencia para volver a mostrar el contenido.",
             mediaDisabled: "Contenido no habilitado",
             mediaDisabledText: "El administrador aún no ha habilitado la función de imágenes y videos en este equipo.",
             noDevice: "Equipo sin identificar",
@@ -257,6 +263,8 @@
             notRegistered: "Device not registered",
             unauthorizedText: "Content will be shown once the administrator authorizes this device.",
             notRegisteredText: "Open the app's start screen to register it.",
+            expired: "Content subscription expired",
+            expiredText: "Ask the administrator to renew it to show the content again.",
             mediaDisabled: "Content not enabled",
             mediaDisabledText: "The administrator has not enabled the images and videos feature on this device yet.",
             noDevice: "Unidentified device",
@@ -571,11 +579,13 @@
 
           /**
            * Guarda el estado: authorized | media_disabled (autorizado sin el
-           * permiso de contenido) | pending | revoked | conflict | not_registered.
+           * permiso de contenido) | expired (vigencia del usuario vencida) |
+           * pending | revoked | conflict | not_registered.
            * La bandera común "smartpizarra.authorized" solo refleja la autorización.
            */
           setAuth: function (state) {
             this.auth = state;
+            this.watchExpiry(); // vigila el fin de la vigencia si está autorizado
             // Recordar el permiso de contenido para arrancar sin internet
             var disabled = state === "media_disabled";
             if (state === "authorized" || disabled) {
@@ -584,8 +594,28 @@
                 writeStorage(KEYS.manifest, JSON.stringify(this.manifest));
               }
             }
-            writeStorage(KEYS.authorized, state === "authorized" || state === "media_disabled" ? "1" : "0");
+            writeStorage(KEYS.authorized, state === "authorized" || state === "media_disabled" || state === "expired" ? "1" : "0");
             player.refresh();
+          },
+
+          /**
+           * Vigilancia de la vigencia: al llegar manifest.expiresAt pasa a
+           * "expired" aunque no haya internet (revisa como mucho cada hora).
+           */
+          expiryTimer: null,
+          watchExpiry: function () {
+            var self = this;
+            if (this.expiryTimer) clearTimeout(this.expiryTimer);
+            this.expiryTimer = null;
+            if (this.auth !== "authorized") return;
+            var left = (+this.manifest.expiresAt || 0) - Date.now();
+            if (left <= 0) {
+              this.setAuth("expired");
+              return;
+            }
+            this.expiryTimer = setTimeout(function () {
+              self.watchExpiry();
+            }, Math.min(left, 3600000));
           },
 
           /** Una consulta: lista -> descargas -> limpieza. Nunca dos a la vez. */
@@ -634,10 +664,20 @@
                   self.setAuth("media_disabled");
                   return SYNC.unauthorizedMs;
                 }
+                if (d.contentActive === false) {
+                  // Vigencia del usuario vencida o sin asignar: aviso; lo guardado se conserva
+                  self.manifest.expiresAt = Date.now();
+                  writeStorage(KEYS.manifest, JSON.stringify(self.manifest));
+                  self.setAuth("expired");
+                  return SYNC.unauthorizedMs;
+                }
+                // Vigencia activa: hora de fin con el reloj de ESTE equipo
+                var expiresAt = Date.now() + Math.max(0, +d.secondsLeft || 0) * 1000;
                 if (!d.unchanged && d.items) {
                   self.manifest = { revision: d.revision, items: d.items, mediaDisabled: false };
-                  writeStorage(KEYS.manifest, JSON.stringify(self.manifest));
                 }
+                self.manifest.expiresAt = expiresAt;
+                writeStorage(KEYS.manifest, JSON.stringify(self.manifest));
                 self.setAuth("authorized");
                 return self
                   .downloadMissing(cred)
@@ -750,6 +790,7 @@
             if (a === "not_registered") return this.notice(t.notRegistered, t.notRegisteredText, id, true);
             if (a === "conflict") return this.notice(t.conflict, "", id, true);
             if (a === "media_disabled") return this.notice(t.mediaDisabled, t.mediaDisabledText, id, true);
+            if (a === "expired") return this.notice(t.expired, t.expiredText, id, true);
             if (a === "pending" || a === "revoked") {
               return this.notice(a === "revoked" ? t.revoked : t.pending, t.unauthorizedText, id, true);
             }
@@ -1030,9 +1071,12 @@
           // Estado inicial sin esperar al servidor: lo último que se supo
           sync.auth = readStorage(KEYS.authorized) !== "1"
             ? "pending"
-            : sync.manifest.mediaDisabled ? "media_disabled" : "authorized";
+            : sync.manifest.mediaDisabled
+              ? "media_disabled"
+              : (+sync.manifest.expiresAt || 0) > Date.now() ? "authorized" : "expired";
           layoutManager.init();
           player.init();
+          sync.watchExpiry(); // la vigencia guardada puede vencer sin internet
           watch();
           window.addEventListener("resize", refreshLayout);
           window.addEventListener("orientationchange", refreshLayout);

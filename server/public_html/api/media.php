@@ -18,11 +18,13 @@
  *    action=file        descarga un archivo
  *      id             id del archivo (de la lista)
  *
- *  Solo reciben contenido los equipos AUTORIZADOS y con el permiso de
- *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled,
- *  botón "Habilitar contenido" del panel). Si falta cualquiera de los dos,
- *  la lista llega vacía (con "authorized" y "mediaEnabled") para que el
- *  equipo deje de mostrarlo.
+ *  Solo reciben contenido los equipos AUTORIZADOS, con el permiso de
+ *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled) y
+ *  cuyo USUARIO tiene la VIGENCIA activa (sp_users.content_until, días que
+ *  suma/resta el administrador). Si falta algo, la lista llega vacía (con
+ *  "authorized", "mediaEnabled" y "contentActive") para que el equipo deje
+ *  de mostrarlo. Con la vigencia activa se envía "secondsLeft": el equipo
+ *  deja de mostrar el contenido al vencer aunque no tenga internet.
  *  Los archivos son los del USUARIO dueño del equipo que van a todos sus
  *  equipos o a ese equipo en concreto (se eligen en /cuenta/).
  *
@@ -34,7 +36,7 @@
  *         200 {"ok":true,"status":"pending|revoked","authorized":false,"mediaEnabled":…,"revision":"","items":[]}
  *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"","items":[]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
- *    400 bad_request · 403 secret_mismatch | not_authorized | media_disabled · 404 not_registered |
+ *    400 bad_request · 403 secret_mismatch | not_authorized | media_disabled | content_expired · 404 not_registered |
  *    not_found · 405 method · 429 rate_limited (descargas por equipo y hora) · 500 server
  */
 
@@ -67,7 +69,10 @@ try {
     $auth = DeviceRepository::authPayload($device);
     // Permiso de contenido (aparte de la autorización); solo lo da el administrador
     $mediaEnabled = DeviceRepository::mediaEnabled($device);
-    $allowed = $auth['authorized'] && $mediaEnabled;
+    // Vigencia del usuario dueño (días que asigna el administrador)
+    $until = $device['user_content_until'] ?? null;
+    $contentActive = UserRepository::contentActive($until);
+    $allowed = $auth['authorized'] && $mediaEnabled && $contentActive;
 
     if ($action === 'file') {
         if (!$auth['authorized']) {
@@ -75,6 +80,9 @@ try {
         }
         if (!$mediaEnabled) {
             Http::json(['ok' => false, 'error' => 'media_disabled'], 403);
+        }
+        if (!$contentActive) {
+            Http::json(['ok' => false, 'error' => 'content_expired'], 403);
         }
         // Límite de descargas por equipo y hora: protege el ancho de banda
         // si un equipo entra en bucle (lo normal es 1 descarga por archivo)
@@ -106,7 +114,13 @@ try {
     }
     // revision: huella de la lista; si el equipo ya la tiene no se reenvía
     $revision = $allowed ? sha1(json_encode($items)) : '';
-    $out = ['ok' => true, 'deviceId' => $id] + $auth + ['mediaEnabled' => $mediaEnabled, 'revision' => $revision];
+    $out = ['ok' => true, 'deviceId' => $id] + $auth + [
+        'mediaEnabled' => $mediaEnabled,
+        'contentActive' => $contentActive,
+        // Segundos de vigencia restantes (el equipo los cuenta con su propio reloj)
+        'secondsLeft' => $contentActive ? max(0, (int) strtotime($until . ' UTC') - time()) : 0,
+        'revision' => $revision,
+    ];
     if ($revision !== '' && hash_equals($revision, (string) ($_POST['rev'] ?? ''))) {
         $out['unchanged'] = true;
     } else {

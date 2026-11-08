@@ -286,6 +286,11 @@ foreach ($devices as $d) {
     $onlineCount += (!empty($d['online_at']) && time() - utcTs($d['online_at']) < $onlineTimeout) ? 1 : 0;
 }
 $quota = MediaRepository::quotaBytes();
+// Vigencia del contenido (la asigna el administrador en días)
+$validity = $user !== null ? contentValidity($user['content_until'] ?? null) : ['state' => 'none', 'days' => 0, 'text' => ''];
+if ($validity['state'] !== 'active') {
+    $mediaOnCount = 0; // sin vigencia ninguna pantalla muestra el contenido
+}
 ?>
 <!doctype html>
 <html lang="es">
@@ -321,6 +326,11 @@ $quota = MediaRepository::quotaBytes();
     .stat .num { font-size: 1.8rem; font-weight: 700; line-height: 1.1; }
     .stat .lbl { color: var(--muted); font-size: .9rem; }
     .stat:hover { border-color: var(--accent); }
+    /* Vigencia: color según estado */
+    .validity .vnum { font-size: 1.6rem; font-weight: 700; }
+    .validity.active { border-color: var(--ok); } .validity.active .vnum { color: var(--ok); }
+    .validity.expired { border-color: var(--bad); } .validity.expired .vnum { color: var(--bad); }
+    .validity.none .vnum { color: var(--muted); }
     progress { width: 100%; height: 10px; accent-color: var(--accent); }
     /* Contenido */
     .targets { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
@@ -399,6 +409,15 @@ $quota = MediaRepository::quotaBytes();
       <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl">En línea ahora</div></a>
       <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?></div><div class="lbl">Archivos de contenido</div></a>
     </div>
+    <!-- Vigencia: hasta cuándo se muestra el contenido en las pantallas -->
+    <section class="card block validity <?= h($validity['state']) ?>">
+      <h2>Vigencia del contenido</h2>
+      <div class="vnum"><?= $validity['state'] === 'active' ? (int) $validity['days'] . ($validity['days'] === 1 ? ' día' : ' días') : ($validity['state'] === 'expired' ? 'Vencida' : 'Sin vigencia') ?></div>
+      <div class="meta"><?= $validity['text'] ?>.
+        <?= $validity['state'] === 'active'
+            ? 'Tus pantallas muestran tu contenido hasta esa fecha.'
+            : 'Tus pantallas no muestran tu contenido. Para renovarla, contacta al administrador.' ?></div>
+    </section>
     <section class="card block">
       <h2>Espacio para contenido</h2>
       <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
@@ -408,7 +427,7 @@ $quota = MediaRepository::quotaBytes();
       <h2>¿Qué muestran mis pantallas?</h2>
       <div class="meta">
         <?= $mediaOnCount ?> de <?= count($devices) ?> equipo(s) pueden mostrar tus imágenes y videos
-        (autorizados y con el contenido habilitado por el administrador).
+        (autorizados, con el contenido habilitado por el administrador y con la vigencia activa).
       </div>
       <div class="actions">
         <a class="btn" href="?s=contenido">Subir o cambiar contenido</a>
@@ -455,6 +474,10 @@ $quota = MediaRepository::quotaBytes();
     <form class="card block upload" method="post" enctype="multipart/form-data" id="uploadForm">
       <?= csrfField() ?>
       <h2>Subir un archivo</h2>
+      <?php if ($validity['state'] !== 'active'): ?>
+        <p class="hint"><strong><?= $validity['state'] === 'expired' ? 'Tu vigencia está vencida' : 'No tienes vigencia asignada' ?>:</strong>
+          puedes preparar tu contenido, pero las pantallas no lo mostrarán hasta que el administrador la renueve.</p>
+      <?php endif; ?>
       <p class="hint">Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
         Los videos se reproducen sin sonido.</p>
       <input type="hidden" name="action" value="media_upload">
@@ -535,6 +558,7 @@ $quota = MediaRepository::quotaBytes();
             <dt>Email</dt><dd><?= h($user['email']) ?></dd>
             <dt>Teléfono</dt><dd><?= h($user['phone']) ?></dd>
             <dt>Cliente desde</dt><dd><?= dateTag($user['created_at']) ?></dd>
+            <dt>Vigencia</dt><dd><?= $validity['text'] ?></dd>
           </dl>
           <p class="hint">Para cambiar estos datos, contacta al administrador.</p>
         </section>

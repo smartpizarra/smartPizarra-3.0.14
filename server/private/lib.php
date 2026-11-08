@@ -191,6 +191,14 @@ final class Database
             return 'Falta la columna media_enabled: ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-08-media-enabled.sql.';
         }
+        $userCols = [];
+        foreach ($pdo->query('SHOW COLUMNS FROM sp_users') as $row) {
+            $userCols[] = (string) $row['Field'];
+        }
+        if (!in_array('content_until', $userCols, true)) {
+            return 'Falta la columna content_until (vigencia): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-08-content-until.sql.';
+        }
         return null;
     }
 
@@ -266,7 +274,8 @@ final class DeviceRepository
      *   user_company  nombre de la empresa
      *   user_email    email del usuario
      */
-    private const SELECT_WITH_USER = 'SELECT d.*, u.company AS user_company, u.email AS user_email
+    private const SELECT_WITH_USER = 'SELECT d.*, u.company AS user_company, u.email AS user_email,
+          u.content_until AS user_content_until
         FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id';
 
     /** @return array<string,mixed>|null Equipo con los datos de su usuario. */
@@ -462,7 +471,7 @@ final class DeviceRepository
             array_push($args, $like, $like, $like, $like);
         }
         // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
-        $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email,
+        $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,
                   (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
                   (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
                 FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id'
@@ -598,6 +607,54 @@ final class UserRepository
              VALUES (?, ?, ?, ?, 1, ?, ?)'
         )->execute([$email, $phone, $company, password_hash($password, PASSWORD_DEFAULT), $now, $now]);
         return [(int) $pdo->lastInsertId(), $password];
+    }
+
+    /** Máximo de días que se suman o restan de una vez. */
+    public const MAX_DAYS = 3650;
+
+    /**
+     * VIGENCIA: ¿el contenido de este usuario se puede mostrar ahora?
+     * @param string|null $until content_until (UTC) del usuario.
+     */
+    public static function contentActive(?string $until): bool
+    {
+        return $until !== null && $until !== '' && strtotime($until . ' UTC') > time();
+    }
+
+    /**
+     * Suma (días > 0) o resta (días < 0) días a la vigencia del usuario.
+     *  - Sumar a una vigencia vencida o sin asignar cuenta desde AHORA.
+     *  - Sumar a una vigente la alarga desde su fecha de fin.
+     *  - Restar acorta la fecha de fin (puede quedar vencida). Sin vigencia
+     *    asignada no hay nada que restar.
+     * Se refleja en todos sus equipos en su próxima consulta.
+     * @return string|null Nueva fecha de fin (UTC) o null si no había nada que restar.
+     */
+    public static function addContentDays(int $id, int $days): ?string
+    {
+        $user = self::find($id);
+        if ($user === null || $days === 0) {
+            return null;
+        }
+        $until = $user['content_until'] ? (int) strtotime($user['content_until'] . ' UTC') : 0;
+        if ($days > 0) {
+            $base = max(time(), $until);
+        } elseif ($until === 0) {
+            return null;
+        } else {
+            $base = $until;
+        }
+        $new = gmdate('Y-m-d H:i:s', $base + $days * 86400);
+        Database::pdo()->prepare('UPDATE sp_users SET content_until = ?, content_changed_at = ? WHERE id = ?')
+            ->execute([$new, Database::now(), $id]);
+        return $new;
+    }
+
+    /** Quita la vigencia (sin fecha: sus equipos dejan de mostrar el contenido). */
+    public static function clearContent(int $id): void
+    {
+        Database::pdo()->prepare('UPDATE sp_users SET content_until = NULL, content_changed_at = ? WHERE id = ?')
+            ->execute([Database::now(), $id]);
     }
 
     /** Cambia email, teléfono y empresa (desde el panel). */
