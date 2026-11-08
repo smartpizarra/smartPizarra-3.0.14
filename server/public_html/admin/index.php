@@ -21,8 +21,8 @@
  *    contraseña temporal que se muestra UNA vez para dársela al usuario;
  *    el usuario entra en /cuenta/, la cambia y ve sus equipos (no puede
  *    autorizar ni revocar). Aquí se editan sus datos, se restablece su
- *    contraseña, se ven sus equipos (?user=ID) y se pueden REVOCAR TODOS
- *    sus equipos de una vez. Al eliminar un usuario sus equipos quedan
+ *    contraseña, se ven sus equipos (?user=ID) y se pueden AUTORIZAR o
+ *    REVOCAR TODOS sus equipos de una vez (o uno a uno en cada tarjeta). Al eliminar un usuario sus equipos quedan
  *    sin asignar, con el estado que tenían.
  *
  *  Seguridad: sesión con cookie segura, token CSRF en cada formulario,
@@ -167,7 +167,12 @@ try {
                 case 'user_revoke_all':
                     $n = DeviceRepository::revokeAllForUser($uid);
                     redirectWith("Revocados {$n} equipo(s) de «{$user['company']}». "
-                        . 'Lo detectarán en su próxima consulta; se vuelven a autorizar uno a uno.', $back);
+                        . 'Lo detectarán en su próxima consulta.', $back);
+                case 'user_authorize_all':
+                    // Todos los equipos del usuario a "authorized" (los ya autorizados no cuentan)
+                    $n = DeviceRepository::authorizeAllForUser($uid);
+                    redirectWith("Autorizados {$n} equipo(s) de «{$user['company']}». "
+                        . 'Lo detectarán en su próxima consulta.', $back);
                 case 'user_delete':
                     UserRepository::delete($uid);
                     redirectWith("Usuario «{$user['company']}» eliminado; sus equipos quedan sin asignar con el estado que tenían.", 'view=users');
@@ -427,7 +432,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           </div>
         </form>
         <div class="actions">
-          <form method="post" data-confirm="¿Revocar la autorización de TODOS los equipos de «<?= h($u['company']) ?>» (<?= (int) $u['devices'] ?>)? Después se autorizan de nuevo uno a uno."><?= csrfField() ?>
+          <form method="post" data-confirm="¿Autorizar TODOS los equipos de «<?= h($u['company']) ?>» (<?= (int) $u['devices'] ?>)?"><?= csrfField() ?>
+            <input type="hidden" name="action" value="user_authorize_all"><input type="hidden" name="userId" value="<?= $uid ?>">
+            <button class="ok" type="submit" <?= (int) $u['authorized'] === (int) $u['devices'] ? 'disabled' : '' ?>>Autorizar todos sus equipos</button></form>
+          <form method="post" data-confirm="¿Revocar la autorización de TODOS los equipos de «<?= h($u['company']) ?>» (<?= (int) $u['devices'] ?>)?"><?= csrfField() ?>
             <input type="hidden" name="action" value="user_revoke_all"><input type="hidden" name="userId" value="<?= $uid ?>">
             <button class="bad" type="submit" <?= (int) $u['devices'] === 0 ? 'disabled' : '' ?>>Revocar todos sus equipos</button></form>
           <form method="post" data-confirm="¿Generar una contraseña nueva para «<?= h($u['company']) ?>»? La actual dejará de funcionar."><?= csrfField() ?>
@@ -488,10 +496,17 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </div>
       <div class="meta"><?= h($focusUser['email']) ?> · Tel. <?= h($focusUser['phone']) ?>
         · <?= (int) $focusUser['devices'] ?> equipo(s), <?= (int) $focusUser['authorized'] ?> autorizado(s)</div>
-      <form method="post" data-confirm="¿Revocar la autorización de TODOS los equipos de «<?= h($focusUser['company']) ?>»?"><?= csrfField() ?>
-        <input type="hidden" name="action" value="user_revoke_all"><input type="hidden" name="userId" value="<?= $fu ?>">
-        <input type="hidden" name="back" value="<?= h($back) ?>">
-        <button class="bad" type="submit" <?= (int) $focusUser['devices'] === 0 ? 'disabled' : '' ?>>Revocar todos sus equipos</button></form>
+      <!-- Todos a la vez; cada equipo se sigue pudiendo cambiar con sus botones de abajo -->
+      <div class="actions">
+        <form method="post" data-confirm="¿Autorizar TODOS los equipos de «<?= h($focusUser['company']) ?>»?"><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_authorize_all"><input type="hidden" name="userId" value="<?= $fu ?>">
+          <input type="hidden" name="back" value="<?= h($back) ?>">
+          <button class="ok" type="submit" <?= (int) $focusUser['authorized'] === (int) $focusUser['devices'] ? 'disabled' : '' ?>>Autorizar todos sus equipos</button></form>
+        <form method="post" data-confirm="¿Revocar la autorización de TODOS los equipos de «<?= h($focusUser['company']) ?>»?"><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_revoke_all"><input type="hidden" name="userId" value="<?= $fu ?>">
+          <input type="hidden" name="back" value="<?= h($back) ?>">
+          <button class="bad" type="submit" <?= (int) $focusUser['devices'] === 0 ? 'disabled' : '' ?>>Revocar todos sus equipos</button></form>
+      </div>
     </section>
   <?php endif; ?>
 

@@ -378,6 +378,22 @@ final class DeviceRepository
         return $stmt->rowCount();
     }
 
+    /**
+     * AUTORIZAR TODOS los equipos de un usuario (botón del panel). Pasan a
+     * "authorized" los que estaban pendientes o revocados; cada equipo se
+     * entera en su próxima consulta. Se pueden revocar luego uno a uno.
+     * @return int Equipos que cambiaron de estado.
+     */
+    public static function authorizeAllForUser(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE sp_devices SET status = \'authorized\', status_at = ?
+             WHERE user_id = ? AND status <> \'authorized\''
+        );
+        $stmt->execute([Database::now(), $userId]);
+        return $stmt->rowCount();
+    }
+
     /** Guarda el alias del equipo ("" lo borra). Máx. 100 caracteres. */
     public static function setLabel(string $id, string $label): void
     {

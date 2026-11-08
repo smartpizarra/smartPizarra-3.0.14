@@ -28,7 +28,8 @@ El administrador crea **usuarios** (empresas) en el panel: botón *Usuarios* →
 - **El usuario** entra en `https://smartpizarra.cloud/cuenta/` con su email y esa contraseña. La primera vez está obligado a cambiarla (pide la actual, mínimo 8 caracteres). Después ve sus datos y **sus equipos** (alias, ID, estado y última conexión) y puede cambiar su contraseña cuando quiera. **No puede autorizar ni revocar**.
 - **Asignar un equipo:** selector *Usuario* en la tarjeta del equipo (se guarda al elegirlo). Los equipos nuevos llegan *Sin asignar*.
 - **Filtrar:** selector *Todos los usuarios / Sin asignar / …* junto al buscador, o *Ver equipos* en la vista de usuarios. El buscador también encuentra por empresa o email.
-- **Revocar todos sus equipos:** botón en la ficha del usuario (y arriba de su lista de equipos). Pasa a *Revocado* cada equipo suyo, autorizado o pendiente, y cada uno lo detecta en su próxima consulta. Después se vuelven a autorizar uno a uno con *Autorizar*.
+- **Uno a uno:** botones *Autorizar* / *Revocar* en la tarjeta de cada equipo (con *Ver equipos* salen solo los de ese usuario).
+- **Todos a la vez:** botones *Autorizar todos sus equipos* y *Revocar todos sus equipos* en la ficha del usuario (y arriba de su lista de equipos). Cambian todos sus equipos, también los pendientes; cada uno lo detecta en su próxima consulta. Después se puede cambiar cualquiera individualmente.
 - **Restablecer contraseña:** genera otra temporal. La anterior deja de funcionar y la sesión abierta del usuario se cierra.
 - **Eliminar usuario:** sus equipos quedan *Sin asignar* **con su estado actual**. Si quieres cortarles el servicio, primero usa *Revocar todos sus equipos*.
 
