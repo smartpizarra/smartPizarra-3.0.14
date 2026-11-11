@@ -9,14 +9,6 @@
   Permite MODIFICAR los settings compartidos que crea loading.html:
     - La orientación (0°, 90°, 180°, 270°) con la que se muestran las
       pantallas de la app.
-    - Las ligas, con un selector de 4 opciones (mismas que loading.html):
-        MLB        => "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB"
-        NBA        => "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK"
-        NFL & NHL  => "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS"
-        TODOS      => "" (sin filtro)
-      (El selector es una fila de botones y no un <select> nativo: el
-      <select> de Android abre una ventana del sistema que no gira con
-      la página y se maneja mal con el control remoto.)
     - El idioma (es / en), GLOBAL para todas las pantallas.
     - La escala para la app (10% a 300%, de 5 en 5) con los botones − / +.
       Es SOLO un valor que se guarda en "smartpizarra.scale" para un
@@ -51,9 +43,6 @@
                                            (lo define loading.html)
     "smartpizarra.language"                es o en (GLOBAL: idioma de todas las pantallas;
                                            ver I18N, debe ser IGUAL a I18N de loading.html)
-    "smartpizarra.league" / ".leagues"   liga del equipo (tipo y códigos; "" = sin liga):
-                                solo se leen para el JSON: la asigna el usuario en
-                                smartpizarra.cloud/cuenta/ y llega del servidor)
     "smartpizarra.version" / ".url" / ".email" / ".deviceId"
                                 solo se leen y se muestran (no se editan aquí;
                                 se modifican con updateSettings() de loading.html)
@@ -79,8 +68,7 @@
      configurar"), gira la pantalla, dibuja la UI y pone el foco en la
      orientación actual. No envía nada a la app ni escribe nada.
   2. El usuario elige la orientación (GLOBAL: vale para todas las
-     pantallas; el contenido gira en vivo hacia ella) y la opción de ligas
-     (común a todas), el idioma (GLOBAL; la página se traduce en vivo) y
+     pantallas; el contenido gira en vivo hacia ella), el idioma (GLOBAL; la página se traduce en vivo) y
      la escala para la app (solo un número guardado).
      Se abre con lo guardado en localStorage y vuelve a leerlo cada 1 s /
      al mostrarse (si no hay cambios sin guardar).
@@ -107,7 +95,6 @@
       {"origin":"config","action":"exit","status":"saved",
        "internetStatus":"online","version":"3.0.14","url":"smartpizarra.com",
        "email":"smartpizarra@gmail.com","deviceId":"SP-XXXX-XXXX-XXXX",
-       "league":"mlb","leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
        "orientation":90,"language":"en","scale":1,
        "authorized":true,"authStatus":"authorized"}
 
@@ -122,17 +109,12 @@
     orientation     Orientación GLOBAL guardada (null si no existe).
     scale           Escala para la app GUARDADA, como factor % / 100
                     (null si no existe).
-    league          Liga del equipo: código de su tipo (p. ej. "mlb"); "" = sin liga.
-    leagues         Códigos de esa liga ("LIDOM,MLB,KO"); "" = sin liga.
-                    En esta pantalla NO se elige la liga (la asigna el usuario
-                    en smartpizarra.cloud/cuenta/).
     Lo que se cambió sin pulsar "Guardar" se descarta.
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
     getConfig()             Devuelve un texto JSON con la configuración
                             en pantalla: {"orientation":90,"language":"en",
-                            "scale":1,"league":"mlb",
-                            "leagues":"LIDOM,MLB,..."} (liga: solo lectura)
+                            "scale":1}
     saveConfig()            Igual que pulsar "Guardar" (no envía JSON).
     exitConfig()            Igual que pulsar "Salir" (envía el JSON).
     checkConnection()       Fuerza una verificación de internet (no envía
@@ -180,9 +162,6 @@
       => NO están aquí: CONFIG.settings de loading.html.
     Límites o paso de la escala (botones − / +)
       => SCALE_LIMITS (sección 1).
-    Liga del equipo (solo lectura, para el JSON)
-      => readDeviceLeague() / storeDeviceLeague() (sección 1). Se asigna en
-         smartpizarra.cloud/cuenta/, no en esta pantalla.
     Agregar un botón nuevo
       => ponerlo en el HTML con class="btn" y añadirlo a su fila en
          el.rows (init()). Las flechas recorren esas filas.
@@ -191,7 +170,7 @@
     Cómo eligen las flechas el siguiente botón
       => findNeighbor() (sección 7).
     Nombres de las claves de localStorage
-      => ORIENTATION_KEY, LANGUAGE_KEY, SCALE_KEY, OWN_SCALE_KEY, DEVICE_LEAGUE_KEY
+      => ORIENTATION_KEY, LANGUAGE_KEY, SCALE_KEY, OWN_SCALE_KEY
          (sección 1). Deben ser IGUALES a CONFIG.settings de loading.html.
     Mensaje que se envía a la app al salir
       => exitConfig().
@@ -216,7 +195,6 @@
     Para ver o borrar el valor guardado (consola):
       localStorage.getItem("smartpizarra.orientation")
       localStorage.removeItem("smartpizarra.orientation")
-      localStorage.getItem("smartpizarra.league")   (liga del equipo, la pone el servidor)
       localStorage.getItem("smartpizarra.config.scale")
       localStorage.removeItem("smartpizarra.config.scale")
 
@@ -674,79 +652,6 @@
         /** Orientaciones permitidas, en grados (mismas que las demás pantallas). */
         var ORIENTATIONS = [0, 90, 180, 270];
 
-        /*
-         * LIGA DEL EQUIPO (2026-11-11). La asigna el USUARIO en
-         * smartpizarra.cloud/cuenta/ ("Sin liga" o UNA de las ligas que le
-         * dio el administrador); en la TV NO se elige ni se cambia.
-         * api/device.php y api/media.php la envían (campo deviceLeague) y
-         * se guarda en localStorage:
-         *   "smartpizarra.league"  = código del tipo (p. ej. "mlb"); "" = sin liga
-         *   "smartpizarra.leagues" = códigos ("LIDOM,MLB,KO");       "" = sin liga
-         * MISMO bloque en loading, config, connection, fingerprint y mirror.
-         */
-        var DEVICE_LEAGUE_KEY = "smartpizarra.league";
-        var DEVICE_LEAGUES_KEY = "smartpizarra.leagues";
-
-        /** @returns {string} Código de tipo válido (minúsculas) o "". */
-        function cleanLeagueType(value) {
-          var v = typeof value === "string" ? value.trim().toLowerCase() : "";
-          return /^[a-z0-9_-]{1,20}$/.test(v) ? v : "";
-        }
-
-        /** @returns {string} Códigos válidos "A,B,C" (mayúsculas, sin espacios) o "". */
-        function cleanLeagueCodes(value) {
-          var v = typeof value === "string" ? value.toUpperCase().replace(/\s+/g, "") : "";
-          return /^[A-Z0-9_]+(,[A-Z0-9_]+)*$/.test(v) ? v : "";
-        }
-
-        /**
-         * Liga guardada del equipo (lo que va en los JSON). Sin liga o con
-         * datos no válidos => "" en los dos.
-         * @returns {{league:string, leagues:string}}
-         */
-        function readDeviceLeague() {
-          var league = "";
-          var leagues = "";
-          try {
-            league = cleanLeagueType(window.localStorage.getItem(DEVICE_LEAGUE_KEY));
-            leagues = cleanLeagueCodes(window.localStorage.getItem(DEVICE_LEAGUES_KEY));
-          } catch (e) {
-            /* sin localStorage: sin liga */
-          }
-          if (!league || !leagues) return { league: "", leagues: "" };
-          return { league: league, leagues: leagues };
-        }
-
-        /**
-         * Guarda la liga de una respuesta de api/device.php o api/media.php.
-         * Solo si trae el campo deviceLeague (equipos autorizados); null =
-         * "Sin liga" => "" en las dos claves.
-         * @returns {boolean} true si cambió.
-         */
-        function storeDeviceLeague(res) {
-          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceLeague")) {
-            return false;
-          }
-          var d = res.deviceLeague;
-          var league = d && typeof d === "object" ? cleanLeagueType(d.code) : "";
-          var leagues = d && typeof d === "object" ? cleanLeagueCodes(d.values) : "";
-          if (!league || !leagues) {
-            league = "";
-            leagues = "";
-          }
-          try {
-            var ls = window.localStorage;
-            // Restos de la versión anterior (varias ligas por equipo)
-            ls.removeItem("smartpizarra.leagueOptions");
-            if (ls.getItem(DEVICE_LEAGUE_KEY) === league && ls.getItem(DEVICE_LEAGUES_KEY) === leagues) return false;
-            ls.setItem(DEVICE_LEAGUE_KEY, league);
-            ls.setItem(DEVICE_LEAGUES_KEY, leagues);
-          } catch (e) {
-            return false;
-          }
-          return true;
-        }
-
         /** Límites y paso (en %) de la escala que se elige con − / +.
             Mismos límites que acepta loading.html (10 a 300). */
         var SCALE_LIMITS = { min: 10, max: 300, step: 5 };
@@ -1045,8 +950,6 @@
                 if (res && res.ok === true) {
                   var ok = res.authorized === true;
                   self.saveFlag(ok);
-                  // Liga del equipo (la asigna el usuario en /cuenta/; solo si está autorizado)
-                  storeDeviceLeague(res);
                   resolve({
                     authorized: ok,
                     authStatus: ok
@@ -1149,7 +1052,7 @@
          * IMPORTANTE: en esta pantalla SOLO lo usa exitConfig() (botón "Salir").
          * @param {string} action  Qué pasó ('exit').
          * @param {string} status  Resultado ('saved', 'unchanged' o 'error').
-         * @param {object} [extra] Campos adicionales (orientation, scale, league...).
+         * @param {object} [extra] Campos adicionales (orientation, scale...).
          */
         function send(action, status, extra) {
           var info = readInfo();
@@ -1291,7 +1194,7 @@
 
         /**
          * Vuelve a leer de localStorage la orientación e idioma globales, la
-         * liga, la escala para la app, el tamaño de esta pantalla y los datos
+         * escala para la app, el tamaño de esta pantalla y los datos
          * de la cabecera. Así se ve lo que guardó otra página aunque esta se
          * haya cargado antes (WebView oculto en la app).
          * Si hay cambios sin guardar no se tocan: se respeta lo que se edita
@@ -1540,8 +1443,8 @@
         }
 
         /**
-         * "Guardar": escribe la orientación e idioma globales, la opción de
-         * ligas y la escala para la app en localStorage (las leen las demás
+         * "Guardar": escribe la orientación e idioma globales y la
+         * escala para la app en localStorage (las leen las demás
          * páginas y la app). El tamaño de las pantallas NO se toca aquí.
          * Solo escribe los que tienen valor: un setting que no existe y que el
          * usuario no eligió se deja sin crear (los valores por defecto son
@@ -1578,8 +1481,6 @@
          *   language          => idioma global guardado (null si no existe).
          *   scale             => escala para la app guardada
          *                        (como factor 0.8, 1...; null si no existe).
-         *   league / leagues  => liga del equipo (tipo y códigos; "" = sin liga). La asigna
-         *                        el usuario en smartpizarra.cloud/cuenta/; aquí no se cambia.
          * Si internet aún no se verificó, espera el resultado (máx. EXIT_WAIT_MS)
          * para que "internetStatus" sea real. La app debe cerrar esta pantalla al recibirlo.
          */
@@ -1625,9 +1526,6 @@
           send("exit", status, {
             orientation: saved.orientation, // global (null si no existe)
             language: saved.language, // global (null si no existe)
-            // Liga del equipo (leída AHORA: la consulta de autorización pudo traer otra)
-            league: readDeviceLeague().league,
-            leagues: readDeviceLeague().leagues,
             scale: toZoom(saved.scale), // escala para la app (factor)
             authorized: auth.authorized, // según smartpizarra.cloud (o la última bandera)
             authStatus: authStatus,
@@ -1639,7 +1537,7 @@
            6. UI (refleja el estado en pantalla)
            ================================================================== */
 
-        /** Actualiza los botones de orientación y de ligas, y el mensaje de estado. */
+        /** Actualiza los botones de orientación, y el mensaje de estado. */
         function render() {
           var i;
 
@@ -2229,16 +2127,13 @@
         // su updateSettings()).
 
         /** @returns {string} JSON con la configuración en pantalla:
-            {"orientation":90,"language":"en","scale":1,
-             "league":"mlb","leagues":"LIDOM,MLB,..."}  (liga del equipo, "" = sin liga)
+            {"orientation":90,"language":"en","scale":1}
             (scale = escala para la app como factor; null en lo que no existe) */
         window.getConfig = function () {
           return JSON.stringify({
             orientation: current.orientation,
             language: current.language,
             scale: toZoom(current.scale),
-            league: readDeviceLeague().league,
-            leagues: readDeviceLeague().leagues,
           });
         };
 
