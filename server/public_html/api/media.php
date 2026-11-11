@@ -18,6 +18,7 @@
  *    action=file        descarga un archivo
  *      id             id del archivo (de la lista)
  *      ad=1           (opcional) el id es de un ANUNCIO (lista "ads")
+ *      ov=1           (opcional) el id es de un BANNER (lista "overlays")
  *
  *  ANUNCIOS DEL ADMINISTRADOR (2026-11-11): todo equipo AUTORIZADO recibe
  *  "ads" (aunque no tenga vigencia ni el permiso de contenido): imágenes o
@@ -25,6 +26,13 @@
  *  usuario (o muestra solos si no hay contenido del usuario). Destino:
  *  todos los equipos, los de ciertos usuarios o equipos concretos; con
  *  fechas opcionales y pausa (ver AdRepository en private/lib.php).
+ *
+ *  TIRAS Y BANNERS (2026-11-11): "overlays" = franjas ARRIBA/ABAJO de la
+ *  pantalla, como mucho UNA por posición (OverlayRepository::resolve):
+ *  tira de texto (fija o desplazándose) o banner de imagen (se descarga con
+ *  ov=1). Las del ADMINISTRADOR llegan a cualquier equipo autorizado; las
+ *  del USUARIO solo si el equipo puede mostrar su contenido (permiso +
+ *  vigencia). La del administrador tiene prioridad en la misma posición.
  *
  *  Solo reciben contenido los equipos AUTORIZADOS, con el permiso de
  *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled) y
@@ -41,6 +49,10 @@
  *              "revision":"<40 hex>","items":[{"id":7,"kind":"image|video",
  *              "mime":"image/jpeg","size":12345,"sha256":"<64 hex>","seconds":10}, ...]}
  *              (+ "ads":[{"id":3,"kind":..,"mime":..,"size":..,"sha256":..,"seconds":10,"every":3}, ...])
+ *              (+ "overlays":[{"id":5,"place":"top|bottom","owner":"admin|user","kind":"text",
+ *                 "band":"s|m|l","bg":"#000000","endsIn":N|null,"text":"…","fg":"#FFFFFF",
+ *                 "motion":"static|scroll","speed":"slow|normal|fast"},
+ *                {"id":6,"place":"bottom",…,"kind":"image","mime":"image/png","size":N,"sha256":"…"}])
  *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide (sin items ni ads)
  *         Autorizado: también "deviceLeague" (siempre, aunque sea "unchanged"):
  *              {"code","label","name","values"} o null ("Sin liga") — la liga del
@@ -106,6 +118,18 @@ try {
             }
             MediaRepository::send($ad);
         }
+        // Banner (imagen de una franja): solo si se muestra AHORA en este equipo
+        if ((string) ($_POST['ov'] ?? '') === '1') {
+            $perHour = (int) (AppConfig::get()['media_downloads_per_device_per_hour'] ?? 120);
+            if (!RateLimiter::hit('media:' . $id, $perHour, 3600)) {
+                Http::json(['ok' => false, 'error' => 'rate_limited'], 429);
+            }
+            $ov = OverlayRepository::findForDevice((int) ($_POST['id'] ?? 0), $id, $allowed);
+            if ($ov === null) {
+                Http::json(['ok' => false, 'error' => 'not_found'], 404);
+            }
+            MediaRepository::send($ov);
+        }
         if (!$mediaEnabled) {
             Http::json(['ok' => false, 'error' => 'media_disabled'], 403);
         }
@@ -154,9 +178,15 @@ try {
             ];
         }
     }
-    // revision: huella de la lista (contenido + anuncios); si el equipo ya la tiene no se reenvía.
-    // Sin contenido permitido ni anuncios queda vacía (como antes).
-    $revision = $allowed || $ads ? sha1(json_encode([$items, $ads])) : '';
+    // Tiras y banners (una por posición): las del administrador a cualquier equipo
+    // autorizado; las del usuario solo si puede mostrar su contenido ($allowed)
+    $overlays = $auth['authorized'] ? OverlayRepository::payload($id, $allowed) : [];
+    // Para la huella, endsIn (cambia cada segundo) se sustituye por la hora de fin fija
+    $ovHash = array_map(static fn($o) => array_diff_key($o, ['endsIn' => 1])
+        + ['endsAt' => $o['endsIn'] === null ? null : time() + $o['endsIn']], $overlays);
+    // revision: huella de la lista (contenido + anuncios + franjas); si el equipo ya la tiene
+    // no se reenvía. Sin contenido permitido, anuncios ni franjas queda vacía (como antes).
+    $revision = $allowed || $ads || $overlays ? sha1(json_encode([$items, $ads, $ovHash])) : '';
     $out = ['ok' => true, 'deviceId' => $id] + $auth + [
         'mediaEnabled' => $mediaEnabled,
         'contentActive' => $contentActive,
@@ -175,6 +205,7 @@ try {
     } else {
         $out['items'] = $items;
         $out['ads'] = $ads;
+        $out['overlays'] = $overlays;
     }
     Http::json($out);
 } catch (Throwable $e) {

@@ -67,6 +67,10 @@ return [
     'media_max_mb'                        => 200,
     'media_user_quota_mb'                 => 2048,
     'media_downloads_per_device_per_hour' => 120,
+    // Tiras y banners de mirror.html: tamaño máximo de la imagen de un banner
+    // y máximo de tiras/banners por usuario. Si faltan, se usan estos valores.
+    'overlay_max_mb'    => 5,
+    'overlays_per_user' => 20,
     'online_timeout_seconds' => 180,
     'boot_history_days' => 365,
      'boots_per_device_per_hour' => 30,

@@ -12,6 +12,7 @@
  *    - ago/agoTag/dateTag/onlineTag  fechas UTC => texto
  *    - formatBytes()       tamaño legible (KB / MB / GB)
  *    - baseStyles(), timeScript()    CSS y JS compartidos
+ *    - overlay*()          tiras y banners de mirror.html (formulario, datos, vista previa)
  *  Va en private/ junto a lib.php.
  */
 
@@ -313,4 +314,266 @@ function timeScript(int $onlineTimeout): string
   })();
 JS;
     return strtr($js, ['__TIMEOUT__' => (string) $onlineTimeout, '__NOW__' => (string) time()]);
+}
+
+/* =====================================================================
+   TIRAS Y BANNERS (mirror.html): formulario, datos y vista previa
+   comunes al panel del administrador y a /cuenta/. El DESTINO (equipos,
+   usuarios) y las FECHAS los pone cada página con sus propios campos.
+   Ver OverlayRepository (lib.php) y api/media.php.
+   ===================================================================== */
+
+/** Textos de las opciones (paneles). */
+const OVERLAY_LABELS = [
+    'kind' => ['text' => 'Tira de texto', 'image' => 'Banner (imagen)'],
+    'place' => ['top' => 'Arriba', 'bottom' => 'Abajo'],
+    'size' => ['s' => 'Pequeña', 'm' => 'Mediana', 'l' => 'Grande'],
+    'motion' => ['static' => 'Fija', 'scroll' => 'Desplazándose'],
+    'speed' => ['slow' => 'Lenta', 'normal' => 'Normal', 'fast' => 'Rápida'],
+];
+
+/** Grupo de botones de radio de una opción de OVERLAY_LABELS. */
+function overlayRadios(string $field, string $name, string $value): string
+{
+    $html = '';
+    foreach (OVERLAY_LABELS[$field] as $k => $text) {
+        $html .= '<label class="inline"><input type="radio" name="' . $name . '" value="' . $k . '"'
+            . ($value === $k ? ' checked' : '') . '> ' . $text . '</label>';
+    }
+    return $html;
+}
+
+/**
+ * Campos de estilo de una tira/banner: tipo (solo al crear), nombre,
+ * imagen (banner nuevo), mensaje, colores, movimiento, velocidad,
+ * tamaño, posición y una VISTA PREVIA que el JS (overlayScript) actualiza.
+ * @param array<string,mixed>|null $o Tira/banner a editar (null = nuevo).
+ * @param string $p Prefijo único para los id de los campos.
+ */
+function overlayFields(?array $o, string $p): string
+{
+    $kind = (string) ($o['kind'] ?? 'text');
+    $html = '<div class="ov-form" data-ov-form>';
+    if ($o === null) {
+        $html .= '<fieldset class="targets"><legend>Tipo</legend>' . overlayRadios('kind', 'kind', 'text') . '</fieldset>';
+    } else {
+        // El tipo no se cambia al editar (un banner lleva su imagen)
+        $html .= '<input type="hidden" name="kind" value="' . h($kind) . '">';
+    }
+    $html .= '<label for="' . $p . 'name">Nombre (solo para el panel)</label>'
+        . '<input type="text" id="' . $p . 'name" name="name" maxlength="100" value="' . h((string) ($o['name'] ?? '')) . '" placeholder="p. ej. Oferta del día">';
+    // Banner: imagen (solo al crear)
+    if ($o === null) {
+        $html .= '<div data-ov-only="image"><label for="' . $p . 'file">Imagen del banner</label>'
+            . '<input type="file" id="' . $p . 'file" name="file" accept="' . implode(',', OverlayRepository::IMAGE_TYPES) . '">'
+            . '<span class="hint">JPG, PNG, WEBP o GIF de hasta ' . h(formatBytes(OverlayRepository::maxBytes()))
+            . '. Mejor una imagen ANCHA (p. ej. 1920×160): se ajusta al alto de la franja sin deformarse.</span></div>';
+    }
+    // Tira: mensaje
+    $html .= '<div data-ov-only="text"><label for="' . $p . 'message">Mensaje</label>'
+        . '<input type="text" id="' . $p . 'message" name="message" maxlength="' . OverlayRepository::MAX_MESSAGE . '" value="'
+        . h((string) ($o['message'] ?? '')) . '" placeholder="p. ej. 2x1 en pizzas todos los martes" data-ov-message></div>';
+    // Colores (la letra solo en tiras)
+    $html .= '<div class="ov-row">'
+        . '<div><label for="' . $p . 'bg">Color de fondo</label><input type="color" id="' . $p . 'bg" name="bg" value="' . h(strtolower((string) ($o['bg_color'] ?? '#000000'))) . '" data-ov-bg></div>'
+        . '<div data-ov-only="text"><label for="' . $p . 'fg">Color de la letra</label><input type="color" id="' . $p . 'fg" name="fg" value="' . h(strtolower((string) ($o['fg_color'] ?? '#ffffff'))) . '" data-ov-fg></div>'
+        . '</div>';
+    $html .= '<fieldset class="targets" data-ov-only="text"><legend>Movimiento</legend>' . overlayRadios('motion', 'motion', (string) ($o['motion'] ?? 'static'))
+        . '<div data-ov-speed><span class="hint">Velocidad:</span> ' . overlayRadios('speed', 'speed', (string) ($o['speed'] ?? 'normal')) . '</div></fieldset>';
+    $html .= '<fieldset class="targets"><legend>Posición en la pantalla</legend>' . overlayRadios('place', 'place', (string) ($o['place'] ?? 'bottom'))
+        . '<br><span class="hint">Tamaño de la franja:</span> ' . overlayRadios('size', 'size', (string) ($o['band_size'] ?? 'm')) . '</fieldset>';
+    // Vista previa (pantalla en miniatura): la actualiza el JS al cambiar los campos
+    $html .= '<div class="hint">Vista previa</div><div class="ov-screen" data-ov-preview data-kind="' . h($kind) . '"'
+        . ($o !== null && $kind === 'image' ? ' data-img="' . h((string) ($o['_img'] ?? '')) . '"' : '') . '>'
+        . '<div class="ov-band"><span class="ov-text"></span></div><div class="ov-content">Contenido</div></div>';
+    return $html . '</div>';
+}
+
+/**
+ * Datos de estilo de una tira/banner desde el formulario.
+ * @param array<string,mixed>|null $o Tira/banner que se edita (null = nuevo: el tipo viene del formulario).
+ * @return array{kind:string,name:string,message:?string,bg:string,fg:string,motion:string,speed:string,size:string,place:string}|string
+ *         Los datos, o el texto del error.
+ */
+function overlayStyleData(?array $o, string $fallbackName = ''): array|string
+{
+    $kind = $o !== null ? (string) $o['kind'] : OverlayRepository::pick(param($_POST, 'kind'), OverlayRepository::KINDS);
+    $message = OverlayRepository::cleanText(param($_POST, 'message'), OverlayRepository::MAX_MESSAGE);
+    if ($kind === 'text' && $message === null) {
+        return 'Escribe el mensaje de la tira.';
+    }
+    $name = OverlayRepository::cleanText(param($_POST, 'name'), 100)
+        ?? ($kind === 'text' ? mb_substr((string) $message, 0, 40) : OverlayRepository::cleanText($fallbackName, 100))
+        ?? ($kind === 'text' ? 'Tira' : 'Banner');
+    return [
+        'kind' => $kind,
+        'name' => $name,
+        'message' => $kind === 'text' ? $message : null,
+        'bg' => OverlayRepository::cleanColor(param($_POST, 'bg'), '#000000'),
+        'fg' => OverlayRepository::cleanColor(param($_POST, 'fg'), '#FFFFFF'),
+        'motion' => OverlayRepository::pick(param($_POST, 'motion'), OverlayRepository::MOTIONS),
+        'speed' => OverlayRepository::pick(param($_POST, 'speed'), ['normal', 'slow', 'fast']),
+        'size' => OverlayRepository::pick(param($_POST, 'size'), ['m', 's', 'l']),
+        'place' => OverlayRepository::pick(param($_POST, 'place'), ['bottom', 'top']),
+    ];
+}
+
+/**
+ * Imagen subida para un banner nuevo (campo "file"), ya validada.
+ * @return array{0:string,1:string,2:string}|string [tmp, nombre, mime] o el texto del error.
+ */
+function overlayUpload(): array|string
+{
+    $f = $_FILES['file'] ?? null;
+    $err = is_array($f) && is_int($f['error'] ?? null) ? $f['error'] : UPLOAD_ERR_NO_FILE;
+    if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
+        return 'La imagen supera el límite de PHP (upload_max_filesize: ' . ini_get('upload_max_filesize') . ').';
+    }
+    if ($err !== UPLOAD_ERR_OK) {
+        return $err === UPLOAD_ERR_NO_FILE ? 'Elige la imagen del banner.' : 'La subida falló (código ' . $err . '). Inténtalo de nuevo.';
+    }
+    if ((int) $f['size'] > OverlayRepository::maxBytes()) {
+        return 'La imagen supera el máximo de ' . formatBytes(OverlayRepository::maxBytes()) . '.';
+    }
+    $mime = MediaRepository::detectMime((string) $f['tmp_name']);
+    if ($mime === null || !in_array($mime, OverlayRepository::IMAGE_TYPES, true)) {
+        return 'Para un banner usa una imagen JPG, PNG, WEBP o GIF.';
+    }
+    return [(string) $f['tmp_name'], (string) $f['name'], $mime];
+}
+
+/**
+ * Nombre y concordancia para los mensajes: "Tira «x» creada" / "Banner «x» creado".
+ * @return array{0:string,1:string} [Tira|Banner, a|o]
+ */
+function overlayNoun(string $kind): array
+{
+    return $kind === 'text' ? ['Tira', 'a'] : ['Banner', 'o'];
+}
+
+/** Resumen de una tira/banner para las listas: "Tira · Abajo · Mediana · Desplazándose (normal)". */
+function overlaySummary(array $o): string
+{
+    $L = OVERLAY_LABELS;
+    $text = $L['kind'][$o['kind']] . ' · ' . $L['place'][$o['place']] . ' · ' . $L['size'][$o['band_size']];
+    if ($o['kind'] === 'text') {
+        $text .= ' · ' . $L['motion'][$o['motion']] . ($o['motion'] === 'scroll' ? ' (' . mb_strtolower($L['speed'][$o['speed']]) . ')' : '');
+    } else {
+        $text .= ' · ' . formatBytes((int) $o['size_bytes']);
+    }
+    return $text;
+}
+
+/**
+ * Vista previa fija de una tira/banner (en las listas). Los colores los
+ * aplica el JS (la CSP no permite style="" en línea).
+ * @param string $imgUrl URL de la imagen del banner (vista previa del panel) o "".
+ */
+function overlayPreview(array $o, string $imgUrl): string
+{
+    return '<div class="ov-band ov-static ' . ($o['kind'] === 'text' && $o['motion'] === 'scroll' ? 'ov-scroll' : '') . '"'
+        . ' data-bg="' . h((string) $o['bg_color']) . '" data-fg="' . h((string) $o['fg_color']) . '">'
+        . ($o['kind'] === 'text'
+            ? '<span class="ov-text">' . h((string) $o['message']) . '</span>'
+            : '<img src="' . h($imgUrl) . '" alt="" loading="lazy">')
+        . '</div>';
+}
+
+/** CSS de los formularios y vistas previas de tiras/banners. */
+function overlayStyles(): string
+{
+    return <<<'CSS'
+    /* Tiras y banners */
+    .ov-row { display: flex; gap: 16px; flex-wrap: wrap; }
+    input[type=color] { width: 64px; height: 38px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: pointer; }
+    [data-ov-speed] { margin-top: 4px; }
+    .ov-screen { position: relative; width: 100%; max-width: 420px; aspect-ratio: 16 / 9; background: #222; border-radius: 8px;
+      overflow: hidden; display: flex; flex-direction: column; margin: 4px 0 12px; }
+    .ov-screen .ov-content { flex: 1 1 auto; display: flex; align-items: center; justify-content: center; color: #777; font-size: .85rem;
+      background: repeating-linear-gradient(45deg, #2a2a2a 0 10px, #262626 10px 20px); }
+    .ov-screen.top .ov-band { order: 0; } .ov-screen.top .ov-content { order: 1; }
+    .ov-screen.bottom .ov-band { order: 1; } .ov-screen.bottom .ov-content { order: 0; }
+    .ov-screen.s .ov-band { height: 9%; } .ov-screen.m .ov-band { height: 12%; } .ov-screen.l .ov-band { height: 17%; }
+    .ov-band { position: relative; flex: 0 0 auto; overflow: hidden; display: flex; align-items: center; justify-content: center;
+      background: #000; color: #fff; white-space: nowrap; font-weight: 600; }
+    .ov-screen .ov-band { font-size: clamp(9px, 2.6vw, 13px); }
+    .ov-band img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .ov-band img[hidden], .ov-band .ov-text[hidden] { display: none; }
+    .ov-band .ov-text { padding: 0 6px; overflow: hidden; text-overflow: ellipsis; }
+    .ov-band.ov-scroll { justify-content: flex-start; }
+    .ov-band.ov-scroll .ov-text { overflow: visible; text-overflow: clip; padding-left: 100%; animation: ov-marquee 9s linear infinite; }
+    .ov-band.speed-slow .ov-text { animation-duration: 14s; } .ov-band.speed-fast .ov-text { animation-duration: 5s; }
+    @keyframes ov-marquee { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+    @media (prefers-reduced-motion: reduce) { .ov-band.ov-scroll .ov-text { animation: none; padding-left: 6px; } }
+    /* En las listas: franja de muestra a lo ancho */
+    .ov-static { width: 100%; max-width: 420px; height: 34px; border-radius: 6px; font-size: .95rem; margin-bottom: 6px; }
+    .owner-tag { font-size: .8rem; color: var(--muted); }
+CSS;
+}
+
+/**
+ * JS de tiras/banners (con el nonce de la página):
+ *  - formulario: muestra los campos del tipo elegido (tira / banner), la
+ *    velocidad solo si se desplaza, y actualiza la vista previa;
+ *  - listas: aplica los colores data-bg / data-fg de cada muestra.
+ */
+function overlayScript(): string
+{
+    return <<<'JS'
+  (function () {
+    "use strict";
+    function paint(el) {
+      if (el.getAttribute("data-bg")) el.style.background = el.getAttribute("data-bg");
+      if (el.getAttribute("data-fg")) el.style.color = el.getAttribute("data-fg");
+    }
+    document.querySelectorAll(".ov-band[data-bg]").forEach(paint);
+    document.querySelectorAll("[data-ov-form]").forEach(function (form) {
+      var preview = form.querySelector("[data-ov-preview]");
+      var band = preview.querySelector(".ov-band");
+      var text = preview.querySelector(".ov-text");
+      var img = null;
+      function val(name, def) {
+        var r = form.querySelector("input[name=" + name + "]:checked") || form.querySelector("input[type=hidden][name=" + name + "]");
+        return r ? r.value : def;
+      }
+      function update() {
+        var kind = val("kind", "text");
+        var motion = val("motion", "static");
+        form.querySelectorAll("[data-ov-only]").forEach(function (el) {
+          el.hidden = el.getAttribute("data-ov-only") !== kind;
+        });
+        var speed = form.querySelector("[data-ov-speed]");
+        if (speed) speed.hidden = motion !== "scroll";
+        preview.className = "ov-screen " + val("place", "bottom") + " " + val("size", "m");
+        band.className = "ov-band" + (kind === "text" && motion === "scroll" ? " ov-scroll speed-" + val("speed", "normal") : "");
+        band.style.background = form.querySelector("[data-ov-bg]").value;
+        band.style.color = form.querySelector("[data-ov-fg]").value;
+        var msg = form.querySelector("[data-ov-message]");
+        text.textContent = msg && msg.value.trim() ? msg.value.trim() : "Tu mensaje aquí";
+        text.hidden = kind !== "text";
+        if (img) img.hidden = kind !== "image";
+      }
+      function showImage(src) {
+        if (!img) {
+          img = document.createElement("img");
+          img.alt = "";
+          band.appendChild(img);
+        }
+        img.src = src;
+        update();
+      }
+      // Banner guardado: su imagen; banner nuevo: la elegida en el campo de archivo
+      if (preview.getAttribute("data-img")) showImage(preview.getAttribute("data-img"));
+      var file = form.querySelector("input[type=file]");
+      if (file) {
+        file.addEventListener("change", function () {
+          if (file.files && file.files[0] && window.URL) showImage(URL.createObjectURL(file.files[0]));
+        });
+      }
+      form.addEventListener("input", update);
+      form.addEventListener("change", update);
+      update();
+    });
+  })();
+JS;
 }

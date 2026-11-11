@@ -226,6 +226,12 @@ final class Database
             return 'Faltan las columnas de fechas del contenido: ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-media-dates.sql.';
         }
+        // Tiras y banners de mirror.html (usuario y administrador)
+        $overlaysMissing = array_diff(['sp_overlays', 'sp_overlay_users', 'sp_overlay_devices'], $tables);
+        if ($overlaysMissing) {
+            return 'Faltan tablas (' . implode(', ', $overlaysMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-11-overlays.sql.';
+        }
         return null;
     }
 
@@ -755,6 +761,8 @@ final class UserRepository
     {
         // Sus imágenes/videos (filas y ficheros) se borran con él
         MediaRepository::deleteAllForUser($id);
+        // Ficheros de sus banners (las filas de sp_overlays se borran en cascada)
+        OverlayRepository::deleteFilesForUser($id);
         Database::pdo()->prepare('DELETE FROM sp_users WHERE id = ?')->execute([$id]);
     }
 }
@@ -1415,6 +1423,366 @@ final class AdRepository
         foreach (self::forDevice($deviceId) as $row) {
             if ((int) $row['id'] === $id) {
                 return self::find($id);
+            }
+        }
+        return null;
+    }
+}
+
+/**
+ * TIRAS (texto) y BANNERS (imagen) de mirror.html (tablas sp_overlays,
+ * sp_overlay_users, sp_overlay_devices).
+ *
+ * Una franja horizontal ARRIBA o ABAJO de la pantalla de mirror.html:
+ *  - text  = TIRA: mensaje con colores de fondo y letra, FIJA o
+ *            DESPLAZÁNDOSE (velocidad lenta/normal/rápida).
+ *  - image = BANNER: imagen (JPG/PNG/WEBP/GIF) que el equipo descarga UNA
+ *            vez y guarda en su Cache Storage, como el contenido.
+ * Tamaño de la franja: s / m / l (alto relativo a la pantalla).
+ * Dueño:
+ *  - USUARIO (user_id): destino "todos mis equipos" (scope all, también
+ *    los futuros) o equipos concretos suyos (scope devices). Solo llega a
+ *    sus equipos AUTORIZADOS con el contenido habilitado y vigencia activa
+ *    (lo mismo que su contenido).
+ *  - ADMINISTRADOR (user_id NULL): todos los equipos (all), los equipos
+ *    de ciertos usuarios (users) o equipos concretos (devices). Llega a
+ *    cualquier equipo AUTORIZADO (como los anuncios).
+ * Fechas opcionales (UTC) y pausa (active = 0).
+ * En cada equipo se muestra como mucho UNA por posición (resolve()):
+ *  1) la del administrador antes que la del usuario;
+ *  2) la más concreta: equipo > usuario > todos;
+ *  3) la editada más recientemente.
+ * El fichero del banner va a MediaRepository::dir() con prefijo "ov-" y se
+ * envía con MediaRepository::send().
+ */
+final class OverlayRepository
+{
+    public const KINDS = ['text', 'image'];
+    public const PLACES = ['top', 'bottom'];
+    public const SIZES = ['s', 'm', 'l'];
+    public const MOTIONS = ['static', 'scroll'];
+    public const SPEEDS = ['slow', 'normal', 'fast'];
+    /** Destinos del administrador (el usuario solo usa all / devices). */
+    public const SCOPES = ['all', 'users', 'devices'];
+    /** Máximo de caracteres del mensaje de una tira. */
+    public const MAX_MESSAGE = 200;
+    /** Imágenes admitidas para un banner (solo imágenes, nada de video). */
+    public const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+    /** Tamaño máximo de la imagen de un banner (bytes), config 'overlay_max_mb' (5). */
+    public static function maxBytes(): int
+    {
+        return max(1, (int) (AppConfig::get()['overlay_max_mb'] ?? 5)) * 1048576;
+    }
+
+    /** Máximo de tiras/banners por usuario, config 'overlays_per_user' (20). */
+    public static function maxPerUser(): int
+    {
+        return max(1, (int) (AppConfig::get()['overlays_per_user'] ?? 20));
+    }
+
+    /** Texto de una línea: UTF-8 (convierte Windows-1252), sin caracteres de control, recortado. */
+    public static function cleanText(string $text, int $max): ?string
+    {
+        if (!mb_check_encoding($text, 'UTF-8')) {
+            $text = mb_convert_encoding($text, 'UTF-8', 'Windows-1252');
+        }
+        $text = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $text));
+        return $text === '' ? null : mb_substr($text, 0, $max);
+    }
+
+    /** Color "#RRGGBB" en mayúsculas, o $fallback si no es válido. */
+    public static function cleanColor(string $color, string $fallback): string
+    {
+        $color = strtoupper(trim($color));
+        return preg_match('/^#[0-9A-F]{6}$/', $color) ? $color : $fallback;
+    }
+
+    /** Valor dentro de una lista, o el primero de la lista. */
+    public static function pick(string $value, array $allowed): string
+    {
+        return in_array($value, $allowed, true) ? $value : $allowed[0];
+    }
+
+    /**
+     * Guarda una tira o un banner. Para un banner $tmpFile es la imagen ya
+     * validada (tipo y tamaño); para una tira, null.
+     * @param array{user:?int,name:string,kind:string,message:?string,bg:string,fg:string,motion:string,
+     *              speed:string,size:string,place:string,scope:string,active:bool,starts:?string,
+     *              ends:?string,users:int[],devices:string[]} $data
+     * @return int Id.
+     */
+    public static function create(array $data, ?string $tmpFile = null, string $originalName = '', ?string $mime = null): int
+    {
+        $file = [null, null, null, null, null];
+        $target = null;
+        if ($data['kind'] === 'image') {
+            if ($tmpFile === null || $mime === null || !in_array($mime, self::IMAGE_TYPES, true)) {
+                throw new InvalidArgumentException('Banner sin imagen válida');
+            }
+            [, $ext] = MediaRepository::TYPES[$mime];
+            $originalName = basename(str_replace('\\', '/', $originalName));
+            if (!mb_check_encoding($originalName, 'UTF-8')) {
+                $originalName = mb_convert_encoding($originalName, 'UTF-8', 'Windows-1252');
+            }
+            $stored = 'ov-' . bin2hex(random_bytes(16)) . '.' . $ext;
+            $target = MediaRepository::dir() . '/' . $stored;
+            // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
+            $moved = is_uploaded_file($tmpFile) ? move_uploaded_file($tmpFile, $target) : rename($tmpFile, $target);
+            if (!$moved) {
+                throw new RuntimeException('No se pudo guardar el archivo en ' . MediaRepository::dir());
+            }
+            @chmod($target, 0640);
+            $file = [$mime, mb_substr($originalName, 0, 190), $stored, filesize($target), hash_file('sha256', $target)];
+        }
+        $pdo = Database::pdo();
+        try {
+            $pdo->beginTransaction();
+            $now = Database::now();
+            $pdo->prepare(
+                'INSERT INTO sp_overlays (user_id, name, kind, message, bg_color, fg_color, motion, speed, band_size,
+                   place, mime, original_name, stored_name, size_bytes, sha256, scope, active, starts_at, ends_at,
+                   created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute(array_merge(
+                [$data['user'], $data['name'], $data['kind'], $data['kind'] === 'text' ? $data['message'] : null,
+                 $data['bg'], $data['fg'], $data['motion'], $data['speed'], $data['size'], $data['place']],
+                $file,
+                [$data['scope'], $data['active'] ? 1 : 0, $data['starts'], $data['ends'], $now, $now]
+            ));
+            $id = (int) $pdo->lastInsertId();
+            self::writeTargets($id, $data['user'], $data['scope'], $data['users'], $data['devices']);
+            $pdo->commit();
+            return $id;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            if ($target !== null) {
+                @unlink($target);
+            }
+            throw $e;
+        }
+    }
+
+    /** Cambia los datos (no la imagen ni el tipo). Mismo $data que create(). */
+    public static function update(int $id, array $data): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare(
+                'UPDATE sp_overlays SET name = ?, message = IF(kind = \'text\', ?, NULL), bg_color = ?, fg_color = ?,
+                   motion = ?, speed = ?, band_size = ?, place = ?, scope = ?, active = ?, starts_at = ?, ends_at = ?,
+                   updated_at = ? WHERE id = ?'
+            )->execute([
+                $data['name'], $data['message'], $data['bg'], $data['fg'], $data['motion'], $data['speed'],
+                $data['size'], $data['place'], $data['scope'], $data['active'] ? 1 : 0, $data['starts'],
+                $data['ends'], Database::now(), $id,
+            ]);
+            self::writeTargets($id, $data['user'], $data['scope'], $data['users'], $data['devices']);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Reescribe usuarios/equipos destino. Las de un usuario solo pueden ir a
+     * equipos SUYOS (y nunca a "usuarios").
+     */
+    private static function writeTargets(int $id, ?int $owner, string $scope, array $users, array $devices): void
+    {
+        $pdo = Database::pdo();
+        $pdo->prepare('DELETE FROM sp_overlay_users WHERE overlay_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM sp_overlay_devices WHERE overlay_id = ?')->execute([$id]);
+        if ($scope === 'users' && $owner === null) {
+            $insert = $pdo->prepare('INSERT IGNORE INTO sp_overlay_users (overlay_id, user_id) SELECT ?, id FROM sp_users WHERE id = ?');
+            foreach (array_unique(array_map('intval', $users)) as $uid) {
+                $insert->execute([$id, $uid]);
+            }
+        } elseif ($scope === 'devices') {
+            $insert = $owner === null
+                ? $pdo->prepare('INSERT IGNORE INTO sp_overlay_devices (overlay_id, device_id) SELECT ?, device_id FROM sp_devices WHERE device_id = ?')
+                : $pdo->prepare('INSERT IGNORE INTO sp_overlay_devices (overlay_id, device_id) SELECT ?, device_id FROM sp_devices WHERE device_id = ? AND user_id = ?');
+            foreach (array_unique(array_map('strval', $devices)) as $did) {
+                $insert->execute($owner === null ? [$id, $did] : [$id, $did, $owner]);
+            }
+        }
+    }
+
+    /** Pausa (false) o reanuda (true). */
+    public static function setActive(int $id, bool $active): void
+    {
+        Database::pdo()->prepare('UPDATE sp_overlays SET active = ?, updated_at = ? WHERE id = ?')
+            ->execute([$active ? 1 : 0, Database::now(), $id]);
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_overlays WHERE id = ?');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /** @return array<string,mixed>|null Tira/banner de ESE usuario (null si no existe o es de otro). */
+    public static function findForUser(int $id, int $userId): ?array
+    {
+        $row = self::find($id);
+        return $row !== null && (int) ($row['user_id'] ?? 0) === $userId ? $row : null;
+    }
+
+    /**
+     * Borra una tira/banner (fila, destinos y fichero). Los equipos la
+     * quitan en su próxima consulta.
+     * @return array<string,mixed>|null La borrada (null si no existía).
+     */
+    public static function delete(int $id): ?array
+    {
+        $o = self::find($id);
+        if ($o === null) {
+            return null;
+        }
+        Database::pdo()->prepare('DELETE FROM sp_overlays WHERE id = ?')->execute([$id]);
+        if (!empty($o['stored_name'])) {
+            @unlink(MediaRepository::path($o));
+        }
+        return $o;
+    }
+
+    /** Borra los ficheros de los banners de un usuario (las filas se van con él: ON DELETE CASCADE). */
+    public static function deleteFilesForUser(int $userId): void
+    {
+        $stmt = Database::pdo()->prepare('SELECT stored_name FROM sp_overlays WHERE user_id = ? AND stored_name IS NOT NULL');
+        $stmt->execute([$userId]);
+        foreach ($stmt->fetchAll() as $o) {
+            @unlink(MediaRepository::path($o));
+        }
+    }
+
+    /** @return int Tiras/banners de un usuario. */
+    public static function countForUser(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_overlays WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Lista para un panel, con sus destinos ('users' ids, 'devices' ids):
+     * $userId = las de ese usuario; null = las del administrador.
+     * $withUsers = true (solo administrador): también las de TODOS los usuarios.
+     * Orden: del administrador primero, luego por empresa; dentro, más recientes primero.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function all(?int $userId, bool $withUsers = false): array
+    {
+        $pdo = Database::pdo();
+        $where = $userId !== null ? 'o.user_id = ?' : ($withUsers ? '1 = 1' : 'o.user_id IS NULL');
+        $stmt = $pdo->prepare(
+            'SELECT o.*, u.company AS user_company FROM sp_overlays o LEFT JOIN sp_users u ON u.id = o.user_id
+             WHERE ' . $where . ' ORDER BY (o.user_id IS NOT NULL), u.company, o.updated_at DESC, o.id DESC LIMIT 1000'
+        );
+        $stmt->execute($userId !== null ? [$userId] : []);
+        $rows = $stmt->fetchAll();
+        $byId = [];
+        foreach ($rows as $i => $r) {
+            $rows[$i]['users'] = [];
+            $rows[$i]['devices'] = [];
+            $byId[(int) $r['id']] = $i;
+        }
+        if (!$byId) {
+            return [];
+        }
+        $in = implode(',', array_keys($byId)); // solo enteros
+        foreach ($pdo->query('SELECT overlay_id, user_id FROM sp_overlay_users WHERE overlay_id IN (' . $in . ')') as $r) {
+            $rows[$byId[(int) $r['overlay_id']]]['users'][] = (int) $r['user_id'];
+        }
+        foreach ($pdo->query('SELECT overlay_id, device_id FROM sp_overlay_devices WHERE overlay_id IN (' . $in . ')') as $r) {
+            $rows[$byId[(int) $r['overlay_id']]]['devices'][] = (string) $r['device_id'];
+        }
+        return $rows;
+    }
+
+    /** Estado para el panel: active (en curso) | paused | scheduled | ended (como los anuncios). */
+    public static function state(array $o): string
+    {
+        return AdRepository::state($o);
+    }
+
+    /**
+     * Lo que muestra AHORA un equipo: como mucho UNA por posición (ver la
+     * cabecera de la clase). $userAllowed = el equipo puede mostrar el
+     * contenido de su usuario (autorizado + permiso + vigencia); si no,
+     * solo cuentan las del administrador. La autorización la comprueba quien llama.
+     * @return array<string,array<string,mixed>> ['top' => fila, 'bottom' => fila] (las que haya).
+     */
+    public static function resolve(string $deviceId, bool $userAllowed): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT o.*,
+               CASE o.scope WHEN \'devices\' THEN 3 WHEN \'users\' THEN 2 ELSE 1 END AS specificity
+             FROM sp_overlays o JOIN sp_devices d ON d.device_id = ?
+             WHERE o.active = 1
+               AND (o.starts_at IS NULL OR o.starts_at <= ?)
+               AND (o.ends_at IS NULL OR o.ends_at > ?)
+               AND (
+                 (o.user_id IS NULL AND (o.scope = \'all\'
+                    OR (o.scope = \'users\' AND EXISTS (SELECT 1 FROM sp_overlay_users ou WHERE ou.overlay_id = o.id AND ou.user_id = d.user_id))
+                    OR (o.scope = \'devices\' AND EXISTS (SELECT 1 FROM sp_overlay_devices od WHERE od.overlay_id = o.id AND od.device_id = d.device_id))))
+                 OR (? = 1 AND o.user_id IS NOT NULL AND o.user_id = d.user_id AND (o.scope = \'all\'
+                    OR (o.scope = \'devices\' AND EXISTS (SELECT 1 FROM sp_overlay_devices od2 WHERE od2.overlay_id = o.id AND od2.device_id = d.device_id))))
+               )
+             ORDER BY (o.user_id IS NULL) DESC, specificity DESC, o.updated_at DESC, o.id DESC'
+        );
+        $now = Database::now();
+        $stmt->execute([$deviceId, $now, $now, $userAllowed ? 1 : 0]);
+        $out = [];
+        foreach ($stmt as $row) {
+            if (!isset($out[$row['place']])) {
+                $out[$row['place']] = $row;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * Lista para api/media.php (mirror.html): una entrada por posición.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function payload(string $deviceId, bool $userAllowed): array
+    {
+        $out = [];
+        foreach (self::resolve($deviceId, $userAllowed) as $o) {
+            $item = [
+                'id' => (int) $o['id'],
+                'place' => $o['place'],
+                'owner' => $o['user_id'] === null ? 'admin' : 'user',
+                'kind' => $o['kind'],
+                'band' => $o['band_size'],
+                'bg' => $o['bg_color'],
+                // Segundos hasta el fin (null = sin fin): el equipo la quita a su hora aunque no tenga internet
+                'endsIn' => $o['ends_at'] ? max(0, (int) strtotime($o['ends_at'] . ' UTC') - time()) : null,
+            ];
+            if ($o['kind'] === 'text') {
+                $item += ['text' => (string) $o['message'], 'fg' => $o['fg_color'], 'motion' => $o['motion'], 'speed' => $o['speed']];
+            } else {
+                $item += ['mime' => $o['mime'], 'size' => (int) $o['size_bytes'], 'sha256' => $o['sha256']];
+            }
+            $out[] = $item;
+        }
+        return $out;
+    }
+
+    /** Un banner SOLO si se muestra ahora en ese equipo (para descargarlo). */
+    public static function findForDevice(int $id, string $deviceId, bool $userAllowed): ?array
+    {
+        foreach (self::resolve($deviceId, $userAllowed) as $o) {
+            if ((int) $o['id'] === $id && $o['kind'] === 'image') {
+                return $o;
             }
         }
         return null;

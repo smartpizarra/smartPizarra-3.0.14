@@ -200,6 +200,23 @@ Cómo funciona:
 - La TV la recibe en `api/media.php` (`mirror.html`, cada ~60 s) y en `api/device.php` (al arrancar, al salir de `config.html` y en las consultas de `fingerprint.html`/`connection.html`). La guarda en su `localStorage`: `smartpizarra.league` es el código del tipo y `smartpizarra.leagues` los códigos. Sin liga, los dos valen `""`, que es también el valor por defecto.
 - Si el administrador le quita esa liga al usuario, o cambia el equipo de usuario, el equipo queda sin liga.
 
+Para las **tiras y banners** (pestaña *Tiras* del panel y pestaña *Tiras y banners* de `/cuenta/`):
+
+1. Ejecuta una vez `migrations/2026-11-11-overlays.sql` (crea `sp_overlays`, `sp_overlay_users`, `sp_overlay_devices`). Se puede repetir sin riesgo.
+2. Sube `private/lib.php`, `private/web.php`, `api/media.php`, `admin/index.php` y `cuenta/index.php`.
+3. Sube el `mirror.html` nuevo a los assets de Kodular (el anterior ignora las franjas).
+4. Opcional, en `config.php`: `'overlay_max_mb' => 5` (tamaño máximo de la imagen de un banner) y `'overlays_per_user' => 20` (máximo por usuario). Si faltan, se usan esos valores.
+
+Cómo funciona:
+
+- Una **tira** es una franja con un mensaje (colores de fondo y de letra), **fija** o **desplazándose** (velocidad lenta, normal o rápida). Un **banner** es una franja con una imagen (JPG, PNG, WEBP o GIF; mejor ancha, p. ej. 1920×160).
+- Va **arriba o abajo** de la pantalla de `mirror.html`, con tamaño pequeña, mediana o grande. El contenido se ajusta al espacio que queda (la franja no lo tapa). Solo se ve mientras hay contenido o anuncios en pantalla, no sobre los avisos.
+- El **usuario** la pone en todos sus equipos o en algunos, permanente o con fechas. Llega a sus equipos que muestran su contenido (autorizados, con el contenido habilitado y vigencia activa).
+- El **administrador** la pone en todos los equipos, en los de ciertos usuarios o en equipos concretos, con fechas opcionales. Llega a cualquier equipo autorizado. También ve las de los usuarios y puede pausarlas o eliminarlas.
+- En cada pantalla se ve **una arriba y una abajo**: primero la del administrador, luego la más concreta (equipo > usuario > todos) y, si empatan, la editada más recientemente.
+- La TV la recibe en la consulta de `mirror.html` (~60 s). El banner se descarga una sola vez. Si tiene fecha de fin, la TV la quita a su hora aunque no tenga internet.
+- Una tira que se desplaza gasta CPU en el TV box (unos 40 % de un núcleo, medido); una fija, casi nada.
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas

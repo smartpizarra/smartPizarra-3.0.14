@@ -188,6 +188,58 @@ CREATE TABLE IF NOT EXISTS sp_user_leagues (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 
+-- TIRAS (texto) y BANNERS (imagen) de mirror.html, del usuario o del administrador.
+-- Ver migrations/2026-11-11-overlays.sql para los detalles.
+CREATE TABLE IF NOT EXISTS sp_overlays (
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id       INT UNSIGNED NULL DEFAULT NULL,        -- dueño (sp_users.id); NULL = del administrador
+  name          VARCHAR(100) NOT NULL,                 -- nombre para el panel
+  kind          VARCHAR(5)   NOT NULL,                 -- text (tira) | image (banner)
+  message       VARCHAR(300) NULL DEFAULT NULL,        -- texto de la tira (kind = text)
+  bg_color      CHAR(7)      NOT NULL DEFAULT '#000000', -- fondo (#RRGGBB)
+  fg_color      CHAR(7)      NOT NULL DEFAULT '#FFFFFF', -- letra (#RRGGBB; solo tiras)
+  motion        VARCHAR(6)   NOT NULL DEFAULT 'static',  -- static (fija) | scroll (desplazándose)
+  speed         VARCHAR(6)   NOT NULL DEFAULT 'normal',  -- slow | normal | fast (solo scroll)
+  band_size     CHAR(1)      NOT NULL DEFAULT 'm',       -- alto de la franja: s | m | l
+  place         VARCHAR(6)   NOT NULL DEFAULT 'bottom',  -- top (arriba) | bottom (abajo)
+  mime          VARCHAR(40)  NULL DEFAULT NULL,        -- imagen del banner (kind = image)
+  original_name VARCHAR(190) NULL DEFAULT NULL,
+  stored_name   VARCHAR(80)  NULL DEFAULT NULL,        -- nombre en private/media/ (ov-aleatorio.ext)
+  size_bytes    BIGINT UNSIGNED NULL DEFAULT NULL,
+  sha256        CHAR(64)     NULL DEFAULT NULL,        -- huella: si cambia, el equipo la vuelve a descargar
+  scope         VARCHAR(8)   NOT NULL DEFAULT 'all',   -- all | users (solo admin) | devices
+  active        TINYINT(1)   NOT NULL DEFAULT 1,       -- 0 = pausada
+  starts_at     DATETIME     NULL DEFAULT NULL,        -- desde (UTC); NULL = ya
+  ends_at       DATETIME     NULL DEFAULT NULL,        -- hasta (UTC, sin incluir); NULL = sin fin
+  created_at    DATETIME     NOT NULL,
+  updated_at    DATETIME     NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_overlay_stored (stored_name),
+  KEY idx_overlay_user (user_id),
+  CONSTRAINT fk_overlay_user FOREIGN KEY (user_id) REFERENCES sp_users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Usuarios destino (solo tiras del administrador con scope = users): todos sus equipos, también los futuros.
+CREATE TABLE IF NOT EXISTS sp_overlay_users (
+  overlay_id    INT UNSIGNED NOT NULL,
+  user_id       INT UNSIGNED NOT NULL,
+  PRIMARY KEY (overlay_id, user_id),
+  KEY idx_ovu_user (user_id),
+  CONSTRAINT fk_ovu_overlay FOREIGN KEY (overlay_id) REFERENCES sp_overlays (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ovu_user FOREIGN KEY (user_id) REFERENCES sp_users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Equipos destino (scope = devices; las del usuario solo pueden ser equipos suyos).
+CREATE TABLE IF NOT EXISTS sp_overlay_devices (
+  overlay_id    INT UNSIGNED NOT NULL,
+  device_id     VARCHAR(32)  NOT NULL,
+  PRIMARY KEY (overlay_id, device_id),
+  KEY idx_ovd_device (device_id),
+  CONSTRAINT fk_ovd_overlay FOREIGN KEY (overlay_id) REFERENCES sp_overlays (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ovd_device FOREIGN KEY (device_id) REFERENCES sp_devices (device_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
 -- Liga de cada equipo (sp_devices.league_id): FK aquí porque sp_leagues se crea después de sp_devices.
 ALTER TABLE sp_devices
   ADD KEY idx_device_league (league_id),

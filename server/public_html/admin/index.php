@@ -44,6 +44,15 @@
  *    eliminar, vista previa (?ad=ID) y descarga (&dl=1). Solo equipos
  *    AUTORIZADOS. Ver AdRepository (private/lib.php) y api/media.php.
  *
+ *  - TIRAS Y BANNERS (botón "Tiras", ?view=overlays, 2026-11-11): franja
+ *    ARRIBA o ABAJO de mirror.html, tira de texto (colores, fija o
+ *    desplazándose) o banner de imagen; destino: todos los equipos, los
+ *    de ciertos usuarios o equipos concretos; fechas opcionales, pausar,
+ *    editar, eliminar; vista previa del banner (?ov=ID). Tienen prioridad
+ *    sobre las del usuario en la misma posición. Debajo, las de TODOS los
+ *    usuarios (solo pausar/activar y eliminar: moderación).
+ *    Ver OverlayRepository (private/lib.php) y api/media.php.
+ *
  *  - LIGAS (botón "Ligas", ?view=leagues, 2026-11-11): TIPOS de liga
  *    (código, p. ej. "mlb", que la TV guarda en smartpizarra.league, y su
  *    nombre) y LIGAS (nombre + tipo + contenido = códigos "LIDOM,MLB,KO").
@@ -231,6 +240,102 @@ function adFields(?array $ad, array $users, array $devices): string
     return $html . '</div></fieldset>';
 }
 
+/**
+ * Campos de DESTINO, FECHAS y ACTIVO de una tira/banner del administrador
+ * (el estilo lo pone overlayFields() de web.php).
+ * @param array<string,mixed>|null $o Tira a editar (null = nueva).
+ */
+function overlayAdminFields(?array $o, array $users, array $devices): string
+{
+    $p = $o ? 'o' . (int) $o['id'] . '-' : 'ovnew-';
+    $scope = $o['scope'] ?? 'all';
+    $chosenUsers = array_flip($o['users'] ?? []);
+    $chosenDevices = array_flip($o['devices'] ?? []);
+    $utc = static fn(?string $v) => $v ? (string) utcTs($v) : '';
+    $date = static fn(string $name, string $text, ?string $value) =>
+        '<div><label for="' . $p . $name . '">' . $text . '</label>'
+        . '<span class="date-field"><input type="datetime-local" id="' . $p . $name . '" name="' . $name . '" data-utc="' . $utc($value) . '">'
+        . '<button type="button" data-pick="' . $p . $name . '" title="Abrir calendario" aria-label="Abrir calendario">&#128197;</button>'
+        . '<button type="button" data-clear="' . $p . $name . '" title="Quitar fecha" aria-label="Quitar fecha">&times;</button></span></div>';
+    $html = '<input type="hidden" name="tz" value="0" data-tz><div class="user-grid">'
+        . $date('starts', 'Desde (opcional)', $o['starts_at'] ?? null)
+        . $date('ends', 'Hasta (opcional)', $o['ends_at'] ?? null)
+        . '<div><label>&nbsp;</label><label class="inline"><input type="checkbox" name="active" value="1"' . (!$o || (int) $o['active'] === 1 ? ' checked' : '') . '> Activa</label></div>'
+        . '</div><fieldset class="targets" data-scope><legend>Mostrar en</legend>';
+    foreach (['all' => 'Todos los equipos', 'users' => 'Equipos de estos usuarios', 'devices' => 'Estos equipos'] as $k => $text) {
+        $html .= '<label class="inline"><input type="radio" name="scope" value="' . $k . '"' . ($scope === $k ? ' checked' : '') . '> ' . $text . '</label>';
+    }
+    $html .= '<div class="pick" data-for="users"><span class="owner">Usuarios (también sus equipos futuros):</span>';
+    if (!$users) {
+        $html .= '<span class="owner">No hay usuarios.</span>';
+    }
+    foreach ($users as $u) {
+        $uid = (int) $u['id'];
+        $html .= '<label class="inline"><input type="checkbox" name="users[]" value="' . $uid . '"' . (isset($chosenUsers[$uid]) ? ' checked' : '') . '> '
+            . h($u['company']) . ' <span class="owner">(' . (int) $u['devices'] . ')</span></label>';
+    }
+    $html .= '</div><div class="pick" data-for="devices"><span class="owner">Equipos:</span>';
+    if (!$devices) {
+        $html .= '<span class="owner">No hay equipos.</span>';
+    }
+    foreach ($devices as $d) {
+        $id = (string) $d['device_id'];
+        $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
+            . ($d['label'] ? h($d['label']) . ' ' : '') . '<span class="mono">' . h($id) . '</span>'
+            . ($d['user_company'] ? ' <span class="owner">(' . h($d['user_company']) . ')</span>' : '') . '</label>';
+    }
+    return $html . '</div></fieldset>';
+}
+
+/**
+ * Destino, fechas y activo de una tira/banner del administrador desde el
+ * formulario. Si algo no es válido redirige a ?view=overlays.
+ * @return array{user:null,scope:string,active:bool,starts:?string,ends:?string,users:int[],devices:string[]}
+ */
+function overlayAdminData(): array
+{
+    $scope = param($_POST, 'scope');
+    if (!in_array($scope, OverlayRepository::SCOPES, true)) {
+        $scope = 'all';
+    }
+    $users = array_values(array_filter(array_map('intval', (array) ($_POST['users'] ?? [])), static fn($v) => $v > 0));
+    $devices = array_values(array_filter(array_map(static fn($v) => strtoupper(trim((string) $v)), (array) ($_POST['devices'] ?? [])),
+        static fn($v) => DeviceRepository::isValidId($v)));
+    if ($scope === 'users' && !$users) {
+        redirectWith('Marca al menos un usuario o elige "Todos los equipos".', 'view=overlays');
+    }
+    if ($scope === 'devices' && !$devices) {
+        redirectWith('Marca al menos un equipo o elige "Todos los equipos".', 'view=overlays');
+    }
+    $tz = (int) param($_POST, 'tz');
+    $starts = localToUtc(param($_POST, 'starts'), $tz);
+    $ends = localToUtc(param($_POST, 'ends'), $tz);
+    if ($starts === false || $ends === false) {
+        redirectWith('Fecha no válida.', 'view=overlays');
+    }
+    if ($starts !== null && $ends !== null && $ends <= $starts) {
+        redirectWith('La fecha de fin debe ser posterior a la de inicio.', 'view=overlays');
+    }
+    return [
+        'user' => null,
+        'scope' => $scope,
+        'active' => param($_POST, 'active') === '1',
+        'starts' => $starts,
+        'ends' => $ends,
+        'users' => $users,
+        'devices' => $devices,
+    ];
+}
+
+/** Texto del destino de una tira/banner (del administrador o de un usuario). */
+function overlayTargetText(array $o, array $usersById): string
+{
+    if ($o['user_id'] !== null) {
+        return $o['scope'] === 'devices' ? 'Equipos: ' . ($o['devices'] ? implode(', ', $o['devices']) : 'ninguno') : 'Todos los equipos del usuario';
+    }
+    return adTargetText($o, $usersById);
+}
+
 /** Texto del destino de un anuncio para la lista. */
 function adTargetText(array $ad, array $usersById): string
 {
@@ -318,6 +423,16 @@ try {
             exit('No encontrado');
         }
         MediaRepository::send($ad, param($_GET, 'dl') === '1');
+    }
+
+    // Imagen de un banner (del administrador o de un usuario): ?ov=ID
+    if ($loggedIn && isset($_GET['ov'])) {
+        $ov = OverlayRepository::find((int) param($_GET, 'ov'));
+        if ($ov === null || $ov['kind'] !== 'image') {
+            http_response_code(404);
+            exit('No encontrado');
+        }
+        MediaRepository::send($ov, param($_GET, 'dl') === '1');
     }
 
     /* -----------------------------------------------------------------
@@ -441,6 +556,51 @@ try {
                     redirectWith("Liga «{$league['name']}» eliminada (y quitada de sus usuarios).", 'view=leagues');
                 default:
                     redirectWith('Acción desconocida.', 'view=leagues');
+            }
+        } elseif (str_starts_with($action, 'ov_')) {
+            /* ---- TIRAS Y BANNERS (vista ?view=overlays) ---- */
+            $oid = (int) param($_POST, 'overlayId');
+            $ov = $action === 'ov_create' ? null : OverlayRepository::find($oid);
+            if ($action !== 'ov_create' && $ov === null) {
+                redirectWith('Esa tira o banner ya no existe.', 'view=overlays');
+            }
+            // Las de los usuarios: el administrador solo puede pausar/activar o eliminar
+            if ($action === 'ov_update' && $ov['user_id'] !== null) {
+                redirectWith('Las tiras de los usuarios solo se pueden pausar o eliminar.', 'view=overlays');
+            }
+            [$what, $g] = overlayNoun((string) ($ov['kind'] ?? param($_POST, 'kind')));
+            $owner = $ov !== null && $ov['user_id'] !== null ? ' de ' . ($usersById[(int) $ov['user_id']]['company'] ?? 'un usuario') : '';
+            switch ($action) {
+                case 'ov_create':
+                case 'ov_update':
+                    $upload = null;
+                    if ($action === 'ov_create' && param($_POST, 'kind') === 'image') {
+                        $upload = overlayUpload();
+                        if (is_string($upload)) {
+                            redirectWith($upload, 'view=overlays');
+                        }
+                    }
+                    $style = overlayStyleData($ov, $upload ? pathinfo($upload[1], PATHINFO_FILENAME) : '');
+                    if (is_string($style)) {
+                        redirectWith($style, 'view=overlays');
+                    }
+                    $data = $style + overlayAdminData();
+                    if ($action === 'ov_create') {
+                        OverlayRepository::create($data, $upload[0] ?? null, $upload[1] ?? '', $upload[2] ?? null);
+                    } else {
+                        OverlayRepository::update($oid, $data);
+                    }
+                    [$what, $g] = overlayNoun($style['kind']);
+                    redirectWith("$what «{$style['name']}» " . ($action === 'ov_create' ? "cread$g" : "guardad$g") . '. Las pantallas lo aplican en su próxima consulta (≈ 1 min).', 'view=overlays');
+                case 'ov_pause':
+                case 'ov_resume':
+                    OverlayRepository::setActive($oid, $action === 'ov_resume');
+                    redirectWith("$what «{$ov['name']}»$owner " . ($action === 'ov_resume' ? "activad$g." : "pausad$g."), 'view=overlays');
+                case 'ov_delete':
+                    OverlayRepository::delete($oid);
+                    redirectWith("$what «{$ov['name']}»$owner eliminad$g. Las pantallas lo quitarán en su próxima consulta.", 'view=overlays');
+                default:
+                    redirectWith('Acción desconocida.', 'view=overlays');
             }
         } elseif (str_starts_with($action, 'ad_')) {
             /* ---- ANUNCIOS (vista ?view=ads) ---- */
@@ -620,7 +780,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'leagues'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'leagues'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -684,7 +844,9 @@ try {
     $userBack = $userCard ? 'view=users&user=' . (int) $userCard['id'] : 'view=users';
     // Anuncios (?view=ads): lista + todos los equipos para elegir destino
     $ads = $loggedIn && $view === 'ads' ? AdRepository::all() : [];
-    $allDevices = $loggedIn && $view === 'ads' ? DeviceRepository::search(null, '', null) : [];
+    $allDevices = $loggedIn && ($view === 'ads' || $view === 'overlays') ? DeviceRepository::search(null, '', null) : [];
+    // Tiras y banners (?view=overlays): las del administrador y, aparte, las de los usuarios
+    $overlaysAll = $loggedIn && $view === 'overlays' ? OverlayRepository::all(null, true) : [];
     usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
     // Ligas: vista ?view=leagues y sección "Ligas" de la ficha de un usuario
     $needLeagues = $loggedIn && ($view === 'leagues' || $userCard);
@@ -743,6 +905,7 @@ try {
     $userBack = 'view=users';
     $ads = [];
     $allDevices = [];
+    $overlaysAll = [];
     $leagueTypes = [];
     $leagues = [];
     $userLeagueIds = [];
@@ -808,6 +971,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .league-check input { margin-top: 4px; }
     textarea { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);
       border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+<?= overlayStyles() ?>
+    .ov-list-title { margin: 18px 0 8px; }
     /* Anuncios (?view=ads) */
     .hidden-tools { display: none; }
     .targets { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
@@ -901,6 +1066,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'users' ? 'on' : '' ?>" href="?view=users">Usuarios</a>
       <a class="btn <?= $view === 'media' ? 'on' : '' ?>" href="?view=media">Contenido</a>
       <a class="btn <?= $view === 'ads' ? 'on' : '' ?>" href="?view=ads">Anuncios</a>
+      <a class="btn <?= $view === 'overlays' ? 'on' : '' ?>" href="?view=overlays">Tiras</a>
       <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues">Ligas</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
@@ -917,8 +1083,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     </div>
   <?php endif; ?>
 
-  <!-- Buscador (oculto en Anuncios y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= $view === 'ads' || $view === 'leagues' ? ' hidden-tools' : '' ?>" method="get">
+  <!-- Buscador (oculto en Anuncios, Tiras y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
+  <form class="tools<?= in_array($view, ['ads', 'overlays', 'leagues'], true) ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa o email' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
@@ -1187,6 +1353,68 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           </div>
         </div>
       </section>
+    <?php endforeach; ?>
+
+  <?php elseif ($view === 'overlays' && !$historyDevice):
+    $ovAdmin = array_values(array_filter($overlaysAll, static fn($o) => $o['user_id'] === null));
+    $ovUsers = array_values(array_filter($overlaysAll, static fn($o) => $o['user_id'] !== null));
+    $ovStateText = ['active' => 'En curso', 'paused' => 'Pausada', 'scheduled' => 'Programada', 'ended' => 'Finalizada'];
+    $ovStateBadge = ['active' => 'authorized', 'paused' => 'off', 'scheduled' => 'pending', 'ended' => 'revoked'];
+  ?>
+    <!-- ================= TIRAS Y BANNERS =================
+         Franja arriba o abajo de mirror.html (texto o imagen). Las del
+         administrador llegan a cualquier equipo AUTORIZADO del destino y
+         tienen prioridad sobre las del usuario en la misma posición. -->
+    <details class="card new-user" <?= !$ovAdmin ? 'open' : '' ?>>
+      <summary><strong>+ Nueva tira o banner</strong></summary>
+      <form method="post" enctype="multipart/form-data" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="ov_create">
+        <?= overlayFields(null, 'ovnew-') ?>
+        <?= overlayAdminFields(null, $users, $allDevices) ?>
+        <button class="primary" type="submit">Crear</button>
+        <span class="owner">Las fechas usan la hora de este navegador.</span>
+      </form>
+    </details>
+
+    <?php foreach ([['Del administrador', $ovAdmin, 'Todavía no hay tiras ni banners del administrador.'],
+                    ['De los usuarios (solo pausar o eliminar)', $ovUsers, 'Ningún usuario ha creado tiras ni banners.']] as [$title, $list, $emptyText]): ?>
+      <h2 class="ov-list-title"><?= h($title) ?> (<?= count($list) ?>)</h2>
+      <?php if (!$list): ?><div class="card empty"><?= h($emptyText) ?></div><?php endif; ?>
+      <?php foreach ($list as $o): $oid = (int) $o['id']; $st = OverlayRepository::state($o); $o['_img'] = $o['kind'] === 'image' ? '?ov=' . $oid : ''; ?>
+        <section class="card device">
+          <?= overlayPreview($o, $o['_img']) ?>
+          <div class="user-head">
+            <span class="media-name"><?= h($o['name']) ?>
+              <?= $o['user_id'] !== null ? '<span class="owner-tag">· ' . h((string) $o['user_company']) . '</span>' : '' ?></span>
+            <span class="badge <?= $ovStateBadge[$st] ?>"><?= $ovStateText[$st] ?></span>
+          </div>
+          <div class="meta">
+            <?= h(overlaySummary($o)) ?><br>
+            <?= h(overlayTargetText($o, $usersById)) ?><br>
+            <?= $o['starts_at'] ? 'Desde ' . dateTag($o['starts_at']) : 'Desde ya' ?>
+            · <?= $o['ends_at'] ? 'hasta ' . dateTag($o['ends_at']) : 'sin fecha de fin' ?>
+          </div>
+          <div class="actions">
+            <form method="post"><?= csrfField() ?><input type="hidden" name="overlayId" value="<?= $oid ?>">
+              <input type="hidden" name="action" value="<?= (int) $o['active'] === 1 ? 'ov_pause' : 'ov_resume' ?>">
+              <button class="<?= (int) $o['active'] === 1 ? 'bad' : 'ok' ?>" type="submit"><?= (int) $o['active'] === 1 ? 'Pausar' : 'Activar' ?></button></form>
+            <form method="post" data-confirm="¿Eliminar «<?= h($o['name']) ?>»? Las pantallas dejarán de mostrarlo."><?= csrfField() ?>
+              <input type="hidden" name="overlayId" value="<?= $oid ?>"><input type="hidden" name="action" value="ov_delete">
+              <button type="submit">Eliminar</button></form>
+          </div>
+          <?php if ($o['user_id'] === null): ?>
+            <details class="edit">
+              <summary>Editar</summary>
+              <form method="post" autocomplete="off"><?= csrfField() ?>
+                <input type="hidden" name="action" value="ov_update"><input type="hidden" name="overlayId" value="<?= $oid ?>">
+                <?= overlayFields($o, 'o' . $oid . '-') ?>
+                <?= overlayAdminFields($o, $users, $allDevices) ?>
+                <button class="primary" type="submit">Guardar cambios</button>
+              </form>
+            </details>
+          <?php endif; ?>
+        </section>
+      <?php endforeach; ?>
     <?php endforeach; ?>
 
   <?php elseif ($view === 'leagues' && !$historyDevice): ?>
@@ -1488,6 +1716,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   </div>
 
   <!-- Fechas locales, "hace X", En línea/Desconectado y confirmaciones -->
+  <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
   <script nonce="<?= h($nonce) ?>"><?= timeScript($onlineTimeout) ?></script>
   <script nonce="<?= h($nonce) ?>">
   (function () {

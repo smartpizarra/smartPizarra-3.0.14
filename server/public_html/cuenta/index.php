@@ -23,6 +23,13 @@
  *    (desde/hasta, opcionales, en la hora de su navegador => UTC), como
  *    los anuncios del administrador; fuera del periodo api/media.php no
  *    lo envía a sus equipos (MediaRepository::forDevice filtra por fecha).
+ *  - TIRAS Y BANNERS (pestaña "Tiras y banners", ?s=tiras, 2026-11-11):
+ *    franja ARRIBA o ABAJO de la pantalla de mirror.html: TIRA de texto
+ *    (colores de fondo y letra, fija o desplazándose con velocidad) o
+ *    BANNER de imagen; tamaño pequeña/mediana/grande; en todos sus equipos
+ *    o en algunos; permanente o con fechas; pausar/activar, editar y
+ *    eliminar (acciones overlay_*). Vista previa del banner: ?ovfile=ID.
+ *    Si el administrador pone una en la MISMA posición, se ve la suya.
  *  - Puede cambiar su contraseña cuando quiera (pide la actual).
  *
  *  Seguridad: sesión propia (cookie "sp_user" solo en /cuenta/), token
@@ -118,10 +125,10 @@ function scheduleFields(?array $m, string $p): string
 
 /**
  * Fechas del formulario de contenido. "Permanente" => [null, null].
- * Si algo no es válido redirige con el mensaje.
+ * Si algo no es válido redirige con el mensaje (a la sección $back).
  * @return array{0:?string,1:?string} [desde, hasta] en UTC "Y-m-d H:i:s".
  */
-function scheduleData(): array
+function scheduleData(string $back = 's=contenido'): array
 {
     if (param($_POST, 'when') !== 'dates') {
         return [null, null];
@@ -130,13 +137,13 @@ function scheduleData(): array
     $starts = localToUtc(param($_POST, 'starts'), $tz);
     $ends = localToUtc(param($_POST, 'ends'), $tz);
     if ($starts === false || $ends === false) {
-        redirectWith('Fecha no válida.', 's=contenido');
+        redirectWith('Fecha no válida.', $back);
     }
     if ($starts === null && $ends === null) {
-        redirectWith('Indica al menos una fecha (desde o hasta) o elige "Permanente".', 's=contenido');
+        redirectWith('Indica al menos una fecha (desde o hasta) o elige "Permanente".', $back);
     }
     if ($starts !== null && $ends !== null && $ends <= $starts) {
-        redirectWith('La fecha "Hasta" debe ser posterior a "Desde".', 's=contenido');
+        redirectWith('La fecha "Hasta" debe ser posterior a "Desde".', $back);
     }
     return [$starts, $ends];
 }
@@ -155,6 +162,12 @@ function scheduleTag(array $m): string
         : (!empty($m['starts_at']) ? 'desde ' . dateTag((string) $m['starts_at']) : 'desde ya')
           . ' · ' . (!empty($m['ends_at']) ? 'hasta ' . dateTag((string) $m['ends_at']) : 'sin fecha de fin');
     return '<span class="badge ' . $class . '">' . $label . '</span> <span class="hint">' . $text . '</span>';
+}
+
+/** Insignia de una tira/banner: Pausada, o su periodo (Permanente / En curso / Programado / Finalizado). */
+function overlayTag(array $o): string
+{
+    return (int) $o['active'] !== 1 ? '<span class="badge off">Pausada</span>' : scheduleTag($o);
 }
 
 /** Cierra la sesión del usuario. */
@@ -201,6 +214,15 @@ try {
             exit('No encontrado');
         }
         MediaRepository::send($media);
+    }
+    // Imagen de un banner propio (?ovfile=ID)
+    if ($user !== null && isset($_GET['ovfile'])) {
+        $ov = OverlayRepository::findForUser((int) param($_GET, 'ovfile'), (int) $user['id']);
+        if ($ov === null || $ov['kind'] !== 'image') {
+            http_response_code(404);
+            exit('No encontrado');
+        }
+        MediaRepository::send($ov);
     }
 
     /* -----------------------------------------------------------------
@@ -306,6 +328,67 @@ try {
             $label = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $raw));
             DeviceRepository::setLabel($id, $label);
             redirectWith($label === '' ? "Nombre de $id quitado." : "Nombre de $id guardado: «" . mb_substr($label, 0, 100) . '».', 's=equipos');
+        } elseif (str_starts_with($action, 'overlay_')) {
+            /* ---- TIRAS Y BANNERS de sus pantallas (mirror.html) ---- */
+            if ((int) $user['must_change_password'] === 1) {
+                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+            }
+            $uid = (int) $user['id'];
+            $oid = (int) param($_POST, 'overlayId');
+            $ov = $action === 'overlay_create' ? null : OverlayRepository::findForUser($oid, $uid);
+            if ($action !== 'overlay_create' && $ov === null) {
+                redirectWith('Esa tira o banner ya no existe.', 's=tiras');
+            }
+            if ($action === 'overlay_create' || $action === 'overlay_update') {
+                if ($action === 'overlay_create' && OverlayRepository::countForUser($uid) >= OverlayRepository::maxPerUser()) {
+                    redirectWith('Has llegado al máximo de ' . OverlayRepository::maxPerUser() . ' tiras y banners. Borra alguno.', 's=tiras');
+                }
+                $upload = null;
+                if ($action === 'overlay_create' && param($_POST, 'kind') === 'image') {
+                    $upload = overlayUpload();
+                    if (is_string($upload)) {
+                        redirectWith($upload, 's=tiras');
+                    }
+                }
+                $style = overlayStyleData($ov, $upload ? pathinfo($upload[1], PATHINFO_FILENAME) : '');
+                if (is_string($style)) {
+                    redirectWith($style, 's=tiras');
+                }
+                [$all, $chosen] = targetDevices();
+                if (!$all && !$chosen) {
+                    redirectWith('Marca al menos un equipo o elige "Todos mis equipos".', 's=tiras');
+                }
+                [$starts, $ends] = scheduleData('s=tiras');
+                $data = $style + [
+                    'user' => $uid,
+                    'scope' => $all ? 'all' : 'devices',
+                    'active' => $action === 'overlay_create' || (int) $ov['active'] === 1,
+                    'starts' => $starts,
+                    'ends' => $ends,
+                    'users' => [],
+                    'devices' => $chosen,
+                ];
+                if ($action === 'overlay_create') {
+                    OverlayRepository::create($data, $upload[0] ?? null, $upload[1] ?? '', $upload[2] ?? null);
+                } else {
+                    OverlayRepository::update($oid, $data);
+                }
+                [$what, $g] = overlayNoun($style['kind']);
+                redirectWith("$what «{$style['name']}» " . ($action === 'overlay_create' ? "cread$g" : "guardad$g")
+                    . '. Tus pantallas lo mostrarán en su próxima consulta (≈ 1 min).', 's=tiras');
+            }
+            [$what, $g] = overlayNoun((string) $ov['kind']);
+            switch ($action) {
+                case 'overlay_pause':
+                case 'overlay_resume':
+                    OverlayRepository::setActive($oid, $action === 'overlay_resume');
+                    redirectWith($action === 'overlay_resume' ? "$what «{$ov['name']}» activad$g." : "$what «{$ov['name']}» pausad$g: tus pantallas lo quitarán en su próxima consulta.", 's=tiras');
+                case 'overlay_delete':
+                    OverlayRepository::delete($oid);
+                    redirectWith("$what «{$ov['name']}» eliminad$g. Tus pantallas lo quitarán en su próxima consulta.", 's=tiras');
+                default:
+                    redirectWith('Acción desconocida.', 's=tiras');
+            }
         } elseif (str_starts_with($action, 'media_')) {
             /* ---- Contenido para mirror.html (imágenes y videos) ---- */
             if ((int) $user['must_change_password'] === 1) {
@@ -378,6 +461,8 @@ try {
     // Contenido para mirror.html
     $mediaList = $user !== null && !$mustChange ? MediaRepository::forUser((int) $user['id']) : [];
     $usedBytes = $user !== null && !$mustChange ? MediaRepository::usedBytes((int) $user['id']) : 0;
+    // Tiras y banners de sus pantallas
+    $overlays = $user !== null && !$mustChange ? OverlayRepository::all((int) $user['id']) : [];
 } catch (Throwable $e) {
     error_log('smartpizarra cuenta: ' . $e->getMessage());
     http_response_code(500);
@@ -390,15 +475,16 @@ try {
     $devices = [];
     $mediaList = [];
     $usedBytes = 0;
+    $overlays = [];
 }
 
 $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
 
 /*
- * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | cuenta.
+ * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | tiras | cuenta.
  * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
  */
-$sections = ['inicio' => 'Inicio', 'equipos' => 'Equipos', 'contenido' => 'Contenido', 'cuenta' => 'Mi cuenta'];
+$sections = ['inicio' => 'Inicio', 'equipos' => 'Equipos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'cuenta' => 'Mi cuenta'];
 $section = param($_GET, 's');
 if (!isset($sections[$section])) {
     $section = 'inicio';
@@ -444,7 +530,7 @@ if ($validity['state'] !== 'active') {
       white-space: nowrap; font-weight: 500; }
     .tabs a.on { color: var(--accent); border-bottom-color: var(--accent); }
     .tabs .count { font-size: .8rem; color: var(--muted); margin-left: 4px; }
-    /* Móvil: las 4 pestañas caben sin desplazar */
+    /* Móvil: las pestañas se reparten el ancho (si no caben, se desplazan) */
     @media (max-width: 480px) {
       .tabs { gap: 0; }
       .tabs a { flex: 1 1 auto; padding: 10px 6px; font-size: .92rem; text-align: center; }
@@ -508,6 +594,8 @@ if ($validity['state'] !== 'active') {
     .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     .label-form input[type=text] { flex: 1 1 220px; min-width: 0; padding: 8px 10px; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .badge.off { color: var(--muted); }
+<?= overlayStyles() ?>
   </style>
 </head>
 <body>
@@ -543,7 +631,7 @@ if ($validity['state'] !== 'active') {
     <nav class="tabs" aria-label="Secciones">
       <?php foreach ($sections as $key => $text): ?>
         <a class="<?= $section === $key ? 'on' : '' ?>" href="?s=<?= h($key) ?>" <?= $section === $key ? 'aria-current="page"' : '' ?>>
-          <?= h($text) ?><?php if ($key === 'equipos'): ?><span class="count"><?= count($devices) ?></span><?php elseif ($key === 'contenido'): ?><span class="count"><?= count($mediaList) ?></span><?php endif; ?>
+          <?= h($text) ?><?php if ($key === 'equipos'): ?><span class="count"><?= count($devices) ?></span><?php elseif ($key === 'contenido'): ?><span class="count"><?= count($mediaList) ?></span><?php elseif ($key === 'tiras'): ?><span class="count"><?= count($overlays) ?></span><?php endif; ?>
         </a>
       <?php endforeach; ?>
     </nav>
@@ -734,6 +822,61 @@ if ($validity['state'] !== 'active') {
       </section>
     <?php endforeach; ?>
 
+  <?php elseif ($section === 'tiras'): ?>
+    <!-- ============ TIRAS Y BANNERS (franja arriba/abajo de mirror.html) ============ -->
+    <details class="card block" <?= !$overlays ? 'open' : '' ?>>
+      <summary><strong>+ Nueva tira o banner</strong></summary>
+      <form method="post" enctype="multipart/form-data" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="overlay_create">
+        <p class="hint">Una franja con un mensaje (tira) o una imagen (banner) arriba o abajo de la pantalla, sobre tus
+          imágenes y videos. Se ve en tus equipos que muestran contenido (autorizados, con el contenido habilitado y vigencia activa).</p>
+        <?= overlayFields(null, 'new-') ?>
+        <?= targetFields($devices, true, [], 'ov-new-') ?>
+        <?= scheduleFields(null, 'ov-new-') ?>
+        <button class="primary" type="submit">Crear</button>
+      </form>
+    </details>
+
+    <div class="section-head">
+      <h2>Mis tiras y banners (<?= count($overlays) ?>)</h2>
+      <span class="hint">Máx. <?= OverlayRepository::maxPerUser() ?> · en cada pantalla se ve una arriba y una abajo
+        (la más concreta y reciente). Si el administrador pone una en la misma posición, se ve la suya.</span>
+    </div>
+    <?php if (!$overlays): ?>
+      <div class="card empty block">Todavía no tienes tiras ni banners.</div>
+    <?php endif; ?>
+    <?php foreach ($overlays as $o): $oid = (int) $o['id']; $o['_img'] = $o['kind'] === 'image' ? '?ovfile=' . $oid : ''; ?>
+      <section class="card device">
+        <?= overlayPreview($o, $o['_img']) ?>
+        <div class="device-head">
+          <span class="media-name"><?= h($o['name']) ?></span>
+          <?= overlayTag($o) ?>
+        </div>
+        <div class="meta">
+          <?= h(overlaySummary($o)) ?><br>
+          Se muestra en: <?= $o['scope'] === 'all' ? 'todos mis equipos' : count($o['devices']) . ' equipo(s)' ?>
+        </div>
+        <div class="actions">
+          <form method="post"><?= csrfField() ?><input type="hidden" name="overlayId" value="<?= $oid ?>">
+            <input type="hidden" name="action" value="<?= (int) $o['active'] === 1 ? 'overlay_pause' : 'overlay_resume' ?>">
+            <button class="<?= (int) $o['active'] === 1 ? 'bad' : 'ok' ?>" type="submit"><?= (int) $o['active'] === 1 ? 'Pausar' : 'Activar' ?></button></form>
+          <form method="post" data-confirm="¿Eliminar «<?= h($o['name']) ?>»? Tus pantallas dejarán de mostrarlo."><?= csrfField() ?>
+            <input type="hidden" name="overlayId" value="<?= $oid ?>"><input type="hidden" name="action" value="overlay_delete">
+            <button class="bad" type="submit">Eliminar</button></form>
+        </div>
+        <details class="edit">
+          <summary>Editar</summary>
+          <form method="post" autocomplete="off"><?= csrfField() ?>
+            <input type="hidden" name="action" value="overlay_update"><input type="hidden" name="overlayId" value="<?= $oid ?>">
+            <?= overlayFields($o, 'o' . $oid . '-') ?>
+            <?= targetFields($devices, $o['scope'] === 'all', $o['devices'], 'o' . $oid . '-') ?>
+            <?= scheduleFields($o, 'o' . $oid . '-') ?>
+            <button class="primary" type="submit">Guardar cambios</button>
+          </form>
+        </details>
+      </section>
+    <?php endforeach; ?>
+
   <?php else: ?>
     <!-- ======================= MI CUENTA ======================= -->
     <div class="two">
@@ -777,6 +920,7 @@ if ($validity['state'] !== 'active') {
   <?php endif; ?>
 
   <script nonce="<?= h($nonce) ?>"><?= timeScript($onlineTimeout) ?></script>
+  <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
   <script nonce="<?= h($nonce) ?>">
   (function () {
     "use strict";
