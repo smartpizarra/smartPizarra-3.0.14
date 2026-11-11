@@ -199,6 +199,12 @@ final class Database
             return 'Falta la columna content_until (vigencia): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-08-content-until.sql.';
         }
+        // Anuncios del administrador
+        $adsMissing = array_diff(['sp_ads', 'sp_ad_users', 'sp_ad_devices'], $tables);
+        if ($adsMissing) {
+            return 'Faltan tablas (' . implode(', ', $adsMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-11-ads.sql.';
+        }
         return null;
     }
 
@@ -1110,6 +1116,260 @@ final class MediaRepository
         }
         readfile($path);
         exit;
+    }
+}
+
+/**
+ * ANUNCIOS del administrador (tablas sp_ads, sp_ad_users, sp_ad_devices).
+ *
+ * Imagen o video que mirror.html intercala después de cada "every_n"
+ * archivos del usuario (si el equipo no tiene contenido propio, muestra
+ * solo los anuncios). Destino (scope): all = todos los equipos, users =
+ * los equipos de ciertos usuarios (también los que se les asignen
+ * después), devices = equipos concretos. Solo lo reciben equipos
+ * AUTORIZADOS (no exige vigencia ni permiso de contenido). Fechas
+ * opcionales starts_at / ends_at (UTC) y pausa (active = 0).
+ * Los ficheros van a la misma carpeta que el contenido de los usuarios
+ * (MediaRepository::dir()) y se envían con MediaRepository::send().
+ */
+final class AdRepository
+{
+    public const SCOPES = ['all', 'users', 'devices'];
+    /** Límites de "cada N archivos del usuario". */
+    public const MIN_EVERY = 1;
+    public const MAX_EVERY = 100;
+
+    /** Cada N dentro de los límites. */
+    public static function cleanEvery(int $n): int
+    {
+        return max(self::MIN_EVERY, min(self::MAX_EVERY, $n));
+    }
+
+    /** Nombre para el panel: sin caracteres de control, 1-100 caracteres (null si queda vacío). */
+    public static function cleanName(string $name): ?string
+    {
+        if (!mb_check_encoding($name, 'UTF-8')) {
+            $name = mb_convert_encoding($name, 'UTF-8', 'Windows-1252');
+        }
+        $name = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name));
+        return $name === '' ? null : mb_substr($name, 0, 100);
+    }
+
+    /**
+     * Guarda un anuncio subido (ya validado: tipo y tamaño), al final de la lista.
+     * @param array{name:string,seconds:int,every:int,scope:string,active:bool,starts:?string,ends:?string,users:int[],devices:string[]} $data
+     * @return int Id del anuncio.
+     */
+    public static function create(string $tmpFile, string $originalName, string $mime, array $data): int
+    {
+        [$kind, $ext] = MediaRepository::TYPES[$mime];
+        $originalName = basename(str_replace('\\', '/', $originalName));
+        if (!mb_check_encoding($originalName, 'UTF-8')) {
+            $originalName = mb_convert_encoding($originalName, 'UTF-8', 'Windows-1252');
+        }
+        $stored = 'ad-' . bin2hex(random_bytes(16)) . '.' . $ext;
+        $target = MediaRepository::dir() . '/' . $stored;
+        // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
+        $moved = is_uploaded_file($tmpFile) ? move_uploaded_file($tmpFile, $target) : rename($tmpFile, $target);
+        if (!$moved) {
+            throw new RuntimeException('No se pudo guardar el archivo en ' . MediaRepository::dir());
+        }
+        @chmod($target, 0640);
+        $pdo = Database::pdo();
+        try {
+            $pdo->beginTransaction();
+            $next = (int) $pdo->query('SELECT COALESCE(MAX(position), 0) + 1 FROM sp_ads')->fetchColumn();
+            $now = Database::now();
+            $pdo->prepare(
+                'INSERT INTO sp_ads (name, kind, mime, original_name, stored_name, size_bytes, sha256, seconds,
+                   every_n, scope, active, starts_at, ends_at, position, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute([
+                $data['name'], $kind, $mime, mb_substr($originalName, 0, 190), $stored, filesize($target),
+                hash_file('sha256', $target), MediaRepository::cleanSeconds($data['seconds']),
+                self::cleanEvery($data['every']), $data['scope'], $data['active'] ? 1 : 0,
+                $data['starts'], $data['ends'], $next, $now, $now,
+            ]);
+            $id = (int) $pdo->lastInsertId();
+            self::writeTargets($id, $data['scope'], $data['users'], $data['devices']);
+            $pdo->commit();
+            return $id;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            @unlink($target);
+            throw $e;
+        }
+    }
+
+    /** Cambia los datos de un anuncio (no el archivo). Mismo $data que create(). */
+    public static function update(int $id, array $data): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare(
+                'UPDATE sp_ads SET name = ?, seconds = ?, every_n = ?, scope = ?, active = ?, starts_at = ?,
+                   ends_at = ?, updated_at = ? WHERE id = ?'
+            )->execute([
+                $data['name'], MediaRepository::cleanSeconds($data['seconds']), self::cleanEvery($data['every']),
+                $data['scope'], $data['active'] ? 1 : 0, $data['starts'], $data['ends'], Database::now(), $id,
+            ]);
+            self::writeTargets($id, $data['scope'], $data['users'], $data['devices']);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /** Reescribe usuarios/equipos destino (solo los del scope elegido y que existan). */
+    private static function writeTargets(int $id, string $scope, array $users, array $devices): void
+    {
+        $pdo = Database::pdo();
+        $pdo->prepare('DELETE FROM sp_ad_users WHERE ad_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM sp_ad_devices WHERE ad_id = ?')->execute([$id]);
+        if ($scope === 'users') {
+            $insert = $pdo->prepare('INSERT IGNORE INTO sp_ad_users (ad_id, user_id) SELECT ?, id FROM sp_users WHERE id = ?');
+            foreach (array_unique(array_map('intval', $users)) as $uid) {
+                $insert->execute([$id, $uid]);
+            }
+        } elseif ($scope === 'devices') {
+            $insert = $pdo->prepare('INSERT IGNORE INTO sp_ad_devices (ad_id, device_id) SELECT ?, device_id FROM sp_devices WHERE device_id = ?');
+            foreach (array_unique(array_map('strval', $devices)) as $did) {
+                $insert->execute([$id, $did]);
+            }
+        }
+    }
+
+    /** Pausa (false) o reanuda (true) un anuncio. */
+    public static function setActive(int $id, bool $active): void
+    {
+        Database::pdo()->prepare('UPDATE sp_ads SET active = ?, updated_at = ? WHERE id = ?')
+            ->execute([$active ? 1 : 0, Database::now(), $id]);
+    }
+
+    /** Mueve un anuncio un puesto antes (-1) o después (+1). */
+    public static function move(int $id, int $direction): void
+    {
+        $list = array_map('intval', Database::pdo()->query('SELECT id FROM sp_ads ORDER BY position, id')->fetchAll(PDO::FETCH_COLUMN));
+        $i = array_search($id, $list, true);
+        $j = $i === false ? false : $i + ($direction < 0 ? -1 : 1);
+        if ($i === false || $j < 0 || $j >= count($list)) {
+            return;
+        }
+        [$list[$i], $list[$j]] = [$list[$j], $list[$i]];
+        $stmt = Database::pdo()->prepare('UPDATE sp_ads SET position = ? WHERE id = ?');
+        foreach ($list as $pos => $adId) {
+            $stmt->execute([$pos + 1, $adId]);
+        }
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_ads WHERE id = ?');
+        $stmt->execute([$id]);
+        $row = $stmt->fetch();
+        return $row ?: null;
+    }
+
+    /**
+     * Borra un anuncio (fila, destinos y fichero). Los equipos lo quitan en su próxima consulta.
+     * @return array<string,mixed>|null El anuncio borrado (null si no existía).
+     */
+    public static function delete(int $id): ?array
+    {
+        $ad = self::find($id);
+        if ($ad === null) {
+            return null;
+        }
+        Database::pdo()->prepare('DELETE FROM sp_ads WHERE id = ?')->execute([$id]);
+        @unlink(MediaRepository::path($ad));
+        return $ad;
+    }
+
+    /**
+     * Todos los anuncios para el panel, en orden, con sus destinos:
+     * 'users' (ids) y 'devices' (ids de equipo).
+     * @return array<int,array<string,mixed>>
+     */
+    public static function all(): array
+    {
+        $pdo = Database::pdo();
+        $rows = $pdo->query('SELECT * FROM sp_ads ORDER BY position, id')->fetchAll();
+        $byId = [];
+        foreach ($rows as $i => $r) {
+            $rows[$i]['users'] = [];
+            $rows[$i]['devices'] = [];
+            $byId[(int) $r['id']] = $i;
+        }
+        foreach ($pdo->query('SELECT ad_id, user_id FROM sp_ad_users') as $r) {
+            if (isset($byId[(int) $r['ad_id']])) {
+                $rows[$byId[(int) $r['ad_id']]]['users'][] = (int) $r['user_id'];
+            }
+        }
+        foreach ($pdo->query('SELECT ad_id, device_id FROM sp_ad_devices') as $r) {
+            if (isset($byId[(int) $r['ad_id']])) {
+                $rows[$byId[(int) $r['ad_id']]]['devices'][] = (string) $r['device_id'];
+            }
+        }
+        return $rows;
+    }
+
+    /**
+     * Estado de un anuncio para el panel: active (en curso), paused,
+     * scheduled (empieza más adelante) o ended (ya terminó).
+     */
+    public static function state(array $ad): string
+    {
+        $now = time();
+        if ((int) $ad['active'] !== 1) {
+            return 'paused';
+        }
+        if (!empty($ad['ends_at']) && (int) strtotime($ad['ends_at'] . ' UTC') <= $now) {
+            return 'ended';
+        }
+        if (!empty($ad['starts_at']) && (int) strtotime($ad['starts_at'] . ' UTC') > $now) {
+            return 'scheduled';
+        }
+        return 'active';
+    }
+
+    /**
+     * Anuncios que le tocan AHORA a un equipo (activos, dentro de fechas y
+     * con destino todos / su usuario / él), en orden. La autorización la
+     * comprueba quien llama.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function forDevice(string $deviceId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT a.id, a.kind, a.mime, a.size_bytes, a.sha256, a.seconds, a.every_n
+             FROM sp_ads a JOIN sp_devices d ON d.device_id = ?
+             WHERE a.active = 1
+               AND (a.starts_at IS NULL OR a.starts_at <= ?)
+               AND (a.ends_at IS NULL OR a.ends_at > ?)
+               AND (a.scope = \'all\'
+                    OR (a.scope = \'users\' AND EXISTS (SELECT 1 FROM sp_ad_users au WHERE au.ad_id = a.id AND au.user_id = d.user_id))
+                    OR (a.scope = \'devices\' AND EXISTS (SELECT 1 FROM sp_ad_devices ad WHERE ad.ad_id = a.id AND ad.device_id = d.device_id)))
+             ORDER BY a.position, a.id'
+        );
+        $now = Database::now();
+        $stmt->execute([$deviceId, $now, $now]);
+        return $stmt->fetchAll();
+    }
+
+    /** Un anuncio SOLO si le toca ahora a ese equipo (para descargarlo). */
+    public static function findForDevice(int $id, string $deviceId): ?array
+    {
+        foreach (self::forDevice($deviceId) as $row) {
+            if ((int) $row['id'] === $id) {
+                return self::find($id);
+            }
+        }
+        return null;
     }
 }
 

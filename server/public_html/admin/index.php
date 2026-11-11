@@ -35,6 +35,15 @@
  *    secciones separadas: Vigencia, Equipos, Contenido, Datos, Acceso y
  *    Eliminar. Las acciones hechas desde la ficha vuelven a la ficha.
  *
+ *  - ANUNCIOS (botón "Anuncios", ?view=ads, 2026-11-11): el administrador
+ *    sube imágenes/videos que mirror.html intercala después de cada N
+ *    archivos del usuario (o muestra solos si el equipo no tiene contenido
+ *    propio, vigencia o permiso). Destino: todos los equipos, equipos de
+ *    ciertos usuarios o equipos concretos; fechas opcionales (hora del
+ *    navegador, se guardan en UTC), pausar/activar, orden, editar,
+ *    eliminar, vista previa (?ad=ID) y descarga (&dl=1). Solo equipos
+ *    AUTORIZADOS. Ver AdRepository (private/lib.php) y api/media.php.
+ *
  *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
  *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
  *    equipos solo muestran imágenes/videos mientras la vigencia está
@@ -108,6 +117,137 @@ function validityBlock(array $u, string $back): string
     return $html . '</div>';
 }
 
+/**
+ * Fecha de un <input type="datetime-local"> (hora del navegador del
+ * administrador) a UTC para la base. $tz = getTimezoneOffset() del
+ * navegador en minutos (UTC - local); sin JS llega 0 y se toma como UTC.
+ * @return string|null "Y-m-d H:i:s" UTC, null si está vacía, false si no es válida.
+ */
+function localToUtc(string $value, int $tz): string|null|false
+{
+    if (trim($value) === '') {
+        return null;
+    }
+    $dt = DateTime::createFromFormat('Y-m-d\TH:i', substr(trim($value), 0, 16), new DateTimeZone('UTC'));
+    if ($dt === false) {
+        return false;
+    }
+    $tz = max(-900, min(900, $tz));
+    return $dt->modify(($tz >= 0 ? '+' : '') . $tz . ' minutes')->format('Y-m-d H:i:s');
+}
+
+/**
+ * Datos de un anuncio desde el formulario (subir o editar). Si algo no es
+ * válido redirige con el mensaje (vuelve a la vista de anuncios).
+ * @return array{name:string,seconds:int,every:int,scope:string,active:bool,starts:?string,ends:?string,users:int[],devices:string[]}
+ */
+function adFormData(string $fallbackName): array
+{
+    $name = AdRepository::cleanName(param($_POST, 'name')) ?? AdRepository::cleanName($fallbackName) ?? 'Anuncio';
+    $scope = param($_POST, 'scope');
+    if (!in_array($scope, AdRepository::SCOPES, true)) {
+        $scope = 'all';
+    }
+    $users = array_values(array_filter(array_map('intval', (array) ($_POST['users'] ?? [])), static fn($v) => $v > 0));
+    $devices = array_values(array_filter(array_map(static fn($v) => strtoupper(trim((string) $v)), (array) ($_POST['devices'] ?? [])),
+        static fn($v) => DeviceRepository::isValidId($v)));
+    if ($scope === 'users' && !$users) {
+        redirectWith('Marca al menos un usuario o elige "Todos los equipos".', 'view=ads');
+    }
+    if ($scope === 'devices' && !$devices) {
+        redirectWith('Marca al menos un equipo o elige "Todos los equipos".', 'view=ads');
+    }
+    $tz = (int) param($_POST, 'tz');
+    $starts = localToUtc(param($_POST, 'starts'), $tz);
+    $ends = localToUtc(param($_POST, 'ends'), $tz);
+    if ($starts === false || $ends === false) {
+        redirectWith('Fecha no válida.', 'view=ads');
+    }
+    if ($starts !== null && $ends !== null && $ends <= $starts) {
+        redirectWith('La fecha de fin debe ser posterior a la de inicio.', 'view=ads');
+    }
+    return [
+        'name' => $name,
+        'seconds' => (int) param($_POST, 'seconds'),
+        'every' => (int) param($_POST, 'every'),
+        'scope' => $scope,
+        'active' => param($_POST, 'active') === '1',
+        'starts' => $starts,
+        'ends' => $ends,
+        'users' => $users,
+        'devices' => $devices,
+    ];
+}
+
+/**
+ * Campos comunes del formulario de un anuncio (nombre, duración, cada N,
+ * fechas, activo y DESTINO: todos / usuarios / equipos).
+ * @param array<string,mixed>|null $ad      Anuncio a editar (null = nuevo).
+ * @param array<int,array>         $users   UserRepository::all().
+ * @param array<int,array>         $devices Todos los equipos.
+ */
+function adFields(?array $ad, array $users, array $devices): string
+{
+    $p = $ad ? 'a' . (int) $ad['id'] . '-' : 'new-';
+    $scope = $ad['scope'] ?? 'all';
+    $chosenUsers = array_flip($ad['users'] ?? []);
+    $chosenDevices = array_flip($ad['devices'] ?? []);
+    $utc = static fn(?string $v) => $v ? (string) utcTs($v) : '';
+    $html = '<input type="hidden" name="tz" value="0" data-tz>'
+        . '<div class="user-grid">'
+        . '<div><label for="' . $p . 'name">Nombre (solo para el panel)</label>'
+        . '<input type="text" id="' . $p . 'name" name="name" maxlength="100" value="' . h((string) ($ad['name'] ?? '')) . '" placeholder="p. ej. Promo diciembre"></div>'
+        . '<div><label for="' . $p . 'every">Mostrar después de cada</label>'
+        . '<span class="inline-num"><input type="number" id="' . $p . 'every" name="every" min="' . AdRepository::MIN_EVERY . '" max="' . AdRepository::MAX_EVERY . '" value="' . (int) ($ad['every_n'] ?? 3) . '" required> archivos del usuario</span></div>'
+        . '<div><label for="' . $p . 'seconds">Segundos en pantalla (imagen)</label>'
+        . '<input type="number" id="' . $p . 'seconds" name="seconds" min="' . MediaRepository::MIN_SECONDS . '" max="' . MediaRepository::MAX_SECONDS . '" value="' . (int) ($ad['seconds'] ?? 10) . '" required></div>'
+        . '</div><div class="user-grid">'
+        . '<div><label for="' . $p . 'starts">Desde (opcional)</label>'
+        . '<input type="datetime-local" id="' . $p . 'starts" name="starts" data-utc="' . $utc($ad['starts_at'] ?? null) . '"></div>'
+        . '<div><label for="' . $p . 'ends">Hasta (opcional)</label>'
+        . '<input type="datetime-local" id="' . $p . 'ends" name="ends" data-utc="' . $utc($ad['ends_at'] ?? null) . '"></div>'
+        . '<div><label>&nbsp;</label><label class="inline"><input type="checkbox" name="active" value="1"' . (!$ad || (int) $ad['active'] === 1 ? ' checked' : '') . '> Activo</label></div>'
+        . '</div>';
+    // Destino
+    $html .= '<fieldset class="targets" data-scope><legend>Mostrar en</legend>';
+    foreach (['all' => 'Todos los equipos', 'users' => 'Equipos de estos usuarios', 'devices' => 'Estos equipos'] as $k => $text) {
+        $html .= '<label class="inline"><input type="radio" name="scope" value="' . $k . '"' . ($scope === $k ? ' checked' : '') . '> ' . $text . '</label>';
+    }
+    $html .= '<div class="pick" data-for="users"><span class="owner">Usuarios (también sus equipos futuros):</span>';
+    if (!$users) {
+        $html .= '<span class="owner">No hay usuarios.</span>';
+    }
+    foreach ($users as $u) {
+        $uid = (int) $u['id'];
+        $html .= '<label class="inline"><input type="checkbox" name="users[]" value="' . $uid . '"' . (isset($chosenUsers[$uid]) ? ' checked' : '') . '> '
+            . h($u['company']) . ' <span class="owner">(' . (int) $u['devices'] . ')</span></label>';
+    }
+    $html .= '</div><div class="pick" data-for="devices"><span class="owner">Equipos:</span>';
+    if (!$devices) {
+        $html .= '<span class="owner">No hay equipos.</span>';
+    }
+    foreach ($devices as $d) {
+        $id = (string) $d['device_id'];
+        $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
+            . ($d['label'] ? h($d['label']) . ' ' : '') . '<span class="mono">' . h($id) . '</span>'
+            . ($d['user_company'] ? ' <span class="owner">(' . h($d['user_company']) . ')</span>' : '') . '</label>';
+    }
+    return $html . '</div></fieldset>';
+}
+
+/** Texto del destino de un anuncio para la lista. */
+function adTargetText(array $ad, array $usersById): string
+{
+    if ($ad['scope'] === 'users') {
+        $names = array_map(static fn($id) => $usersById[$id]['company'] ?? ('#' . $id), $ad['users']);
+        return 'Usuarios: ' . ($names ? implode(', ', $names) : 'ninguno');
+    }
+    if ($ad['scope'] === 'devices') {
+        return 'Equipos: ' . ($ad['devices'] ? implode(', ', $ad['devices']) : 'ninguno');
+    }
+    return 'Todos los equipos';
+}
+
 /** Texto de un usuario para listas: "Empresa — email". */
 function userText(array $u): string
 {
@@ -149,10 +289,24 @@ try {
         }
         MediaRepository::send($media, param($_GET, 'dl') === '1');
     }
+    // Archivo de un anuncio: vista previa (?ad=ID) o descarga (&dl=1), solo administrador
+    if ($loggedIn && isset($_GET['ad'])) {
+        $ad = AdRepository::find((int) param($_GET, 'ad'));
+        if ($ad === null) {
+            http_response_code(404);
+            exit('No encontrado');
+        }
+        MediaRepository::send($ad, param($_GET, 'dl') === '1');
+    }
 
     /* -----------------------------------------------------------------
        Acciones (POST)
        ----------------------------------------------------------------- */
+    // Subida (anuncio) más grande que post_max_size de PHP: llega sin datos ni CSRF
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !$_POST && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+        redirectWith('El archivo es demasiado grande para el servidor (límite de PHP post_max_size: '
+            . ini_get('post_max_size') . ').', $loggedIn ? 'view=ads' : '');
+    }
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $action = param($_POST, 'action');
         if (!hash_equals(csrfToken(), param($_POST, 'csrf'))) {
@@ -194,6 +348,51 @@ try {
                 ? 'Ese archivo ya no existe.'
                 : '«' . $gone['original_name'] . '» de «' . $gone['user_company'] . '» eliminado. '
                     . 'Sus pantallas dejarán de mostrarlo en su próxima consulta.', $back);
+        } elseif (str_starts_with($action, 'ad_')) {
+            /* ---- ANUNCIOS (vista ?view=ads) ---- */
+            $adId = (int) param($_POST, 'adId');
+            $ad = $action === 'ad_upload' ? null : AdRepository::find($adId);
+            if ($action !== 'ad_upload' && $ad === null) {
+                redirectWith('Ese anuncio ya no existe.', 'view=ads');
+            }
+            switch ($action) {
+                case 'ad_upload':
+                    $f = $_FILES['file'] ?? null;
+                    $err = is_array($f) && is_int($f['error'] ?? null) ? $f['error'] : UPLOAD_ERR_NO_FILE;
+                    if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
+                        redirectWith('El archivo supera el límite de PHP (upload_max_filesize: ' . ini_get('upload_max_filesize') . ').', 'view=ads');
+                    }
+                    if ($err !== UPLOAD_ERR_OK) {
+                        redirectWith($err === UPLOAD_ERR_NO_FILE ? 'Elige un archivo.' : 'La subida falló (código ' . $err . '). Inténtalo de nuevo.', 'view=ads');
+                    }
+                    if ((int) $f['size'] > MediaRepository::maxBytes()) {
+                        redirectWith('El archivo supera el máximo de ' . formatBytes(MediaRepository::maxBytes()) . '.', 'view=ads');
+                    }
+                    $mime = MediaRepository::detectMime((string) $f['tmp_name']);
+                    if ($mime === null) {
+                        redirectWith('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.', 'view=ads');
+                    }
+                    $data = adFormData(pathinfo((string) $f['name'], PATHINFO_FILENAME));
+                    AdRepository::create((string) $f['tmp_name'], (string) $f['name'], $mime, $data);
+                    redirectWith("Anuncio «{$data['name']}» subido. Los equipos lo descargarán en su próxima consulta (≈ 1 min).", 'view=ads');
+                case 'ad_update':
+                    $data = adFormData((string) $ad['name']);
+                    AdRepository::update($adId, $data);
+                    redirectWith("Anuncio «{$data['name']}» guardado. Se aplica en la próxima consulta de los equipos.", 'view=ads');
+                case 'ad_pause':
+                case 'ad_resume':
+                    AdRepository::setActive($adId, $action === 'ad_resume');
+                    redirectWith($action === 'ad_resume' ? "Anuncio «{$ad['name']}» activado." : "Anuncio «{$ad['name']}» pausado.", 'view=ads');
+                case 'ad_up':
+                case 'ad_down':
+                    AdRepository::move($adId, $action === 'ad_up' ? -1 : 1);
+                    redirectWith('Orden de los anuncios cambiado.', 'view=ads');
+                case 'ad_delete':
+                    AdRepository::delete($adId);
+                    redirectWith("Anuncio «{$ad['name']}» eliminado. Las pantallas dejarán de mostrarlo en su próxima consulta.", 'view=ads');
+                default:
+                    redirectWith('Acción desconocida.', 'view=ads');
+            }
         } elseif (str_starts_with($action, 'user_')) {
             /* ---- Acciones sobre USUARIOS (vista ?view=users) ---- */
             $uid = (int) param($_POST, 'userId');
@@ -319,7 +518,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -381,6 +580,10 @@ try {
     }
     // Volver a la ficha tras una acción hecha desde ella
     $userBack = $userCard ? 'view=users&user=' . (int) $userCard['id'] : 'view=users';
+    // Anuncios (?view=ads): lista + todos los equipos para elegir destino
+    $ads = $loggedIn && $view === 'ads' ? AdRepository::all() : [];
+    $allDevices = $loggedIn && $view === 'ads' ? DeviceRepository::search(null, '', null) : [];
+    usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
     // Contraseña temporal recién creada/restablecida (se muestra una vez)
@@ -431,6 +634,8 @@ try {
     $userCounts = [];
     $userList = [];
     $userBack = 'view=users';
+    $ads = [];
+    $allDevices = [];
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -476,6 +681,24 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .media-body { flex: 1 1 260px; min-width: 0; }
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
+    /* Anuncios (?view=ads) */
+    .hidden-tools { display: none; }
+    .targets { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
+    .targets legend { font-size: .9rem; color: var(--muted); padding: 0 4px; }
+    label.inline { display: inline-flex; gap: 6px; align-items: center; margin: 4px 14px 4px 0; color: var(--text); font-size: .95rem; }
+    .pick { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); max-height: 220px; overflow-y: auto; }
+    .pick > .owner:first-child { display: block; }
+    .pick.hide { display: none; } /* JS oculta la lista que no corresponde al destino elegido */
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: .9em; }
+    .inline-num { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: .9rem; }
+    input[type=number], input[type=datetime-local] { padding: 9px 10px; font: inherit; color: var(--text);
+      background: var(--bg); border: 1px solid var(--line); border-radius: 8px; max-width: 100%; }
+    input[type=number] { width: 100px; }
+    input[type=file] { font: inherit; color: var(--text); width: 100%; max-width: 100%; margin-bottom: 4px; }
+    .pos { display: inline-block; min-width: 1.8em; text-align: center; border-radius: 999px; background: var(--bg);
+      border: 1px solid var(--line); font-size: .85rem; margin-right: 6px; }
+    details.edit { margin-top: 8px; }
+    details.edit summary { cursor: pointer; color: var(--accent); font-size: .95rem; }
     /* Usuarios */
     .user-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-bottom: 10px; }
     .user-grid label { margin-top: 0; }
@@ -545,6 +768,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'list' && !$historyDevice ? 'on' : '' ?>" href="./">Dispositivos</a>
       <a class="btn <?= $view === 'users' ? 'on' : '' ?>" href="?view=users">Usuarios</a>
       <a class="btn <?= $view === 'media' ? 'on' : '' ?>" href="?view=media">Contenido</a>
+      <a class="btn <?= $view === 'ads' ? 'on' : '' ?>" href="?view=ads">Anuncios</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
   </header>
@@ -560,7 +784,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     </div>
   <?php endif; ?>
 
-  <form class="tools" method="get">
+  <!-- Buscador (oculto en Anuncios: no aplica; se deja en la página porque el escáner lo usa) -->
+  <form class="tools<?= $view === 'ads' ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa o email' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
@@ -730,6 +955,80 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
+
+  <?php elseif ($view === 'ads' && !$historyDevice): ?>
+    <!-- ================= ANUNCIOS DEL ADMINISTRADOR =================
+         Imagen o video que mirror.html intercala después de cada N archivos
+         del usuario (o muestra solo si el equipo no tiene contenido propio).
+         Lo ven los equipos AUTORIZADOS del destino elegido, aunque el
+         usuario no tenga vigencia ni el contenido habilitado. -->
+    <details class="card new-user" <?= !$ads ? 'open' : '' ?>>
+      <summary><strong>+ Nuevo anuncio</strong></summary>
+      <form method="post" enctype="multipart/form-data" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="ad_upload">
+        <label for="ad-file">Imagen o video</label>
+        <input type="file" id="ad-file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required>
+        <span class="owner">JPG, PNG, WEBP, GIF, MP4 (H.264) o WEBM · máx. <?= h(formatBytes(MediaRepository::maxBytes())) ?>
+          (límite de PHP: <?= h((string) ini_get('upload_max_filesize')) ?>)</span>
+        <?= adFields(null, $users, $allDevices) ?>
+        <button class="primary" type="submit">Subir anuncio</button>
+        <span class="owner">Las fechas usan la hora de este navegador.</span>
+      </form>
+    </details>
+
+    <?php if (!$ads): ?><div class="card empty">Todavía no hay anuncios.</div><?php endif; ?>
+    <?php
+      $adStateText = ['active' => 'En curso', 'paused' => 'Pausado', 'scheduled' => 'Programado', 'ended' => 'Finalizado'];
+      $adStateBadge = ['active' => 'authorized', 'paused' => 'off', 'scheduled' => 'pending', 'ended' => 'revoked'];
+      foreach ($ads as $n => $a): $aid = (int) $a['id']; $isImg = $a['kind'] === 'image'; $st = AdRepository::state($a);
+    ?>
+      <section class="card device">
+        <div class="media">
+          <?php if ($isImg): ?>
+            <a href="?ad=<?= $aid ?>" target="_blank" rel="noopener"><img class="thumb" src="?ad=<?= $aid ?>" alt="" loading="lazy"></a>
+          <?php else: ?>
+            <a class="thumb" href="?ad=<?= $aid ?>" target="_blank" rel="noopener">&#9654; Video</a>
+          <?php endif; ?>
+          <div class="media-body">
+            <div class="user-head">
+              <span class="media-name"><span class="pos"><?= $n + 1 ?></span><?= h($a['name']) ?></span>
+              <span class="badge <?= $adStateBadge[$st] ?>"><?= $adStateText[$st] ?></span>
+            </div>
+            <div class="meta">
+              <?= h(adTargetText($a, $usersById)) ?><br>
+              Cada <?= (int) $a['every_n'] ?> archivo(s) del usuario
+              · <?= $isImg ? (int) $a['seconds'] . ' s en pantalla' : 'Video' ?>
+              · <?= h(formatBytes((int) $a['size_bytes'])) ?><br>
+              <?= $a['starts_at'] ? 'Desde ' . dateTag($a['starts_at']) : 'Desde ya' ?>
+              · <?= $a['ends_at'] ? 'hasta ' . dateTag($a['ends_at']) : 'sin fecha de fin' ?>
+              · <span class="owner"><?= h($a['original_name']) ?></span>
+            </div>
+            <div class="actions">
+              <form method="post"><?= csrfField() ?><input type="hidden" name="adId" value="<?= $aid ?>">
+                <input type="hidden" name="action" value="<?= (int) $a['active'] === 1 ? 'ad_pause' : 'ad_resume' ?>">
+                <button class="<?= (int) $a['active'] === 1 ? 'bad' : 'ok' ?>" type="submit"><?= (int) $a['active'] === 1 ? 'Pausar' : 'Activar' ?></button></form>
+              <form method="post"><?= csrfField() ?><input type="hidden" name="adId" value="<?= $aid ?>">
+                <input type="hidden" name="action" value="ad_up"><button type="submit" <?= $n === 0 ? 'disabled' : '' ?> aria-label="Subir">&#9650;</button></form>
+              <form method="post"><?= csrfField() ?><input type="hidden" name="adId" value="<?= $aid ?>">
+                <input type="hidden" name="action" value="ad_down"><button type="submit" <?= $n === count($ads) - 1 ? 'disabled' : '' ?> aria-label="Bajar">&#9660;</button></form>
+              <a class="btn" href="?ad=<?= $aid ?>&amp;dl=1">Descargar</a>
+              <form method="post" data-confirm="¿Eliminar el anuncio «<?= h($a['name']) ?>»? Las pantallas dejarán de mostrarlo."><?= csrfField() ?>
+                <input type="hidden" name="adId" value="<?= $aid ?>"><input type="hidden" name="action" value="ad_delete">
+                <button type="submit">Eliminar</button></form>
+            </div>
+            <!-- Editar (sin cambiar el archivo) -->
+            <details class="edit">
+              <summary>Editar destino, frecuencia y fechas</summary>
+              <form method="post" autocomplete="off"><?= csrfField() ?>
+                <input type="hidden" name="action" value="ad_update"><input type="hidden" name="adId" value="<?= $aid ?>">
+                <?= adFields($a, $users, $allDevices) ?>
+                <button class="primary" type="submit">Guardar cambios</button>
+              </form>
+            </details>
+          </div>
+        </div>
+      </section>
+    <?php endforeach; ?>
 
   <?php elseif ($view === 'media' && !$historyDevice): ?>
     <!-- ============ CONTENIDO SUBIDO POR LOS USUARIOS ============
@@ -935,6 +1234,35 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     // Selectores que se aplican al cambiarlos (filtro de usuario, usuario del equipo)
     document.querySelectorAll("select[data-autosubmit]").forEach(function (s) {
       s.addEventListener("change", function () { s.form.submit(); });
+    });
+
+    /*
+     * Anuncios: el servidor guarda las fechas en UTC.
+     *  - input[data-tz]: diferencia del navegador con UTC (minutos) para convertir lo escrito.
+     *  - input[data-utc]: fecha guardada (segundos UTC) => valor en hora local.
+     *  - fieldset[data-scope]: muestra solo la lista (usuarios/equipos) del destino elegido.
+     */
+    document.querySelectorAll("input[data-tz]").forEach(function (el) {
+      el.value = String(new Date().getTimezoneOffset());
+    });
+    function pad2(n) { return (n < 10 ? "0" : "") + n; }
+    document.querySelectorAll("input[data-utc]").forEach(function (el) {
+      var ts = +el.getAttribute("data-utc");
+      if (!ts) return;
+      var d = new Date(ts * 1000);
+      el.value = d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
+        "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
+    });
+    document.querySelectorAll("fieldset[data-scope]").forEach(function (fs) {
+      function show() {
+        var r = fs.querySelector("input[name=scope]:checked");
+        var scope = r ? r.value : "all";
+        fs.querySelectorAll(".pick").forEach(function (p) {
+          p.classList.toggle("hide", p.getAttribute("data-for") !== scope);
+        });
+      }
+      fs.querySelectorAll("input[name=scope]").forEach(function (r) { r.addEventListener("change", show); });
+      show();
     });
 
     /*

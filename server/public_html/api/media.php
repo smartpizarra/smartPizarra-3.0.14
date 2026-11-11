@@ -17,6 +17,14 @@
  *      rev            (opcional) la "revision" que ya tiene el equipo
  *    action=file        descarga un archivo
  *      id             id del archivo (de la lista)
+ *      ad=1           (opcional) el id es de un ANUNCIO (lista "ads")
+ *
+ *  ANUNCIOS DEL ADMINISTRADOR (2026-11-11): todo equipo AUTORIZADO recibe
+ *  "ads" (aunque no tenga vigencia ni el permiso de contenido): imágenes o
+ *  videos que mirror.html intercala después de cada "every" archivos del
+ *  usuario (o muestra solos si no hay contenido del usuario). Destino:
+ *  todos los equipos, los de ciertos usuarios o equipos concretos; con
+ *  fechas opcionales y pausa (ver AdRepository en private/lib.php).
  *
  *  Solo reciben contenido los equipos AUTORIZADOS, con el permiso de
  *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled) y
@@ -32,9 +40,10 @@
  *    list 200 {"ok":true,"status":"authorized","authorized":true,
  *              "revision":"<40 hex>","items":[{"id":7,"kind":"image|video",
  *              "mime":"image/jpeg","size":12345,"sha256":"<64 hex>","seconds":10}, ...]}
- *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide
+ *              (+ "ads":[{"id":3,"kind":..,"mime":..,"size":..,"sha256":..,"seconds":10,"every":3}, ...])
+ *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide (sin items ni ads)
  *         200 {"ok":true,"status":"pending|revoked","authorized":false,"mediaEnabled":…,"revision":"","items":[]}
- *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"","items":[]}
+ *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"<huella de ads>","items":[],"ads":[...]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
  *    400 bad_request · 403 secret_mismatch | not_authorized | media_disabled | content_expired · 404 not_registered |
  *    not_found · 405 method · 429 rate_limited (descargas por equipo y hora) · 500 server
@@ -78,6 +87,19 @@ try {
         if (!$auth['authorized']) {
             Http::json(['ok' => false, 'error' => 'not_authorized'], 403);
         }
+        // Anuncio: basta con estar autorizado (no exige vigencia ni permiso de contenido)
+        $isAd = (string) ($_POST['ad'] ?? '') === '1';
+        if ($isAd) {
+            $perHour = (int) (AppConfig::get()['media_downloads_per_device_per_hour'] ?? 120);
+            if (!RateLimiter::hit('media:' . $id, $perHour, 3600)) {
+                Http::json(['ok' => false, 'error' => 'rate_limited'], 429);
+            }
+            $ad = AdRepository::findForDevice((int) ($_POST['id'] ?? 0), $id);
+            if ($ad === null) {
+                Http::json(['ok' => false, 'error' => 'not_found'], 404);
+            }
+            MediaRepository::send($ad);
+        }
         if (!$mediaEnabled) {
             Http::json(['ok' => false, 'error' => 'media_disabled'], 403);
         }
@@ -112,8 +134,24 @@ try {
             ];
         }
     }
-    // revision: huella de la lista; si el equipo ya la tiene no se reenvía
-    $revision = $allowed ? sha1(json_encode($items)) : '';
+    // Anuncios: cualquier equipo autorizado (aunque no tenga contenido propio)
+    $ads = [];
+    if ($auth['authorized']) {
+        foreach (AdRepository::forDevice($id) as $a) {
+            $ads[] = [
+                'id' => (int) $a['id'],
+                'kind' => $a['kind'],
+                'mime' => $a['mime'],
+                'size' => (int) $a['size_bytes'],
+                'sha256' => $a['sha256'],
+                'seconds' => (int) $a['seconds'],
+                'every' => (int) $a['every_n'],
+            ];
+        }
+    }
+    // revision: huella de la lista (contenido + anuncios); si el equipo ya la tiene no se reenvía.
+    // Sin contenido permitido ni anuncios queda vacía (como antes).
+    $revision = $allowed || $ads ? sha1(json_encode([$items, $ads])) : '';
     $out = ['ok' => true, 'deviceId' => $id] + $auth + [
         'mediaEnabled' => $mediaEnabled,
         'contentActive' => $contentActive,
@@ -125,6 +163,7 @@ try {
         $out['unchanged'] = true;
     } else {
         $out['items'] = $items;
+        $out['ads'] = $ads;
     }
     Http::json($out);
 } catch (Throwable $e) {

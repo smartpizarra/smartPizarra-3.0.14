@@ -170,6 +170,14 @@ Para el contenido de `mirror.html` (si la tabla `sp_media` no existe todavía):
 5. Ejecuta también `migrations/2026-11-08-media-enabled.sql` (permiso de contenido por equipo; todos empiezan sin él) y sube `admin/index.php`.
 6. Sube `mirror.html` y el `loading.html` actual a los assets de Kodular. `loading.html` crea `smartpizarra.mirror.scale`, la API y las credenciales del equipo.
 
+Para los **anuncios del administrador** (pestaña *Anuncios* del panel):
+
+1. En la pestaña _SQL_ de phpMyAdmin ejecuta una vez `migrations/2026-11-11-ads.sql` (crea `sp_ads`, `sp_ad_users`, `sp_ad_devices`). Se puede repetir sin riesgo.
+2. Sube `private/lib.php`, `api/media.php` y `admin/index.php`.
+3. Sube el `mirror.html` nuevo a los assets de Kodular (el anterior ignora los anuncios).
+
+Un anuncio es una imagen o un video que `mirror.html` muestra después de cada N archivos del usuario. Si el equipo no tiene contenido propio, vigencia o permiso de contenido, muestra solo los anuncios. Destino: todos los equipos, los equipos de ciertos usuarios (también los futuros) o equipos concretos. Fechas de inicio y fin opcionales, con la hora del navegador del administrador. Se puede pausar. Lo ven solo los equipos autorizados. El límite de tamaño es el de `media_max_mb` y el de PHP.
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas
