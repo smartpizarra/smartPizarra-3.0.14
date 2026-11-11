@@ -150,3 +150,38 @@ CREATE TABLE IF NOT EXISTS sp_ad_devices (
   CONSTRAINT fk_add_ad FOREIGN KEY (ad_id) REFERENCES sp_ads (id) ON DELETE CASCADE,
   CONSTRAINT fk_add_device FOREIGN KEY (device_id) REFERENCES sp_devices (device_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Ligas: tipos (opciones del selector de la TV), ligas (nombre + tipo +
+-- códigos) y ligas asignadas a cada usuario. Ver migrations/2026-11-11-leagues.sql.
+CREATE TABLE IF NOT EXISTS sp_league_types (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code        VARCHAR(20)  NOT NULL,          -- id de la opción en la TV (minúsculas: mlb, nba, nflnhl...)
+  name        VARCHAR(60)  NOT NULL,          -- texto del botón en la TV (MLB, NBA, NFL & NHL...)
+  position    INT UNSIGNED NOT NULL DEFAULT 0, -- orden de los botones
+  created_at  DATETIME     NOT NULL,          -- UTC
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_league_type_code (code)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sp_leagues (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  type_id     INT UNSIGNED NOT NULL,          -- sp_league_types.id (no se puede borrar un tipo con ligas)
+  name        VARCHAR(100) NOT NULL,          -- nombre para el panel (p. ej. "Béisbol del Caribe")
+  codes       VARCHAR(1000) NOT NULL,         -- contenido: códigos separados por coma (LIDOM,MLB,KO)
+  position    INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at  DATETIME     NOT NULL,          -- UTC
+  updated_at  DATETIME     NOT NULL,          -- UTC
+  PRIMARY KEY (id),
+  KEY idx_league_type (type_id, position),
+  CONSTRAINT fk_league_type FOREIGN KEY (type_id) REFERENCES sp_league_types (id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Ligas asignadas a cada usuario (varias por usuario).
+CREATE TABLE IF NOT EXISTS sp_user_leagues (
+  user_id     INT UNSIGNED NOT NULL,
+  league_id   INT UNSIGNED NOT NULL,
+  PRIMARY KEY (user_id, league_id),
+  KEY idx_ul_league (league_id),
+  CONSTRAINT fk_ul_user FOREIGN KEY (user_id) REFERENCES sp_users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_ul_league FOREIGN KEY (league_id) REFERENCES sp_leagues (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

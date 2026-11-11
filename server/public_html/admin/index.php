@@ -44,6 +44,14 @@
  *    eliminar, vista previa (?ad=ID) y descarga (&dl=1). Solo equipos
  *    AUTORIZADOS. Ver AdRepository (private/lib.php) y api/media.php.
  *
+ *  - LIGAS (botón "Ligas", ?view=leagues, 2026-11-11): TIPOS de liga
+ *    (código = opción del selector de ligas de la TV, p. ej. "mlb", y su
+ *    nombre; orden = orden de los botones) y LIGAS (nombre + tipo +
+ *    contenido = códigos "LIDOM,MLB,KO"). Se ASIGNAN a los usuarios en
+ *    su ficha (varias por usuario). Sus equipos autorizados las reciben en
+ *    api/device.php (LeagueRepository::deviceOptions) y las usan en vez
+ *    de la lista fija; sin ligas asignadas la TV usa la lista fija.
+ *
  *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
  *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
  *    equipos solo muestran imágenes/videos mientras la vigencia está
@@ -236,6 +244,31 @@ function adTargetText(array $ad, array $usersById): string
     return 'Todos los equipos';
 }
 
+/**
+ * Campos de una liga (crear o editar): nombre, tipo y contenido (códigos).
+ * @param array<string,mixed>|null $l     Liga (null = nueva).
+ * @param array<int,array<string,mixed>> $types Tipos de liga.
+ * @param string $p Prefijo único para los id de los campos.
+ */
+function leagueFields(?array $l, array $types, string $p): string
+{
+    $opts = '';
+    foreach ($types as $t) {
+        $opts .= '<option value="' . (int) $t['id'] . '"' . ($l && (int) $l['type_id'] === (int) $t['id'] ? ' selected' : '') . '>'
+            . h($t['name'] . ' (' . $t['code'] . ')') . '</option>';
+    }
+    return '<div class="user-grid">'
+        . '<div><label for="' . $p . 'name">Nombre</label>'
+        . '<input type="text" id="' . $p . 'name" name="name" maxlength="100" required value="' . h((string) ($l['name'] ?? '')) . '" placeholder="Béisbol del Caribe"></div>'
+        . '<div><label for="' . $p . 'type">Tipo</label><select id="' . $p . 'type" name="typeId" required>' . $opts . '</select></div>'
+        . '</div>'
+        . '<label for="' . $p . 'codes">Contenido: códigos de la liga (separados por coma, espacio o línea)</label>'
+        . '<textarea id="' . $p . 'codes" name="codes" rows="3" required placeholder="LIDOM, MLB, KO, PRO">'
+        . h(str_replace(',', ', ', (string) ($l['codes'] ?? ''))) . '</textarea>'
+        . '<p class="owner">Se guardan en MAYÚSCULAS y sin repetir (máx. ' . LeagueRepository::MAX_CODES . '). '
+        . 'En la TV, el botón de su tipo junta los códigos de todas las ligas de ese tipo que tenga el usuario.</p>';
+}
+
 /** Texto de un usuario para listas: "Empresa — email". */
 function userText(array $u): string
 {
@@ -336,6 +369,79 @@ try {
                 ? 'Ese archivo ya no existe.'
                 : '«' . $gone['original_name'] . '» de «' . $gone['user_company'] . '» eliminado. '
                     . 'Sus pantallas dejarán de mostrarlo en su próxima consulta.', $back);
+        } elseif (str_starts_with($action, 'league_')) {
+            /* ---- LIGAS y TIPOS DE LIGA (vista ?view=leagues) ---- */
+            $typeId = (int) param($_POST, 'typeId');
+            $leagueId = (int) param($_POST, 'leagueId');
+            switch ($action) {
+                case 'league_type_create':
+                    $code = LeagueRepository::cleanTypeCode(param($_POST, 'code'));
+                    $name = LeagueRepository::cleanName(param($_POST, 'name'), 60);
+                    if ($code === null) {
+                        redirectWith('Código no válido: de 1 a 20 letras minúsculas, cifras, _ o - (p. ej. mlb). «todos» está reservado.', 'view=leagues');
+                    }
+                    if ($name === null) {
+                        redirectWith('El nombre del tipo debe tener entre 1 y 60 caracteres.', 'view=leagues');
+                    }
+                    if (!LeagueRepository::createType($code, $name)) {
+                        redirectWith("Ya existe un tipo con el código «{$code}».", 'view=leagues');
+                    }
+                    redirectWith("Tipo de liga «{$name}» ({$code}) creado.", 'view=leagues');
+                case 'league_type_rename':
+                    $name = LeagueRepository::cleanName(param($_POST, 'name'), 60);
+                    if ($name === null || LeagueRepository::findType($typeId) === null) {
+                        redirectWith('Nombre no válido o el tipo ya no existe.', 'view=leagues');
+                    }
+                    LeagueRepository::renameType($typeId, $name);
+                    redirectWith("Tipo renombrado a «{$name}». Las TV lo verán en su próxima consulta.", 'view=leagues');
+                case 'league_type_up':
+                case 'league_type_down':
+                    LeagueRepository::moveType($typeId, $action === 'league_type_up' ? -1 : 1);
+                    redirectWith('Orden de los tipos cambiado (es el orden de los botones en la TV).', 'view=leagues');
+                case 'league_type_delete':
+                    $type = LeagueRepository::findType($typeId);
+                    if ($type === null) {
+                        redirectWith('Ese tipo ya no existe.', 'view=leagues');
+                    }
+                    if (!LeagueRepository::deleteType($typeId)) {
+                        redirectWith("«{$type['name']}» tiene ligas: elimínalas o cámbialas de tipo antes de borrarlo.", 'view=leagues');
+                    }
+                    redirectWith("Tipo «{$type['name']}» eliminado.", 'view=leagues');
+                case 'league_create':
+                case 'league_update':
+                    // Liga = nombre + tipo + contenido (códigos)
+                    if ($action === 'league_update' && LeagueRepository::find($leagueId) === null) {
+                        redirectWith('Esa liga ya no existe.', 'view=leagues');
+                    }
+                    $name = LeagueRepository::cleanName(param($_POST, 'name'), 100);
+                    if ($name === null) {
+                        redirectWith('El nombre de la liga debe tener entre 1 y 100 caracteres.', 'view=leagues');
+                    }
+                    if (LeagueRepository::findType($typeId) === null) {
+                        redirectWith('Elige un tipo de liga (créalo antes si no existe).', 'view=leagues');
+                    }
+                    [$codes, $bad] = LeagueRepository::cleanCodes(param($_POST, 'codes'));
+                    if ($codes === null) {
+                        redirectWith('Escribe al menos un código válido (letras, cifras o _; p. ej. LIDOM, MLB, KO).', 'view=leagues');
+                    }
+                    if ($action === 'league_create') {
+                        LeagueRepository::create($typeId, $name, $codes);
+                    } else {
+                        LeagueRepository::update($leagueId, $typeId, $name, $codes);
+                    }
+                    redirectWith("Liga «{$name}» " . ($action === 'league_create' ? 'creada' : 'guardada') . ': ' . str_replace(',', ', ', $codes) . '.'
+                        . ($bad ? ' Se ignoraron por no ser válidos: ' . implode(' ', array_slice($bad, 0, 10)) . '.' : '')
+                        . ($action === 'league_update' ? ' Las TV de sus usuarios lo verán en su próxima consulta.' : ''), 'view=leagues');
+                case 'league_delete':
+                    $league = LeagueRepository::find($leagueId);
+                    if ($league === null) {
+                        redirectWith('Esa liga ya no existe.', 'view=leagues');
+                    }
+                    LeagueRepository::delete($leagueId);
+                    redirectWith("Liga «{$league['name']}» eliminada (y quitada de sus usuarios).", 'view=leagues');
+                default:
+                    redirectWith('Acción desconocida.', 'view=leagues');
+            }
         } elseif (str_starts_with($action, 'ad_')) {
             /* ---- ANUNCIOS (vista ?view=ads) ---- */
             $adId = (int) param($_POST, 'adId');
@@ -449,6 +555,14 @@ try {
                     $n = DeviceRepository::authorizeAllForUser($uid);
                     redirectWith("Autorizados {$n} equipo(s) de «{$user['company']}». "
                         . 'Lo detectarán en su próxima consulta.', $back);
+                case 'user_leagues':
+                    // Ligas del usuario (casillas de su ficha); llegan a sus TV autorizadas
+                    $ids = array_values(array_filter(array_map('intval', (array) ($_POST['leagues'] ?? [])), static fn($v) => $v > 0));
+                    LeagueRepository::setForUser($uid, $ids);
+                    $ids = LeagueRepository::idsForUser($uid); // las que existen de verdad
+                    redirectWith(($ids ? 'Ligas de «' . $user['company'] . '» guardadas (' . count($ids) . ').'
+                            : '«' . $user['company'] . '» queda sin ligas: sus TV usarán la lista fija.')
+                        . ' Sus equipos lo recibirán en su próxima consulta.', $back);
                 case 'user_delete':
                     UserRepository::delete($uid);
                     redirectWith("Usuario «{$user['company']}» eliminado; sus equipos quedan sin asignar con el estado que tenían.", 'view=users');
@@ -506,7 +620,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'leagues'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -572,6 +686,11 @@ try {
     $ads = $loggedIn && $view === 'ads' ? AdRepository::all() : [];
     $allDevices = $loggedIn && $view === 'ads' ? DeviceRepository::search(null, '', null) : [];
     usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
+    // Ligas: vista ?view=leagues y sección "Ligas" de la ficha de un usuario
+    $needLeagues = $loggedIn && ($view === 'leagues' || $userCard);
+    $leagueTypes = $needLeagues ? LeagueRepository::types() : [];
+    $leagues = $needLeagues ? LeagueRepository::leagues() : [];
+    $userLeagueIds = $loggedIn && $userCard ? LeagueRepository::idsForUser((int) $userCard['id']) : [];
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
     // Contraseña temporal recién creada/restablecida (se muestra una vez)
@@ -624,6 +743,9 @@ try {
     $userBack = 'view=users';
     $ads = [];
     $allDevices = [];
+    $leagueTypes = [];
+    $leagues = [];
+    $userLeagueIds = [];
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -669,6 +791,23 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .media-body { flex: 1 1 260px; min-width: 0; }
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
+    .meta a { color: var(--accent); } /* enlaces legibles también en modo oscuro */
+    /* Ligas (?view=leagues y ficha del usuario) */
+    .type-row { display: flex; gap: 6px 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
+    .type-row form { margin: 0; }
+    .type-code { font: 600 .95rem ui-monospace, Consolas, monospace; min-width: 5em; }
+    .type-rename { display: flex; gap: 6px; flex: 1 1 220px; }
+    .type-rename input { padding: 7px 10px; }
+    .type-new { margin-top: 10px; }
+    .group-title { margin: 16px 0 8px; font-size: 1rem; }
+    .codes { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 4px; }
+    .code-chip { font: .85rem ui-monospace, Consolas, monospace; padding: 2px 8px; border-radius: 6px;
+      border: 1px solid var(--line); background: var(--bg); }
+    .league-type-title { font-weight: 600; margin: 10px 0 2px; }
+    .league-check { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; color: var(--text); font-size: .95rem; }
+    .league-check input { margin-top: 4px; }
+    textarea { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
     /* Anuncios (?view=ads) */
     .hidden-tools { display: none; }
     .targets { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
@@ -762,6 +901,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'users' ? 'on' : '' ?>" href="?view=users">Usuarios</a>
       <a class="btn <?= $view === 'media' ? 'on' : '' ?>" href="?view=media">Contenido</a>
       <a class="btn <?= $view === 'ads' ? 'on' : '' ?>" href="?view=ads">Anuncios</a>
+      <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues">Ligas</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
   </header>
@@ -777,8 +917,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     </div>
   <?php endif; ?>
 
-  <!-- Buscador (oculto en Anuncios: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= $view === 'ads' ? ' hidden-tools' : '' ?>" method="get">
+  <!-- Buscador (oculto en Anuncios y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
+  <form class="tools<?= $view === 'ads' || $view === 'leagues' ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa o email' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
@@ -854,6 +994,31 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="actions">
         <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver su contenido</a>
       </div>
+    </section>
+
+    <!-- Ligas asignadas (varias): sus TV autorizadas las reciben como opciones del selector de ligas -->
+    <section class="card section">
+      <h2>Ligas</h2>
+      <?php if (!$leagues): ?>
+        <div class="meta">Todavía no hay ligas. Créalas en <a href="?view=leagues">Ligas</a>.</div>
+      <?php else: ?>
+        <div class="meta"><?= count($userLeagueIds) ?> liga(s) asignada(s).
+          Sin ninguna, sus TV usan la lista fija de ligas de siempre.</div>
+        <form method="post"><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_leagues"><input type="hidden" name="userId" value="<?= $uid ?>">
+          <input type="hidden" name="back" value="<?= h($userBack) ?>">
+          <?php $lastType = null; foreach ($leagues as $l): ?>
+            <?php if ($lastType !== (int) $l['type_id']): $lastType = (int) $l['type_id']; ?>
+              <div class="league-type-title"><?= h($l['type_name']) ?> <span class="owner">(<?= h($l['type_code']) ?>)</span></div>
+            <?php endif; ?>
+            <label class="inline league-check">
+              <input type="checkbox" name="leagues[]" value="<?= (int) $l['id'] ?>" <?= in_array((int) $l['id'], $userLeagueIds, true) ? 'checked' : '' ?>>
+              <span><?= h($l['name']) ?> <span class="owner"><?= h(str_replace(',', ', ', $l['codes'])) ?></span></span>
+            </label>
+          <?php endforeach; ?>
+          <div class="actions"><button class="primary" type="submit">Guardar ligas</button></div>
+        </form>
+      <?php endif; ?>
     </section>
 
     <!-- Datos de contacto (editar) -->
@@ -1020,6 +1185,94 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
             </details>
           </div>
         </div>
+      </section>
+    <?php endforeach; ?>
+
+  <?php elseif ($view === 'leagues' && !$historyDevice): ?>
+    <!-- ================= LIGAS Y TIPOS DE LIGA =================
+         Tipo = opción del selector de ligas de la TV (código + nombre).
+         Liga = nombre + tipo + contenido (códigos). Se asignan a los
+         usuarios en su ficha; sus TV autorizadas las reciben. -->
+    <section class="card section">
+      <h2>Tipos de liga</h2>
+      <div class="meta">Cada tipo es un botón del selector de ligas de la TV, en este orden. El código es lo que guarda la TV
+        (minúsculas, p. ej. <code>mlb</code>) y no se puede cambiar; el nombre es el texto del botón.</div>
+      <?php if (!$leagueTypes): ?><p class="owner">Todavía no hay tipos. Crea el primero (p. ej. código <code>mlb</code>, nombre MLB).</p><?php endif; ?>
+      <?php foreach ($leagueTypes as $n => $t): $tid = (int) $t['id']; ?>
+        <div class="type-row">
+          <span class="pos"><?= $n + 1 ?></span>
+          <code class="type-code"><?= h($t['code']) ?></code>
+          <form method="post" class="type-rename"><?= csrfField() ?>
+            <input type="hidden" name="action" value="league_type_rename"><input type="hidden" name="typeId" value="<?= $tid ?>">
+            <label for="tn<?= $tid ?>" class="sr">Nombre del tipo</label>
+            <input type="text" id="tn<?= $tid ?>" name="name" value="<?= h($t['name']) ?>" maxlength="60" required>
+            <button type="submit">Guardar</button></form>
+          <span class="owner"><?= (int) $t['leagues'] ?> liga(s)</span>
+          <form method="post"><?= csrfField() ?><input type="hidden" name="typeId" value="<?= $tid ?>">
+            <input type="hidden" name="action" value="league_type_up"><button type="submit" <?= $n === 0 ? 'disabled' : '' ?> aria-label="Subir">&#9650;</button></form>
+          <form method="post"><?= csrfField() ?><input type="hidden" name="typeId" value="<?= $tid ?>">
+            <input type="hidden" name="action" value="league_type_down"><button type="submit" <?= $n === count($leagueTypes) - 1 ? 'disabled' : '' ?> aria-label="Bajar">&#9660;</button></form>
+          <form method="post" data-confirm="¿Eliminar el tipo «<?= h($t['name']) ?>»?"><?= csrfField() ?>
+            <input type="hidden" name="typeId" value="<?= $tid ?>"><input type="hidden" name="action" value="league_type_delete">
+            <button type="submit" <?= (int) $t['leagues'] > 0 ? 'disabled title="Tiene ligas"' : '' ?>>Eliminar</button></form>
+        </div>
+      <?php endforeach; ?>
+      <!-- Nuevo tipo -->
+      <form method="post" class="type-new" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="league_type_create">
+        <div class="user-grid">
+          <div><label for="nt-code">Código (minúsculas)</label>
+            <input type="text" id="nt-code" name="code" maxlength="20" required pattern="[a-zA-Z0-9_\-]{1,20}" placeholder="mlb"></div>
+          <div><label for="nt-name">Nombre (texto del botón)</label>
+            <input type="text" id="nt-name" name="name" maxlength="60" required placeholder="MLB"></div>
+        </div>
+        <button class="primary" type="submit">+ Crear tipo</button>
+      </form>
+    </section>
+
+    <details class="card new-user" <?= $leagueTypes && !$leagues ? 'open' : '' ?>>
+      <summary><strong>+ Nueva liga</strong></summary>
+      <?php if (!$leagueTypes): ?>
+        <p class="owner">Primero crea un tipo de liga.</p>
+      <?php else: ?>
+        <form method="post" autocomplete="off"><?= csrfField() ?>
+          <input type="hidden" name="action" value="league_create">
+          <?= leagueFields(null, $leagueTypes, 'nl-') ?>
+          <button class="primary" type="submit">Crear liga</button>
+        </form>
+      <?php endif; ?>
+    </details>
+
+    <?php if (!$leagues): ?><div class="card empty">Todavía no hay ligas.</div><?php endif; ?>
+    <?php $lastType = null; foreach ($leagues as $l): $lid = (int) $l['id']; ?>
+      <?php if ($lastType !== (int) $l['type_id']): $lastType = (int) $l['type_id']; ?>
+        <h2 class="group-title"><?= h($l['type_name']) ?> <span class="owner">(<?= h($l['type_code']) ?>)</span></h2>
+      <?php endif; ?>
+      <section class="card device">
+        <div class="user-head">
+          <span class="user-name"><?= h($l['name']) ?></span>
+          <span class="owner"><?= count(explode(',', (string) $l['codes'])) ?> código(s)</span>
+        </div>
+        <div class="codes"><?php foreach (explode(',', (string) $l['codes']) as $c): ?><span class="code-chip"><?= h($c) ?></span><?php endforeach; ?></div>
+        <div class="meta">
+          Usuarios: <?php if (!$l['users']): ?><em>ninguno</em> (asígnala en la ficha de cada usuario)<?php else: ?>
+            <?php foreach ($l['users'] as $i => $lu): ?><?= $i ? ', ' : '' ?><a href="<?= h(panelUrl(['view' => 'users', 'user' => $lu['id']])) ?>"><?= h($lu['company']) ?></a><?php endforeach; ?>
+          <?php endif; ?>
+          · Actualizada el <?= dateTag($l['updated_at']) ?>
+        </div>
+        <div class="actions">
+          <form method="post" data-confirm="¿Eliminar la liga «<?= h($l['name']) ?>»? Se quitará a <?= count($l['users']) ?> usuario(s)."><?= csrfField() ?>
+            <input type="hidden" name="leagueId" value="<?= $lid ?>"><input type="hidden" name="action" value="league_delete">
+            <button type="submit">Eliminar</button></form>
+        </div>
+        <details class="edit">
+          <summary>Editar nombre, tipo y contenido</summary>
+          <form method="post" autocomplete="off"><?= csrfField() ?>
+            <input type="hidden" name="action" value="league_update"><input type="hidden" name="leagueId" value="<?= $lid ?>">
+            <?= leagueFields($l, $leagueTypes, 'l' . $lid . '-') ?>
+            <button class="primary" type="submit">Guardar cambios</button>
+          </form>
+        </details>
       </section>
     <?php endforeach; ?>
 

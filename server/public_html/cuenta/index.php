@@ -390,6 +390,8 @@ foreach ($devices as $d) {
     $onlineCount += (!empty($d['online_at']) && time() - utcTs($d['online_at']) < $onlineTimeout) ? 1 : 0;
 }
 $quota = MediaRepository::quotaBytes();
+// Ligas que le asignó el administrador (solo lectura; llegan a sus TV)
+$myLeagues = $user !== null && $section === 'cuenta' ? LeagueRepository::forUser((int) $user['id']) : [];
 // Vigencia del contenido (la asigna el administrador en días)
 $validity = $user !== null ? contentValidity($user['content_until'] ?? null) : ['state' => 'none', 'days' => 0, 'text' => ''];
 if ($validity['state'] !== 'active') {
@@ -689,6 +691,11 @@ if ($validity['state'] !== 'active') {
             <dt>Teléfono</dt><dd><?= h($user['phone']) ?></dd>
             <dt>Cliente desde</dt><dd><?= dateTag($user['created_at']) ?></dd>
             <dt>Vigencia</dt><dd><?= $validity['text'] ?></dd>
+            <!-- Ligas asignadas por el administrador (opciones del selector de ligas de sus TV) -->
+            <dt>Ligas</dt><dd><?php if (!$myLeagues): ?>Las de siempre (sin ligas asignadas)<?php else: ?>
+              <?php foreach ($myLeagues as $i => $l): ?><?= $i ? '<br>' : '' ?><strong><?= h($l['type_name']) ?></strong> · <?= h($l['name']) ?>
+                <span class="hint"><?= h(str_replace(',', ', ', $l['codes'])) ?></span><?php endforeach; ?>
+            <?php endif; ?></dd>
           </dl>
           <p class="hint">Para cambiar estos datos, contacta al administrador.</p>
         </section>

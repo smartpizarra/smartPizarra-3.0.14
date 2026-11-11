@@ -28,6 +28,11 @@
  *         "authorized":false,"registered":true|false}
  *        El estado solo lo cambia el administrador (por equipo o con
  *        "Revocar todos" los equipos de un usuario).
+ *        Si está AUTORIZADO añade "leagueOptions": las ligas que el
+ *        administrador asignó a su usuario, una opción por tipo de liga:
+ *          {"rev":"…","options":[{"code":"mlb","label":"MLB","values":"LIDOM,MLB,KO"},…]}
+ *        o null (usuario sin ligas / equipo sin usuario => la TV usa su
+ *        lista fija). Las páginas lo guardan en smartpizarra.leagueOptions.
  *    400 {"ok":false,"error":"bad_request"}      datos con formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el ID ya existe con otro secreto
  *    405 {"ok":false,"error":"method"}           no es POST
@@ -88,11 +93,18 @@ try {
     }
 
     // status/authorized: los que fijó el administrador en el panel
-    Http::json(array_merge(
+    $payload = array_merge(
         ['ok' => true, 'deviceId' => $id],
         DeviceRepository::authPayload($device),
         ['registered' => $registered]
-    ));
+    );
+    // Ligas del usuario del equipo (solo a equipos AUTORIZADOS):
+    // {rev, options:[{code,label,values}]} o null (sin ligas => la TV usa
+    // su lista fija). Si no está autorizado no se envía (la TV conserva lo que tenía).
+    if ($payload['authorized']) {
+        $payload['leagueOptions'] = LeagueRepository::deviceOptions($device);
+    }
+    Http::json($payload);
 } catch (Throwable $e) {
     error_log('smartpizarra api/device.php: ' . $e->getMessage());
     Http::json(['ok' => false, 'error' => 'server'], 500);

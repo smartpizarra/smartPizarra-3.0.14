@@ -14,6 +14,7 @@
  *    DeviceRepository  Alta, consulta y cambio de estado de los equipos.
  *    UserRepository    Usuarios (empresas) dueños de equipos y sus contraseñas.
  *    MediaRepository   Imágenes y videos de los usuarios para mirror.html.
+ *    LeagueRepository  Ligas y tipos de liga del administrador, asignadas a usuarios.
  *    BootLog           Historial de arranques (cada ejecución de loading.html).
  *    Http              IP del cliente, respuestas JSON y CORS.
  */
@@ -204,6 +205,12 @@ final class Database
         if ($adsMissing) {
             return 'Faltan tablas (' . implode(', ', $adsMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-ads.sql.';
+        }
+        // Ligas del administrador
+        $leaguesMissing = array_diff(['sp_league_types', 'sp_leagues', 'sp_user_leagues'], $tables);
+        if ($leaguesMissing) {
+            return 'Faltan tablas (' . implode(', ', $leaguesMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-11-leagues.sql.';
         }
         // Fechas del contenido de los usuarios (permanente o desde/hasta)
         $mediaCols = [];
@@ -1408,6 +1415,278 @@ final class AdRepository
             }
         }
         return null;
+    }
+}
+
+/**
+ * LIGAS del administrador (tablas sp_league_types, sp_leagues, sp_user_leagues).
+ *  - Tipo de liga = OPCIÓN del selector de ligas de la TV: code (id que
+ *    guarda smartpizarra.league, p. ej. "mlb") + name (texto del botón).
+ *  - Liga = nombre + tipo + contenido (lista de códigos "LIDOM,MLB,KO").
+ *  - Cada usuario tiene 0..N ligas. Sus equipos autorizados reciben en
+ *    api/device.php las opciones de su usuario (deviceOptions): una por
+ *    tipo, con los códigos de sus ligas de ese tipo unidos. Sin ligas =>
+ *    null y la TV usa su lista fija de siempre.
+ */
+final class LeagueRepository
+{
+    /** Código reservado por la TV para "todas las ligas". */
+    public const RESERVED_CODE = 'todos';
+    /** Máximo de códigos por liga. */
+    public const MAX_CODES = 100;
+
+    /** Código de tipo válido (minúsculas, cifras, _ y -; 1-20) o null. */
+    public static function cleanTypeCode(string $code): ?string
+    {
+        $code = strtolower(trim($code));
+        return preg_match('/^[a-z0-9_-]{1,20}$/', $code) && $code !== self::RESERVED_CODE ? $code : null;
+    }
+
+    /** Nombre (1..$max caracteres) sin saltos de línea ni caracteres de control, o null. */
+    public static function cleanName(string $name, int $max): ?string
+    {
+        // Si no llega en UTF-8 (algunos clientes de Windows) se convierte, para no perder acentos
+        if (!mb_check_encoding($name, 'UTF-8')) {
+            $name = mb_convert_encoding($name, 'UTF-8', 'Windows-1252');
+        }
+        $name = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name));
+        return $name !== '' && mb_strlen($name) <= $max ? $name : null;
+    }
+
+    /**
+     * Contenido de una liga: códigos separados por coma, espacio o salto de
+     * línea => "LIDOM,MLB,KO" (mayúsculas, sin repetir, en el orden escrito).
+     * @return array{0:?string,1:string[]} [códigos o null si no hay ninguno válido, códigos rechazados]
+     */
+    public static function cleanCodes(string $text): array
+    {
+        $ok = [];
+        $bad = [];
+        foreach (preg_split('/[\s,;]+/u', strtoupper($text)) ?: [] as $c) {
+            if ($c === '') {
+                continue;
+            }
+            if (preg_match('/^[A-Z0-9_]{1,20}$/', $c)) {
+                $ok[$c] = true;
+            } else {
+                $bad[] = $c;
+            }
+        }
+        $codes = array_slice(array_keys($ok), 0, self::MAX_CODES);
+        return [$codes ? implode(',', $codes) : null, $bad];
+    }
+
+    /* ------------------------------ Tipos ------------------------------ */
+
+    /** @return array<int,array<string,mixed>> Tipos en orden, con 'leagues' = nº de ligas. */
+    public static function types(): array
+    {
+        return Database::pdo()->query(
+            'SELECT t.*, (SELECT COUNT(*) FROM sp_leagues l WHERE l.type_id = t.id) AS leagues
+             FROM sp_league_types t ORDER BY t.position, t.id'
+        )->fetchAll();
+    }
+
+    /** @return bool false si el código ya existe. */
+    public static function createType(string $code, string $name): bool
+    {
+        $pdo = Database::pdo();
+        $exists = $pdo->prepare('SELECT COUNT(*) FROM sp_league_types WHERE code = ?');
+        $exists->execute([$code]);
+        if ((int) $exists->fetchColumn() > 0) {
+            return false;
+        }
+        $next = (int) $pdo->query('SELECT COALESCE(MAX(position), 0) + 1 FROM sp_league_types')->fetchColumn();
+        $pdo->prepare('INSERT INTO sp_league_types (code, name, position, created_at) VALUES (?, ?, ?, ?)')
+            ->execute([$code, $name, $next, Database::now()]);
+        return true;
+    }
+
+    /** Cambia el nombre (el código no cambia: es lo que guardan las TV). */
+    public static function renameType(int $id, string $name): void
+    {
+        Database::pdo()->prepare('UPDATE sp_league_types SET name = ? WHERE id = ?')->execute([$name, $id]);
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function findType(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_league_types WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /** @return bool false si el tipo tiene ligas (hay que borrarlas o cambiarlas de tipo antes). */
+    public static function deleteType(int $id): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_leagues WHERE type_id = ?');
+        $stmt->execute([$id]);
+        if ((int) $stmt->fetchColumn() > 0) {
+            return false;
+        }
+        Database::pdo()->prepare('DELETE FROM sp_league_types WHERE id = ?')->execute([$id]);
+        return true;
+    }
+
+    /** Mueve un tipo un puesto antes (-1) o después (+1): orden de los botones en la TV. */
+    public static function moveType(int $id, int $direction): void
+    {
+        $list = array_map(static fn($r) => (int) $r['id'], self::types());
+        $i = array_search($id, $list, true);
+        $j = $i === false ? false : $i + ($direction < 0 ? -1 : 1);
+        if ($i === false || $j < 0 || $j >= count($list)) {
+            return;
+        }
+        [$list[$i], $list[$j]] = [$list[$j], $list[$i]];
+        $stmt = Database::pdo()->prepare('UPDATE sp_league_types SET position = ? WHERE id = ?');
+        foreach ($list as $pos => $typeId) {
+            $stmt->execute([$pos + 1, $typeId]);
+        }
+    }
+
+    /* ------------------------------ Ligas ------------------------------ */
+
+    /**
+     * Ligas (por tipo y nombre) con su tipo y los usuarios que la tienen.
+     * @return array<int,array<string,mixed>> Filas + type_code, type_name y 'users' (lista de [id, company]).
+     */
+    public static function leagues(): array
+    {
+        $rows = Database::pdo()->query(
+            'SELECT l.*, t.code AS type_code, t.name AS type_name
+             FROM sp_leagues l JOIN sp_league_types t ON t.id = l.type_id
+             ORDER BY t.position, t.id, l.name, l.id'
+        )->fetchAll();
+        $byId = [];
+        foreach ($rows as $i => $r) {
+            $rows[$i]['users'] = [];
+            $byId[(int) $r['id']] = $i;
+        }
+        $users = Database::pdo()->query(
+            'SELECT ul.league_id, u.id, u.company FROM sp_user_leagues ul
+             JOIN sp_users u ON u.id = ul.user_id ORDER BY u.company, u.id'
+        );
+        foreach ($users as $u) {
+            if (isset($byId[(int) $u['league_id']])) {
+                $rows[$byId[(int) $u['league_id']]]['users'][] = ['id' => (int) $u['id'], 'company' => (string) $u['company']];
+            }
+        }
+        return $rows;
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_leagues WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /** @return int Id de la liga nueva. */
+    public static function create(int $typeId, string $name, string $codes): int
+    {
+        $now = Database::now();
+        $pdo = Database::pdo();
+        $pdo->prepare('INSERT INTO sp_leagues (type_id, name, codes, position, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?)')
+            ->execute([$typeId, $name, $codes, $now, $now]);
+        return (int) $pdo->lastInsertId();
+    }
+
+    public static function update(int $id, int $typeId, string $name, string $codes): void
+    {
+        Database::pdo()->prepare('UPDATE sp_leagues SET type_id = ?, name = ?, codes = ?, updated_at = ? WHERE id = ?')
+            ->execute([$typeId, $name, $codes, Database::now(), $id]);
+    }
+
+    /** Borra la liga (y sus asignaciones, por la FK). */
+    public static function delete(int $id): void
+    {
+        Database::pdo()->prepare('DELETE FROM sp_leagues WHERE id = ?')->execute([$id]);
+    }
+
+    /* -------------------------- Asignaciones -------------------------- */
+
+    /** @return int[] Ids de las ligas de un usuario. */
+    public static function idsForUser(int $userId): array
+    {
+        $stmt = Database::pdo()->prepare('SELECT league_id FROM sp_user_leagues WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Ligas de un usuario con su tipo (para /cuenta/, el panel y las TV).
+     * @return array<int,array<string,mixed>>
+     */
+    public static function forUser(int $userId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT l.*, t.code AS type_code, t.name AS type_name
+             FROM sp_user_leagues ul JOIN sp_leagues l ON l.id = ul.league_id
+             JOIN sp_league_types t ON t.id = l.type_id
+             WHERE ul.user_id = ? ORDER BY t.position, t.id, l.name, l.id'
+        );
+        $stmt->execute([$userId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Reemplaza las ligas de un usuario (las que no existen se ignoran).
+     * @param int[] $leagueIds
+     */
+    public static function setForUser(int $userId, array $leagueIds): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('DELETE FROM sp_user_leagues WHERE user_id = ?')->execute([$userId]);
+            $insert = $pdo->prepare(
+                'INSERT IGNORE INTO sp_user_leagues (user_id, league_id) SELECT ?, id FROM sp_leagues WHERE id = ?'
+            );
+            foreach (array_unique(array_map('intval', $leagueIds)) as $leagueId) {
+                $insert->execute([$userId, $leagueId]);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Opciones del selector de ligas para un equipo (las de su usuario):
+     * una por tipo, en el orden de los tipos, con los códigos de todas sus
+     * ligas de ese tipo unidos (sin repetir). "todos" lo añade la TV
+     * (= unión de todas). rev = huella para saber si cambió.
+     * @return array{rev:string,options:array<int,array{code:string,label:string,values:string}>}|null
+     *         null si el equipo no tiene usuario o el usuario no tiene ligas.
+     */
+    public static function deviceOptions(array $device): ?array
+    {
+        $userId = (int) ($device['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return null;
+        }
+        $options = [];
+        foreach (self::forUser($userId) as $l) {
+            $code = (string) $l['type_code'];
+            if (!isset($options[$code])) {
+                $options[$code] = ['code' => $code, 'label' => (string) $l['type_name'], 'values' => []];
+            }
+            foreach (explode(',', (string) $l['codes']) as $c) {
+                if ($c !== '') {
+                    $options[$code]['values'][$c] = true;
+                }
+            }
+        }
+        if (!$options) {
+            return null;
+        }
+        $list = [];
+        foreach ($options as $o) {
+            $list[] = ['code' => $o['code'], 'label' => $o['label'], 'values' => implode(',', array_keys($o['values']))];
+        }
+        return ['rev' => substr(sha1((string) json_encode($list)), 0, 12), 'options' => $list];
     }
 }
 

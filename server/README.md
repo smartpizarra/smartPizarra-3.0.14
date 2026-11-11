@@ -178,6 +178,19 @@ Para los **anuncios del administrador** (pestaña *Anuncios* del panel):
 
 Un anuncio es una imagen o un video que `mirror.html` muestra después de cada N archivos del usuario. Si el equipo no tiene contenido propio, vigencia o permiso de contenido, muestra solo los anuncios. Destino: todos los equipos, los equipos de ciertos usuarios (también los futuros) o equipos concretos. Fechas de inicio y fin opcionales, con la hora del navegador del administrador. Se puede pausar. Lo ven solo los equipos autorizados. El límite de tamaño es el de `media_max_mb` y el de PHP.
 
+Para las **fechas del contenido de los usuarios** (permanente o desde/hasta en `/cuenta/`):
+
+1. Ejecuta una vez `migrations/2026-11-11-media-dates.sql`. Si sale _Duplicate column name 'starts_at'_, ya estaba hecha.
+2. Sube `private/lib.php`, `private/web.php`, `cuenta/index.php` y `admin/index.php`.
+
+Para las **ligas** (pestaña *Ligas* del panel):
+
+1. Ejecuta una vez `migrations/2026-11-11-leagues.sql` (crea `sp_league_types`, `sp_leagues`, `sp_user_leagues`). Se puede repetir sin riesgo.
+2. Sube `private/lib.php`, `api/device.php`, `admin/index.php` y `cuenta/index.php`.
+3. Sube a los assets de Kodular `loading.html`, `config.html`, `connection.html`, `fingerprint.html` y `mirror.html`.
+
+Un **tipo de liga** es una opción del selector de ligas de la TV: un código (`mlb`) y el nombre del botón (`MLB`). Una **liga** tiene nombre, tipo y contenido: la lista de códigos (`LIDOM, MLB, KO`). En la ficha de cada usuario se marcan sus ligas (puede tener varias). Sus equipos autorizados las reciben en `api/device.php`: un botón por tipo, con los códigos de sus ligas de ese tipo juntos, más TODOS. Un usuario sin ligas sigue con la lista fija de siempre (MLB, NBA, NFL & NHL, TODOS). La TV las recibe al arrancar (`loading.html`), al pulsar Salir en `config.html` o en la siguiente consulta de `fingerprint.html` o `connection.html`.
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas
