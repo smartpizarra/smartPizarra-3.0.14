@@ -190,6 +190,25 @@ function contentValidity(?string $until): array
         'text' => 'Vigente hasta el ' . dateTag($until) . ' (' . ($days === 1 ? 'queda 1 día' : 'quedan ' . $days . ' días') . ')'];
 }
 
+/**
+ * Fecha de un <input type="datetime-local"> (hora del navegador del
+ * administrador o del usuario) a UTC para la base. $tz = getTimezoneOffset() del
+ * navegador en minutos (UTC - local); sin JS llega 0 y se toma como UTC.
+ * @return string|null "Y-m-d H:i:s" UTC, null si está vacía, false si no es válida.
+ */
+function localToUtc(string $value, int $tz): string|null|false
+{
+    if (trim($value) === '') {
+        return null;
+    }
+    $dt = DateTime::createFromFormat('Y-m-d\TH:i', substr(trim($value), 0, 16), new DateTimeZone('UTC'));
+    if ($dt === false) {
+        return false;
+    }
+    $tz = max(-900, min(900, $tz));
+    return $dt->modify(($tz >= 0 ? '+' : '') . $tz . ' minutes')->format('Y-m-d H:i:s');
+}
+
 /** Segundos sin señal para considerar un equipo desconectado (config, mín. 30). */
 function onlineTimeout(array $config): int
 {

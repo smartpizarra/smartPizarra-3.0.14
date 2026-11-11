@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS sp_media (
   seconds       SMALLINT UNSIGNED NOT NULL DEFAULT 10, -- duración en pantalla (imágenes; los videos duran lo suyo)
   position      INT UNSIGNED NOT NULL DEFAULT 0, -- orden del carrusel (menor = antes)
   all_devices   TINYINT(1)   NOT NULL DEFAULT 1, -- 1 = en TODOS los equipos del usuario (también los futuros)
+  starts_at     DATETIME     NULL DEFAULT NULL, -- se muestra desde (UTC); NULL = ya (permanente si ends_at también es NULL)
+  ends_at       DATETIME     NULL DEFAULT NULL, -- se muestra hasta (UTC, sin incluir); NULL = sin fin
   created_at    DATETIME     NOT NULL,          -- subida (UTC)
   PRIMARY KEY (id),
   UNIQUE KEY uq_media_stored (stored_name),

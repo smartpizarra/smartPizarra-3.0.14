@@ -205,6 +205,15 @@ final class Database
             return 'Faltan tablas (' . implode(', ', $adsMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-ads.sql.';
         }
+        // Fechas del contenido de los usuarios (permanente o desde/hasta)
+        $mediaCols = [];
+        foreach ($pdo->query('SHOW COLUMNS FROM sp_media') as $row) {
+            $mediaCols[] = (string) $row['Field'];
+        }
+        if (!in_array('starts_at', $mediaCols, true) || !in_array('ends_at', $mediaCols, true)) {
+            return 'Faltan las columnas de fechas del contenido: ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-11-media-dates.sql.';
+        }
         return null;
     }
 
@@ -872,10 +881,13 @@ final class MediaRepository
     /**
      * Guarda un archivo subido (ya validado: tipo y tamaño) al final del carrusel.
      * @param string[] $deviceIds Equipos (solo si $allDevices es false).
+     * @param string|null $startsAt Se muestra desde (UTC "Y-m-d H:i:s"); null = ya.
+     * @param string|null $endsAt   Se muestra hasta (UTC); null = sin fin. Ambos null = permanente.
      * @return int Id del archivo.
      */
     public static function create(int $userId, string $tmpFile, string $originalName, string $mime,
-                                  int $seconds, bool $allDevices, array $deviceIds): int
+                                  int $seconds, bool $allDevices, array $deviceIds,
+                                  ?string $startsAt = null, ?string $endsAt = null): int
     {
         [$kind, $ext] = self::TYPES[$mime];
         // Nombre original: si no llega en UTF-8 (algunos clientes de Windows) se convierte
@@ -898,11 +910,12 @@ final class MediaRepository
             $next->execute([$userId]);
             $pdo->prepare(
                 'INSERT INTO sp_media (user_id, kind, mime, original_name, stored_name, size_bytes, sha256,
-                   seconds, position, all_devices, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                   seconds, position, all_devices, starts_at, ends_at, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )->execute([
                 $userId, $kind, $mime, mb_substr($originalName, 0, 190), $stored, filesize($target),
                 hash_file('sha256', $target), self::cleanSeconds($seconds), (int) $next->fetchColumn(),
-                $allDevices ? 1 : 0, Database::now(),
+                $allDevices ? 1 : 0, $startsAt, $endsAt, Database::now(),
             ]);
             $id = (int) $pdo->lastInsertId();
             self::writeDevices($id, $userId, $allDevices, $deviceIds);
@@ -924,16 +937,35 @@ final class MediaRepository
     }
 
     /**
-     * Cambia duración y equipos de un archivo del usuario.
-     * @param string[] $deviceIds Equipos marcados (se ignoran los que no son suyos).
+     * Estado de un archivo según sus fechas (como los anuncios):
+     * 'permanent' (sin fechas) | 'active' (dentro del periodo) |
+     * 'scheduled' (aún no empieza) | 'ended' (ya terminó).
      */
-    public static function update(int $id, int $userId, int $seconds, bool $allDevices, array $deviceIds): void
+    public static function state(array $media): string
+    {
+        $now = time();
+        if (!empty($media['ends_at']) && (int) strtotime($media['ends_at'] . ' UTC') <= $now) {
+            return 'ended';
+        }
+        if (!empty($media['starts_at']) && (int) strtotime($media['starts_at'] . ' UTC') > $now) {
+            return 'scheduled';
+        }
+        return empty($media['starts_at']) && empty($media['ends_at']) ? 'permanent' : 'active';
+    }
+
+    /**
+     * Cambia duración, equipos y fechas de un archivo del usuario.
+     * @param string[] $deviceIds Equipos marcados (se ignoran los que no son suyos).
+     * @param string|null $startsAt / $endsAt Fechas UTC (null = sin esa fecha; ambas null = permanente).
+     */
+    public static function update(int $id, int $userId, int $seconds, bool $allDevices, array $deviceIds,
+                                  ?string $startsAt = null, ?string $endsAt = null): void
     {
         $pdo = Database::pdo();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('UPDATE sp_media SET seconds = ?, all_devices = ? WHERE id = ? AND user_id = ?')
-                ->execute([self::cleanSeconds($seconds), $allDevices ? 1 : 0, $id, $userId]);
+            $pdo->prepare('UPDATE sp_media SET seconds = ?, all_devices = ?, starts_at = ?, ends_at = ? WHERE id = ? AND user_id = ?')
+                ->execute([self::cleanSeconds($seconds), $allDevices ? 1 : 0, $startsAt, $endsAt, $id, $userId]);
             self::writeDevices($id, $userId, $allDevices, $deviceIds);
             $pdo->commit();
         } catch (Throwable $e) {
@@ -1057,8 +1089,11 @@ final class MediaRepository
     }
 
     /**
-     * Lista que reproduce un equipo: archivos de SU usuario que van a todos
-     * sus equipos o a él en concreto, en orden. Vacía si no tiene usuario.
+     * Lista que reproduce un equipo AHORA: archivos de SU usuario que van a
+     * todos sus equipos o a él en concreto, permanentes o dentro de sus
+     * fechas, en orden. Vacía si no tiene usuario. Al empezar o terminar
+     * un periodo la lista cambia (y su revision), así el equipo lo añade
+     * o lo quita en su siguiente consulta.
      * @return array<int,array<string,mixed>>
      */
     public static function forDevice(string $deviceId): array
@@ -1069,9 +1104,12 @@ final class MediaRepository
              WHERE d.device_id = ?
                AND (m.all_devices = 1
                     OR EXISTS (SELECT 1 FROM sp_media_devices md WHERE md.media_id = m.id AND md.device_id = d.device_id))
+               AND (m.starts_at IS NULL OR m.starts_at <= ?)
+               AND (m.ends_at IS NULL OR m.ends_at > ?)
              ORDER BY m.position, m.id'
         );
-        $stmt->execute([$deviceId]);
+        $now = Database::now();
+        $stmt->execute([$deviceId, $now, $now]);
         return $stmt->fetchAll();
     }
 

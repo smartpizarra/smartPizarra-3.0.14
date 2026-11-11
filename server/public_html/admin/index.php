@@ -117,24 +117,7 @@ function validityBlock(array $u, string $back): string
     return $html . '</div>';
 }
 
-/**
- * Fecha de un <input type="datetime-local"> (hora del navegador del
- * administrador) a UTC para la base. $tz = getTimezoneOffset() del
- * navegador en minutos (UTC - local); sin JS llega 0 y se toma como UTC.
- * @return string|null "Y-m-d H:i:s" UTC, null si está vacía, false si no es válida.
- */
-function localToUtc(string $value, int $tz): string|null|false
-{
-    if (trim($value) === '') {
-        return null;
-    }
-    $dt = DateTime::createFromFormat('Y-m-d\TH:i', substr(trim($value), 0, 16), new DateTimeZone('UTC'));
-    if ($dt === false) {
-        return false;
-    }
-    $tz = max(-900, min(900, $tz));
-    return $dt->modify(($tz >= 0 ? '+' : '') . $tz . ' minutes')->format('Y-m-d H:i:s');
-}
+// localToUtc() (fecha del navegador -> UTC) está en private/web.php: la usan admin y cuenta.
 
 /**
  * Datos de un anuncio desde el formulario (subir o editar). Si algo no es
@@ -202,10 +185,15 @@ function adFields(?array $ad, array $users, array $devices): string
         . '<div><label for="' . $p . 'seconds">Segundos en pantalla (imagen)</label>'
         . '<input type="number" id="' . $p . 'seconds" name="seconds" min="' . MediaRepository::MIN_SECONDS . '" max="' . MediaRepository::MAX_SECONDS . '" value="' . (int) ($ad['seconds'] ?? 10) . '" required></div>'
         . '</div><div class="user-grid">'
+        // Fechas: campo + botón que despliega el calendario + botón para borrarla
         . '<div><label for="' . $p . 'starts">Desde (opcional)</label>'
-        . '<input type="datetime-local" id="' . $p . 'starts" name="starts" data-utc="' . $utc($ad['starts_at'] ?? null) . '"></div>'
+        . '<span class="date-field"><input type="datetime-local" id="' . $p . 'starts" name="starts" data-utc="' . $utc($ad['starts_at'] ?? null) . '">'
+        . '<button type="button" data-pick="' . $p . 'starts" title="Abrir calendario" aria-label="Abrir calendario">&#128197;</button>'
+        . '<button type="button" data-clear="' . $p . 'starts" title="Quitar fecha" aria-label="Quitar fecha">&times;</button></span></div>'
         . '<div><label for="' . $p . 'ends">Hasta (opcional)</label>'
-        . '<input type="datetime-local" id="' . $p . 'ends" name="ends" data-utc="' . $utc($ad['ends_at'] ?? null) . '"></div>'
+        . '<span class="date-field"><input type="datetime-local" id="' . $p . 'ends" name="ends" data-utc="' . $utc($ad['ends_at'] ?? null) . '">'
+        . '<button type="button" data-pick="' . $p . 'ends" title="Abrir calendario" aria-label="Abrir calendario">&#128197;</button>'
+        . '<button type="button" data-clear="' . $p . 'ends" title="Quitar fecha" aria-label="Quitar fecha">&times;</button></span></div>'
         . '<div><label>&nbsp;</label><label class="inline"><input type="checkbox" name="active" value="1"' . (!$ad || (int) $ad['active'] === 1 ? ' checked' : '') . '> Activo</label></div>'
         . '</div>';
     // Destino
@@ -694,6 +682,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     input[type=number], input[type=datetime-local] { padding: 9px 10px; font: inherit; color: var(--text);
       background: var(--bg); border: 1px solid var(--line); border-radius: 8px; max-width: 100%; }
     input[type=number] { width: 100px; }
+    /* Fechas: el calendario nativo toma los colores del tema (icono visible en modo oscuro) */
+    input[type=datetime-local] { color-scheme: light; cursor: pointer; flex: 1 1 auto; min-width: 0; }
+    @media (prefers-color-scheme: dark) { input[type=datetime-local] { color-scheme: dark; } }
+    .date-field { display: flex; gap: 4px; align-items: stretch; }
+    .date-field button { padding: 6px 10px; flex: 0 0 auto; }
     input[type=file] { font: inherit; color: var(--text); width: 100%; max-width: 100%; margin-bottom: 4px; }
     .pos { display: inline-block; min-width: 1.8em; text-align: center; border-radius: 999px; background: var(--bg);
       border: 1px solid var(--line); font-size: .85rem; margin-right: 6px; }
@@ -1059,7 +1052,15 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               · <?= h(formatBytes((int) $m['size_bytes'])) ?> · <?= h($m['mime']) ?>
               · Puesto <?= (int) $m['position'] ?><br>
               Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos sus equipos' : (int) $m['devices_count'] . ' equipo(s) elegido(s)' ?>
-              · Subido el <?= dateTag($m['created_at']) ?>
+              · Subido el <?= dateTag($m['created_at']) ?><br>
+              <!-- Periodo que eligió el usuario (permanente o con fechas) -->
+              <?php $mState = MediaRepository::state($m); ?>
+              <span class="badge <?= ['permanent' => 'authorized', 'active' => 'authorized', 'scheduled' => 'pending', 'ended' => 'revoked'][$mState] ?>"><?=
+                ['permanent' => 'Permanente', 'active' => 'En curso', 'scheduled' => 'Programado', 'ended' => 'Finalizado'][$mState] ?></span>
+              <?php if ($mState !== 'permanent'): ?>
+                <?= $m['starts_at'] ? 'desde ' . dateTag($m['starts_at']) : 'desde ya' ?>
+                · <?= $m['ends_at'] ? 'hasta ' . dateTag($m['ends_at']) : 'sin fecha de fin' ?>
+              <?php endif; ?>
             </div>
             <div class="actions">
               <a class="btn" href="?file=<?= $mid ?>" target="_blank" rel="noopener">Ver</a>
@@ -1253,6 +1254,34 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       el.value = d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) +
         "T" + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
     });
+    /*
+     * Calendario: al pulsar el campo o el botón 📅 se despliega el selector
+     * nativo de fecha y hora (showPicker: Chrome/Edge 99+, Firefox 101+,
+     * Safari 16+). Si el navegador no lo permite, se enfoca el campo, que
+     * tiene su propio icono de calendario. El botón × borra la fecha.
+     */
+    function openPicker(input) {
+      try {
+        if (typeof input.showPicker === "function") { input.showPicker(); return; }
+      } catch (e) { /* sin gesto del usuario o no permitido: se enfoca */ }
+      input.focus();
+    }
+    document.querySelectorAll("input[type=datetime-local]").forEach(function (input) {
+      input.addEventListener("click", function () { openPicker(input); });
+    });
+    document.querySelectorAll("button[data-pick]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var input = document.getElementById(b.getAttribute("data-pick"));
+        if (input) openPicker(input);
+      });
+    });
+    document.querySelectorAll("button[data-clear]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var input = document.getElementById(b.getAttribute("data-clear"));
+        if (input) input.value = "";
+      });
+    });
+
     document.querySelectorAll("fieldset[data-scope]").forEach(function (fs) {
       function show() {
         var r = fs.querySelector("input[name=scope]:checked");
