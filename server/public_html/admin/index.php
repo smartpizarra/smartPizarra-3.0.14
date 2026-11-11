@@ -46,7 +46,9 @@
  *
  *  - TIRAS Y BANNERS (botón "Tiras", ?view=overlays, 2026-11-11): franja
  *    ARRIBA o ABAJO de mirror.html, tira de texto (colores, fija o
- *    desplazándose) o banner de imagen; fechas opcionales, pausar,
+ *    desplazándose) o banner de imagen; PERMANENTE o CON FECHAS (como el
+ *    contenido de /cuenta/; insignia Permanente/En curso/Programada/
+ *    Finalizada/Pausada), pausar,
  *    editar, eliminar; vista previa del banner (?ov=ID). Se CREAN SIN
  *    EQUIPOS y luego se ASIGNAN ("Asignar a equipos": sin asignar, todos
  *    los equipos, los de ciertos usuarios o equipos concretos; ov_assign). Tienen prioridad
@@ -242,25 +244,62 @@ function adFields(?array $ad, array $users, array $devices): string
 }
 
 /**
- * Campos de FECHAS y ACTIVA de una tira/banner del administrador (el estilo
- * lo pone overlayFields() de web.php; el destino, overlayAdminTargets()).
+ * Campos "Cuándo se muestra" y ACTIVA de una tira/banner del administrador:
+ * PERMANENTE (por defecto) o CON FECHAS (desde / hasta, al menos una), igual
+ * que el contenido de los usuarios en /cuenta/. El estilo lo pone
+ * overlayFields() de web.php; el destino, overlayAdminTargets().
  * @param array<string,mixed>|null $o Tira a editar (null = nueva).
  */
 function overlayAdminFields(?array $o): string
 {
     $p = $o ? 'o' . (int) $o['id'] . '-' : 'ovnew-';
+    $hasDates = $o !== null && (!empty($o['starts_at']) || !empty($o['ends_at']));
     $utc = static fn(?string $v) => $v ? (string) utcTs($v) : '';
     $date = static fn(string $name, string $text, ?string $value) =>
         '<div><label for="' . $p . $name . '">' . $text . '</label>'
         . '<span class="date-field"><input type="datetime-local" id="' . $p . $name . '" name="' . $name . '" data-utc="' . $utc($value) . '">'
         . '<button type="button" data-pick="' . $p . $name . '" title="Abrir calendario" aria-label="Abrir calendario">&#128197;</button>'
         . '<button type="button" data-clear="' . $p . $name . '" title="Quitar fecha" aria-label="Quitar fecha">&times;</button></span></div>';
-    $html = '<input type="hidden" name="tz" value="0" data-tz><div class="user-grid">'
+    return '<fieldset class="targets" data-when><legend>Cuándo se muestra</legend>'
+        . '<input type="hidden" name="tz" value="0" data-tz>'
+        . '<label class="inline"><input type="radio" name="when" value="always"' . ($hasDates ? '' : ' checked') . '> Permanente</label>'
+        . '<label class="inline"><input type="radio" name="when" value="dates"' . ($hasDates ? ' checked' : '') . '> Con fechas</label>'
+        . '<div class="user-grid" data-dates>'
         . $date('starts', 'Desde (opcional)', $o['starts_at'] ?? null)
         . $date('ends', 'Hasta (opcional)', $o['ends_at'] ?? null)
-        . '<div><label>&nbsp;</label><label class="inline"><input type="checkbox" name="active" value="1"' . (!$o || (int) $o['active'] === 1 ? ' checked' : '') . '> Activa</label></div>'
-        . '</div>';
-    return $html;
+        . '</div>'
+        . '<span class="owner">Fuera de esas fechas las pantallas no la muestran (se aplica en su próxima consulta, ≈ 1 min). Hora de este navegador.</span>'
+        . '</fieldset>'
+        . '<label class="inline"><input type="checkbox" name="active" value="1"' . (!$o || (int) $o['active'] === 1 ? ' checked' : '') . '> Activa</label>';
+}
+
+/**
+ * Insignia y texto del periodo de una tira/banner (como el contenido de
+ * /cuenta/): Pausada, Permanente, En curso, Programada o Finalizada.
+ */
+function overlayWhenTag(array $o): string
+{
+    if ((int) $o['active'] !== 1) {
+        return '<span class="badge off">Pausada</span>';
+    }
+    $state = MediaRepository::state($o); // permanent | active | scheduled | ended
+    [$class, $label] = [
+        'permanent' => ['authorized', 'Permanente'],
+        'active' => ['authorized', 'En curso'],
+        'scheduled' => ['pending', 'Programada'],
+        'ended' => ['revoked', 'Finalizada'],
+    ][$state];
+    return '<span class="badge ' . $class . '">' . $label . '</span>';
+}
+
+/** Texto del periodo: "se muestra siempre" o "desde … · hasta …". */
+function overlayWhenText(array $o): string
+{
+    if (empty($o['starts_at']) && empty($o['ends_at'])) {
+        return 'Permanente: se muestra siempre';
+    }
+    return (!empty($o['starts_at']) ? 'Desde ' . dateTag((string) $o['starts_at']) : 'Desde ya')
+        . ' · ' . (!empty($o['ends_at']) ? 'hasta ' . dateTag((string) $o['ends_at']) : 'sin fecha de fin');
 }
 
 /**
@@ -326,11 +365,19 @@ function overlayAdminTargetData(): array
  */
 function overlayAdminData(): array
 {
-    $tz = (int) param($_POST, 'tz');
-    $starts = localToUtc(param($_POST, 'starts'), $tz);
-    $ends = localToUtc(param($_POST, 'ends'), $tz);
-    if ($starts === false || $ends === false) {
-        redirectWith('Fecha no válida.', 'view=overlays');
+    // "Permanente" (o formulario sin el campo) => sin fechas
+    $starts = null;
+    $ends = null;
+    if (param($_POST, 'when') === 'dates') {
+        $tz = (int) param($_POST, 'tz');
+        $starts = localToUtc(param($_POST, 'starts'), $tz);
+        $ends = localToUtc(param($_POST, 'ends'), $tz);
+        if ($starts === false || $ends === false) {
+            redirectWith('Fecha no válida.', 'view=overlays');
+        }
+        if ($starts === null && $ends === null) {
+            redirectWith('Indica al menos una fecha (desde o hasta) o elige "Permanente".', 'view=overlays');
+        }
     }
     if ($starts !== null && $ends !== null && $ends <= $starts) {
         redirectWith('La fecha de fin debe ser posterior a la de inicio.', 'view=overlays');
@@ -1002,6 +1049,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
 <?= overlayStyles() ?>
     .ov-list-title { margin: 18px 0 8px; }
+    [data-dates][hidden] { display: none; } /* fechas ocultas con "Permanente" */
     /* Anuncios (?view=ads) */
     .hidden-tools { display: none; }
     .targets { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 10px 0; }
@@ -1387,8 +1435,6 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php elseif ($view === 'overlays' && !$historyDevice):
     $ovAdmin = array_values(array_filter($overlaysAll, static fn($o) => $o['user_id'] === null));
     $ovUsers = array_values(array_filter($overlaysAll, static fn($o) => $o['user_id'] !== null));
-    $ovStateText = ['active' => 'En curso', 'paused' => 'Pausada', 'scheduled' => 'Programada', 'ended' => 'Finalizada'];
-    $ovStateBadge = ['active' => 'authorized', 'paused' => 'off', 'scheduled' => 'pending', 'ended' => 'revoked'];
   ?>
     <!-- ================= TIRAS Y BANNERS =================
          Franja arriba o abajo de mirror.html (texto o imagen). Las del
@@ -1410,19 +1456,18 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
                     ['De los usuarios (solo pausar o eliminar)', $ovUsers, 'Ningún usuario ha creado tiras ni banners.']] as [$title, $list, $emptyText]): ?>
       <h2 class="ov-list-title"><?= h($title) ?> (<?= count($list) ?>)</h2>
       <?php if (!$list): ?><div class="card empty"><?= h($emptyText) ?></div><?php endif; ?>
-      <?php foreach ($list as $o): $oid = (int) $o['id']; $st = OverlayRepository::state($o); $o['_img'] = $o['kind'] === 'image' ? '?ov=' . $oid : ''; ?>
+      <?php foreach ($list as $o): $oid = (int) $o['id']; $o['_img'] = $o['kind'] === 'image' ? '?ov=' . $oid : ''; ?>
         <section class="card device">
           <?= overlayPreview($o, $o['_img']) ?>
           <div class="user-head">
             <span class="media-name"><?= h($o['name']) ?>
               <?= $o['user_id'] !== null ? '<span class="owner-tag">· ' . h((string) $o['user_company']) . '</span>' : '' ?></span>
-            <span class="badge <?= $ovStateBadge[$st] ?>"><?= $ovStateText[$st] ?></span>
+            <?= overlayWhenTag($o) ?>
           </div>
           <div class="meta">
             <?= h(overlaySummary($o)) ?><br>
             <?= h(overlayTargetText($o, $usersById)) ?><br>
-            <?= $o['starts_at'] ? 'Desde ' . dateTag($o['starts_at']) : 'Desde ya' ?>
-            · <?= $o['ends_at'] ? 'hasta ' . dateTag($o['ends_at']) : 'sin fecha de fin' ?>
+            <?= overlayWhenText($o) ?>
           </div>
           <div class="actions">
             <form method="post"><?= csrfField() ?><input type="hidden" name="overlayId" value="<?= $oid ?>">
@@ -1808,6 +1853,17 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         var input = document.getElementById(b.getAttribute("data-clear"));
         if (input) input.value = "";
       });
+    });
+
+    // Tiras: "Cuándo se muestra" => las fechas solo se ven con "Con fechas"
+    document.querySelectorAll("fieldset[data-when]").forEach(function (fs) {
+      var dates = fs.querySelector("[data-dates]");
+      function show() {
+        var r = fs.querySelector("input[name=when]:checked");
+        dates.hidden = !r || r.value !== "dates";
+      }
+      fs.querySelectorAll("input[name=when]").forEach(function (r) { r.addEventListener("change", show); });
+      show();
     });
 
     document.querySelectorAll("fieldset[data-scope]").forEach(function (fs) {
