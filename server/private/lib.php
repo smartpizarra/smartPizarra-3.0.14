@@ -212,6 +212,11 @@ final class Database
             return 'Faltan tablas (' . implode(', ', $leaguesMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-leagues.sql.';
         }
+        // Ligas por equipo (las elige el usuario en /cuenta/)
+        if (!in_array('sp_device_leagues', $tables, true) || !in_array('leagues_all', $cols, true)) {
+            return 'Faltan las ligas por equipo: ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-11-device-leagues.sql.';
+        }
         // Fechas del contenido de los usuarios (permanente o desde/hasta)
         $mediaCols = [];
         foreach ($pdo->query('SHOW COLUMNS FROM sp_media') as $row) {
@@ -341,8 +346,13 @@ final class DeviceRepository
         if ($userId !== null && UserRepository::find($userId) === null) {
             return false;
         }
+        $current = self::find($id);
         Database::pdo()->prepare('UPDATE sp_devices SET user_id = ? WHERE device_id = ?')
             ->execute([$userId, $id]);
+        // Otro dueño: la elección de ligas del anterior ya no vale => "todas las de su usuario"
+        if ($current !== null && (int) ($current['user_id'] ?? 0) !== (int) $userId) {
+            LeagueRepository::setForDevice($id, true, []);
+        }
         return true;
     }
 
@@ -1653,22 +1663,79 @@ final class LeagueRepository
         }
     }
 
+    /* ----------------- Ligas por equipo (las elige el usuario) ----------------- */
+
+    /** @return int[] Ids de las ligas elegidas para un equipo (sp_device_leagues). */
+    public static function idsForDevice(string $deviceId): array
+    {
+        $stmt = Database::pdo()->prepare('SELECT league_id FROM sp_device_leagues WHERE device_id = ?');
+        $stmt->execute([$deviceId]);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
     /**
-     * Opciones del selector de ligas para un equipo (las de su usuario):
-     * una por tipo, en el orden de los tipos, con los códigos de todas sus
-     * ligas de ese tipo unidos (sin repetir). "todos" lo añade la TV
-     * (= unión de todas). rev = huella para saber si cambió.
+     * Ligas de un equipo: TODAS las de su usuario ($all) o solo algunas.
+     * Las que no son del usuario del equipo se ignoran (comprobado en el INSERT).
+     * @param int[] $leagueIds
+     */
+    public static function setForDevice(string $deviceId, bool $all, array $leagueIds): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare('UPDATE sp_devices SET leagues_all = ? WHERE device_id = ?')->execute([$all ? 1 : 0, $deviceId]);
+            $pdo->prepare('DELETE FROM sp_device_leagues WHERE device_id = ?')->execute([$deviceId]);
+            if (!$all) {
+                $insert = $pdo->prepare(
+                    'INSERT IGNORE INTO sp_device_leagues (device_id, league_id)
+                     SELECT d.device_id, ul.league_id FROM sp_devices d
+                     JOIN sp_user_leagues ul ON ul.user_id = d.user_id AND ul.league_id = ?
+                     WHERE d.device_id = ?'
+                );
+                foreach (array_unique(array_map('intval', $leagueIds)) as $leagueId) {
+                    $insert->execute([$leagueId, $deviceId]);
+                }
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Ligas que usa AHORA un equipo: las de su usuario, filtradas por la
+     * elección del equipo (leagues_all = 0). Si de lo elegido ya no queda
+     * ninguna (el administrador se las quitó al usuario) => todas las del usuario.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function forDevice(array $device): array
+    {
+        $userId = (int) ($device['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return [];
+        }
+        $all = self::forUser($userId);
+        if ((int) ($device['leagues_all'] ?? 1) === 1) {
+            return $all;
+        }
+        $chosen = self::idsForDevice((string) $device['device_id']);
+        $some = array_values(array_filter($all, static fn($l) => in_array((int) $l['id'], $chosen, true)));
+        return $some ?: $all;
+    }
+
+    /**
+     * Opciones del selector de ligas para un equipo (las de su usuario, o
+     * las que el usuario eligió para ese equipo): una por tipo, en el orden
+     * de los tipos, con los códigos de esas ligas de ese tipo unidos (sin
+     * repetir). "todos" lo añade la TV (= unión de todas). rev = huella.
      * @return array{rev:string,options:array<int,array{code:string,label:string,values:string}>}|null
      *         null si el equipo no tiene usuario o el usuario no tiene ligas.
      */
     public static function deviceOptions(array $device): ?array
     {
-        $userId = (int) ($device['user_id'] ?? 0);
-        if ($userId <= 0) {
-            return null;
-        }
         $options = [];
-        foreach (self::forUser($userId) as $l) {
+        foreach (self::forDevice($device) as $l) {
             $code = (string) $l['type_code'];
             if (!isset($options[$code])) {
                 $options[$code] = ['code' => $code, 'label' => (string) $l['type_name'], 'values' => []];

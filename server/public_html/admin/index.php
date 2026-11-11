@@ -1425,6 +1425,12 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="meta">
         Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>'
           . ' · <span class="owner">' . contentValidity($d['user_content_until'] ?? null)['text'] . '</span>' : '<em>sin asignar</em>' ?><br>
+        <?php if ($d['user_id']): $devLeagues = LeagueRepository::forDevice($d); ?>
+          <!-- Ligas que usa (las de su usuario o las que el usuario eligió para este equipo en /cuenta/) -->
+          Ligas: <?= !$devLeagues ? '<em>lista fija</em> (su usuario no tiene ligas)'
+            : h(implode(', ', array_map(static fn($l) => $l['name'], $devLeagues)))
+              . ' <span class="owner">(' . ((int) ($d['leagues_all'] ?? 1) === 1 ? 'todas las de su usuario' : 'elegidas por el usuario') . ')</span>' ?><br>
+        <?php endif; ?>
         <!-- Última conexión: arranque de loading.html o señal de la app nativa -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>
