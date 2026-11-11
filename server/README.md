@@ -183,21 +183,20 @@ Para las **fechas del contenido de los usuarios** (permanente o desde/hasta en `
 1. Ejecuta una vez `migrations/2026-11-11-media-dates.sql`. Si sale _Duplicate column name 'starts_at'_, ya estaba hecha.
 2. Sube `private/lib.php`, `private/web.php`, `cuenta/index.php` y `admin/index.php`.
 
-Para las **ligas** (pestaña *Ligas* del panel):
+Para las **ligas** (pestaña *Ligas* del panel y pestaña *Equipos* de `/cuenta/`):
 
 1. Ejecuta una vez `migrations/2026-11-11-leagues.sql` (crea `sp_league_types`, `sp_leagues`, `sp_user_leagues`). Se puede repetir sin riesgo.
-2. Sube `private/lib.php`, `api/device.php`, `admin/index.php` y `cuenta/index.php`.
-3. Sube a los assets de Kodular `loading.html`, `config.html`, `connection.html`, `fingerprint.html` y `mirror.html`.
+2. Ejecuta una vez `migrations/2026-11-11-device-leagues.sql` (columna `sp_devices.league_id`). Si sale _Duplicate column name 'league_id'_, ya estaba hecha. Si llegaste a ejecutar la versión anterior (varias ligas por equipo), ejecuta también las 2 líneas comentadas del final.
+3. Sube `private/lib.php`, `api/device.php`, `api/media.php`, `admin/index.php` y `cuenta/index.php`.
+4. Sube a los assets de Kodular `loading.html`, `config.html`, `connection.html`, `fingerprint.html` y `mirror.html`.
 
-Un **tipo de liga** es una opción del selector de ligas de la TV: un código (`mlb`) y el nombre del botón (`MLB`). Una **liga** tiene nombre, tipo y contenido: la lista de códigos (`LIDOM, MLB, KO`). En la ficha de cada usuario se marcan sus ligas (puede tener varias). Sus equipos autorizados las reciben en `api/device.php`: un botón por tipo, con los códigos de sus ligas de ese tipo juntos, más TODOS. Un usuario sin ligas sigue con la lista fija de siempre (MLB, NBA, NFL & NHL, TODOS). La TV las recibe al arrancar (`loading.html`), al pulsar Salir en `config.html` o en la siguiente consulta de `fingerprint.html` o `connection.html`.
+Cómo funciona:
 
-Para que el **usuario elija las ligas de cada equipo** (pestaña *Equipos* de `/cuenta/`):
-
-1. Ejecuta una vez `migrations/2026-11-11-device-leagues.sql`, después de la de ligas. Todos los equipos quedan con "Todas mis ligas". Si sale _Duplicate column name 'leagues_all'_, ya estaba hecha.
-2. Sube `private/lib.php`, `api/media.php`, `cuenta/index.php` y `admin/index.php`.
-3. Sube el `mirror.html` nuevo a los assets de Kodular. Guarda las ligas del equipo en cada consulta, unos 60 s.
-
-En cada equipo, el usuario elige "Todas mis ligas", incluidas las que le asignen después, o "Solo estas", entre las que le asignó el administrador. Si el administrador le quita todas las elegidas, el equipo vuelve a usar todas las del usuario. Al cambiar el equipo de usuario, vuelve a "Todas". La TV lo guarda en su `localStorage` (`smartpizarra.leagueOptions`). Si la liga elegida en la TV ya no existe, pasa a TODOS.
+- Un **tipo de liga** tiene un código (`mlb`) y un nombre (`MLB`). Una **liga** tiene nombre, tipo y contenido: la lista de códigos (`LIDOM, MLB, KO`).
+- El administrador asigna ligas a cada usuario en su ficha (puede tener varias).
+- El **usuario**, en `/cuenta/` → *Equipos*, pone a cada uno de sus equipos **"Sin liga" o UNA** de esas ligas. Es el único sitio donde se cambia la liga de una TV: la TV ya no tiene ligas fijas, `config.html` no tiene selector y `updateSettings` rechaza `league`.
+- La TV la recibe en `api/media.php` (`mirror.html`, cada ~60 s) y en `api/device.php` (al arrancar, al salir de `config.html` y en las consultas de `fingerprint.html`/`connection.html`). La guarda en su `localStorage`: `smartpizarra.league` es el código del tipo y `smartpizarra.leagues` los códigos. Sin liga, los dos valen `""`, que es también el valor por defecto.
+- Si el administrador le quita esa liga al usuario, o cambia el equipo de usuario, el equipo queda sin liga.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 

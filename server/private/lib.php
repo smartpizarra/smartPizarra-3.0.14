@@ -212,9 +212,9 @@ final class Database
             return 'Faltan tablas (' . implode(', ', $leaguesMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-leagues.sql.';
         }
-        // Ligas por equipo (las elige el usuario en /cuenta/)
-        if (!in_array('sp_device_leagues', $tables, true) || !in_array('leagues_all', $cols, true)) {
-            return 'Faltan las ligas por equipo: ejecuta en phpMyAdmin (pestaña SQL) '
+        // Liga de cada equipo (la elige el usuario en /cuenta/)
+        if (!in_array('league_id', $cols, true)) {
+            return 'Falta la liga de cada equipo (columna league_id): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-device-leagues.sql.';
         }
         // Fechas del contenido de los usuarios (permanente o desde/hasta)
@@ -349,9 +349,9 @@ final class DeviceRepository
         $current = self::find($id);
         Database::pdo()->prepare('UPDATE sp_devices SET user_id = ? WHERE device_id = ?')
             ->execute([$userId, $id]);
-        // Otro dueño: la elección de ligas del anterior ya no vale => "todas las de su usuario"
+        // Otro dueño: la liga elegida por el anterior ya no vale => "Sin liga"
         if ($current !== null && (int) ($current['user_id'] ?? 0) !== (int) $userId) {
-            LeagueRepository::setForDevice($id, true, []);
+            LeagueRepository::setDeviceLeague($id, null);
         }
         return true;
     }
@@ -1430,13 +1430,15 @@ final class AdRepository
 
 /**
  * LIGAS del administrador (tablas sp_league_types, sp_leagues, sp_user_leagues).
- *  - Tipo de liga = OPCIÓN del selector de ligas de la TV: code (id que
- *    guarda smartpizarra.league, p. ej. "mlb") + name (texto del botón).
+ *  - Tipo de liga: code (lo que guarda la TV en smartpizarra.league,
+ *    p. ej. "mlb") + name.
  *  - Liga = nombre + tipo + contenido (lista de códigos "LIDOM,MLB,KO").
- *  - Cada usuario tiene 0..N ligas. Sus equipos autorizados reciben en
- *    api/device.php las opciones de su usuario (deviceOptions): una por
- *    tipo, con los códigos de sus ligas de ese tipo unidos. Sin ligas =>
- *    null y la TV usa su lista fija de siempre.
+ *  - El administrador asigna 0..N ligas a cada usuario; el USUARIO elige
+ *    para cada uno de sus equipos "Sin liga" o UNA de ellas
+ *    (sp_devices.league_id). Sus equipos autorizados la reciben en
+ *    api/device.php y api/media.php (devicePayload) y la guardan en
+ *    smartpizarra.league (código del tipo) y smartpizarra.leagues
+ *    (códigos); sin liga => "" en los dos.
  */
 final class LeagueRepository
 {
@@ -1642,6 +1644,7 @@ final class LeagueRepository
 
     /**
      * Reemplaza las ligas de un usuario (las que no existen se ignoran).
+     * Sus equipos que tenían una liga que ya no tiene pasan a "Sin liga".
      * @param int[] $leagueIds
      */
     public static function setForUser(int $userId, array $leagueIds): void
@@ -1656,6 +1659,12 @@ final class LeagueRepository
             foreach (array_unique(array_map('intval', $leagueIds)) as $leagueId) {
                 $insert->execute([$userId, $leagueId]);
             }
+            // Sus equipos con una liga que ya no tiene asignada => "Sin liga"
+            $pdo->prepare(
+                'UPDATE sp_devices d SET d.league_id = NULL
+                 WHERE d.user_id = ? AND d.league_id IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM sp_user_leagues ul WHERE ul.user_id = d.user_id AND ul.league_id = d.league_id)'
+            )->execute([$userId]);
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
@@ -1663,97 +1672,69 @@ final class LeagueRepository
         }
     }
 
-    /* ----------------- Ligas por equipo (las elige el usuario) ----------------- */
-
-    /** @return int[] Ids de las ligas elegidas para un equipo (sp_device_leagues). */
-    public static function idsForDevice(string $deviceId): array
-    {
-        $stmt = Database::pdo()->prepare('SELECT league_id FROM sp_device_leagues WHERE device_id = ?');
-        $stmt->execute([$deviceId]);
-        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-    }
+    /* ------------- Liga de cada equipo (la elige el usuario: una o ninguna) ------------- */
 
     /**
-     * Ligas de un equipo: TODAS las de su usuario ($all) o solo algunas.
-     * Las que no son del usuario del equipo se ignoran (comprobado en el INSERT).
-     * @param int[] $leagueIds
+     * Pone la liga de un equipo (null = "Sin liga"). Solo vale una liga
+     * asignada al usuario dueño del equipo.
+     * @return bool false si la liga no es del usuario del equipo.
      */
-    public static function setForDevice(string $deviceId, bool $all, array $leagueIds): void
+    public static function setDeviceLeague(string $deviceId, ?int $leagueId): bool
     {
         $pdo = Database::pdo();
-        $pdo->beginTransaction();
-        try {
-            $pdo->prepare('UPDATE sp_devices SET leagues_all = ? WHERE device_id = ?')->execute([$all ? 1 : 0, $deviceId]);
-            $pdo->prepare('DELETE FROM sp_device_leagues WHERE device_id = ?')->execute([$deviceId]);
-            if (!$all) {
-                $insert = $pdo->prepare(
-                    'INSERT IGNORE INTO sp_device_leagues (device_id, league_id)
-                     SELECT d.device_id, ul.league_id FROM sp_devices d
-                     JOIN sp_user_leagues ul ON ul.user_id = d.user_id AND ul.league_id = ?
-                     WHERE d.device_id = ?'
-                );
-                foreach (array_unique(array_map('intval', $leagueIds)) as $leagueId) {
-                    $insert->execute([$leagueId, $deviceId]);
-                }
-            }
-            $pdo->commit();
-        } catch (Throwable $e) {
-            $pdo->rollBack();
-            throw $e;
+        if ($leagueId === null) {
+            $pdo->prepare('UPDATE sp_devices SET league_id = NULL WHERE device_id = ?')->execute([$deviceId]);
+            return true;
         }
+        $stmt = $pdo->prepare(
+            'UPDATE sp_devices d JOIN sp_user_leagues ul ON ul.user_id = d.user_id AND ul.league_id = ?
+             SET d.league_id = ul.league_id WHERE d.device_id = ?'
+        );
+        $stmt->execute([$leagueId, $deviceId]);
+        // rowCount = 0 también si ya la tenía: se comprueba de nuevo
+        $check = $pdo->prepare('SELECT league_id FROM sp_devices WHERE device_id = ?');
+        $check->execute([$deviceId]);
+        return (int) $check->fetchColumn() === $leagueId;
     }
 
     /**
-     * Ligas que usa AHORA un equipo: las de su usuario, filtradas por la
-     * elección del equipo (leagues_all = 0). Si de lo elegido ya no queda
-     * ninguna (el administrador se las quitó al usuario) => todas las del usuario.
-     * @return array<int,array<string,mixed>>
+     * Liga que usa AHORA un equipo, con su tipo, o null ("Sin liga"). Si la
+     * liga ya no es de su usuario (el administrador se la quitó) => null.
+     * @return array<string,mixed>|null Fila de sp_leagues + type_code, type_name.
      */
-    public static function forDevice(array $device): array
+    public static function deviceLeague(array $device): ?array
     {
+        $leagueId = (int) ($device['league_id'] ?? 0);
         $userId = (int) ($device['user_id'] ?? 0);
-        if ($userId <= 0) {
-            return [];
-        }
-        $all = self::forUser($userId);
-        if ((int) ($device['leagues_all'] ?? 1) === 1) {
-            return $all;
-        }
-        $chosen = self::idsForDevice((string) $device['device_id']);
-        $some = array_values(array_filter($all, static fn($l) => in_array((int) $l['id'], $chosen, true)));
-        return $some ?: $all;
-    }
-
-    /**
-     * Opciones del selector de ligas para un equipo (las de su usuario, o
-     * las que el usuario eligió para ese equipo): una por tipo, en el orden
-     * de los tipos, con los códigos de esas ligas de ese tipo unidos (sin
-     * repetir). "todos" lo añade la TV (= unión de todas). rev = huella.
-     * @return array{rev:string,options:array<int,array{code:string,label:string,values:string}>}|null
-     *         null si el equipo no tiene usuario o el usuario no tiene ligas.
-     */
-    public static function deviceOptions(array $device): ?array
-    {
-        $options = [];
-        foreach (self::forDevice($device) as $l) {
-            $code = (string) $l['type_code'];
-            if (!isset($options[$code])) {
-                $options[$code] = ['code' => $code, 'label' => (string) $l['type_name'], 'values' => []];
-            }
-            foreach (explode(',', (string) $l['codes']) as $c) {
-                if ($c !== '') {
-                    $options[$code]['values'][$c] = true;
-                }
-            }
-        }
-        if (!$options) {
+        if ($leagueId <= 0 || $userId <= 0) {
             return null;
         }
-        $list = [];
-        foreach ($options as $o) {
-            $list[] = ['code' => $o['code'], 'label' => $o['label'], 'values' => implode(',', array_keys($o['values']))];
-        }
-        return ['rev' => substr(sha1((string) json_encode($list)), 0, 12), 'options' => $list];
+        $stmt = Database::pdo()->prepare(
+            'SELECT l.*, t.code AS type_code, t.name AS type_name
+             FROM sp_leagues l JOIN sp_league_types t ON t.id = l.type_id
+             JOIN sp_user_leagues ul ON ul.league_id = l.id AND ul.user_id = ?
+             WHERE l.id = ?'
+        );
+        $stmt->execute([$userId, $leagueId]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /**
+     * Lo que recibe la TV (campo "deviceLeague" de api/device.php y
+     * api/media.php): la liga del equipo o null = "Sin liga" (la TV deja
+     * smartpizarra.league y smartpizarra.leagues en "").
+     * @return array{code:string,label:string,name:string,values:string}|null
+     *         code = código del tipo (smartpizarra.league), values = códigos (smartpizarra.leagues).
+     */
+    public static function devicePayload(array $device): ?array
+    {
+        $l = self::deviceLeague($device);
+        return $l === null ? null : [
+            'code' => (string) $l['type_code'],
+            'label' => (string) $l['type_name'],
+            'name' => (string) $l['name'],
+            'values' => (string) $l['codes'],
+        ];
     }
 }
 

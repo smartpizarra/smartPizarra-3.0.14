@@ -42,9 +42,9 @@
  *              "mime":"image/jpeg","size":12345,"sha256":"<64 hex>","seconds":10}, ...]}
  *              (+ "ads":[{"id":3,"kind":..,"mime":..,"size":..,"sha256":..,"seconds":10,"every":3}, ...])
  *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide (sin items ni ads)
- *         Autorizado: también "leagueOptions" (siempre, aunque sea "unchanged"):
- *              {"rev","options":[{"code","label","values"}]} o null — las ligas del
- *              equipo, igual que api/device.php; mirror.html las guarda en localStorage.
+ *         Autorizado: también "deviceLeague" (siempre, aunque sea "unchanged"):
+ *              {"code","label","name","values"} o null ("Sin liga") — la liga del
+ *              equipo, igual que api/device.php; mirror.html la guarda en localStorage.
  *         200 {"ok":true,"status":"pending|revoked","authorized":false,"mediaEnabled":…,"revision":"","items":[]}
  *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"<huella de ads>","items":[],"ads":[...]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
@@ -162,11 +162,11 @@ try {
         'secondsLeft' => $contentActive ? max(0, (int) strtotime($until . ' UTC') - time()) : 0,
         'revision' => $revision,
     ];
-    // Ligas del equipo (las de su usuario o las que el usuario eligió para
-    // él), igual que api/device.php: mirror.html las guarda en
-    // smartpizarra.leagueOptions en cada consulta (≈ 1 min). Solo autorizados.
+    // Liga del equipo (la elige su usuario en /cuenta/), igual que
+    // api/device.php: mirror.html la guarda en smartpizarra.league /
+    // smartpizarra.leagues en cada consulta (≈ 1 min). Solo autorizados.
     if ($auth['authorized']) {
-        $out['leagueOptions'] = LeagueRepository::deviceOptions($device);
+        $out['deviceLeague'] = LeagueRepository::devicePayload($device);
     }
     if ($revision !== '' && hash_equals($revision, (string) ($_POST['rev'] ?? ''))) {
         $out['unchanged'] = true;
