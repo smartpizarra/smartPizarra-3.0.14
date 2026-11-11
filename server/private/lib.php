@@ -1451,7 +1451,9 @@ final class AdRepository
  * ASIGNACIÓN (2026-11-11): se CREAN SIN EQUIPOS (scope none = "sin
  * asignar", no se ve en ninguna pantalla) y después se ASIGNAN con
  * assign() (formulario "Asignar a equipos" de cada tira en los paneles).
- * update() cambia el estilo, las fechas y la pausa, nunca el destino.
+ * El TIEMPO DE VISIBILIDAD (permanente o desde/hasta) se elige AL
+ * ASIGNAR (assign(): destino + fechas); update() cambia solo el estilo y
+ * la pausa.
  * En cada equipo se muestra como mucho UNA por posición (resolve()):
  *  1) la del administrador antes que la del usuario;
  *  2) la más concreta: equipo > usuario > todos;
@@ -1570,20 +1572,18 @@ final class OverlayRepository
     }
 
     /**
-     * Cambia estilo, fechas y pausa (no la imagen, el tipo ni el DESTINO:
+     * Cambia estilo y pausa (no la imagen, el tipo, el DESTINO ni las FECHAS:
      * eso es assign()). Claves de $data: las de create() salvo
-     * user/scope/users/devices, que aquí no se usan.
+     * user/scope/users/devices/starts/ends, que aquí no se usan.
      */
     public static function update(int $id, array $data): void
     {
         Database::pdo()->prepare(
             'UPDATE sp_overlays SET name = ?, message = IF(kind = \'text\', ?, NULL), bg_color = ?, fg_color = ?,
-               motion = ?, speed = ?, band_size = ?, place = ?, active = ?, starts_at = ?, ends_at = ?,
-               updated_at = ? WHERE id = ?'
+               motion = ?, speed = ?, band_size = ?, place = ?, active = ?, updated_at = ? WHERE id = ?'
         )->execute([
             $data['name'], $data['message'], $data['bg'], $data['fg'], $data['motion'], $data['speed'],
-            $data['size'], $data['place'], $data['active'] ? 1 : 0, $data['starts'], $data['ends'],
-            Database::now(), $id,
+            $data['size'], $data['place'], $data['active'] ? 1 : 0, Database::now(), $id,
         ]);
     }
 
@@ -1592,19 +1592,26 @@ final class OverlayRepository
      * los del usuario si es suya), users (equipos de ciertos usuarios; solo
      * del administrador) o devices (equipos concretos; si es de un usuario,
      * solo los SUYOS). Un usuario no puede usar "users" (pasa a none).
+     * Con la asignación se guarda su TIEMPO DE VISIBILIDAD: $starts / $ends
+     * (UTC; null = sin esa fecha; ambos null = permanente). Sin asignar => sin fechas.
      * @param ?int $owner Dueño de la tira (null = administrador).
      */
-    public static function assign(int $id, ?int $owner, string $scope, array $users, array $devices): void
+    public static function assign(int $id, ?int $owner, string $scope, array $users, array $devices,
+                                  ?string $starts = null, ?string $ends = null): void
     {
         $scope = self::pick($scope, self::SCOPES);
         if ($owner !== null && $scope === 'users') {
             $scope = 'none';
         }
+        if ($scope === 'none') {
+            $starts = null;
+            $ends = null;
+        }
         $pdo = Database::pdo();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare('UPDATE sp_overlays SET scope = ?, updated_at = ? WHERE id = ?')
-                ->execute([$scope, Database::now(), $id]);
+            $pdo->prepare('UPDATE sp_overlays SET scope = ?, starts_at = ?, ends_at = ?, updated_at = ? WHERE id = ?')
+                ->execute([$scope, $starts, $ends, Database::now(), $id]);
             self::writeTargets($id, $owner, $scope, $users, $devices);
             $pdo->commit();
         } catch (Throwable $e) {

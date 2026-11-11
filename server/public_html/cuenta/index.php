@@ -26,10 +26,10 @@
  *  - TIRAS Y BANNERS (pestaña "Tiras y banners", ?s=tiras, 2026-11-11):
  *    franja ARRIBA o ABAJO de la pantalla de mirror.html: TIRA de texto
  *    (colores de fondo y letra, fija o desplazándose con velocidad) o
- *    BANNER de imagen; tamaño pequeña/mediana/grande; permanente o con
- *    fechas. Se CREAN SIN EQUIPOS y luego se ASIGNAN ("Asignar a equipos"
- *    en cada una: sin asignar / todos mis equipos / algunos; acción
- *    overlay_assign). Pausar/activar, editar y eliminar (acciones
+ *    BANNER de imagen; tamaño pequeña/mediana/grande. Se CREAN SIN EQUIPOS
+ *    y luego se ASIGNAN ("Asignar a equipos" en cada una: sin asignar /
+ *    todos mis equipos / algunos + TIEMPO DE VISIBILIDAD: permanente o con
+ *    fechas; acción overlay_assign). Pausar/activar, editar y eliminar (acciones
  *    overlay_*). Vista previa del banner: ?ovfile=ID.
  *    Si el administrador pone una en la MISMA posición, se ve la suya.
  *  - Puede cambiar su contraseña cuando quiera (pide la actual).
@@ -383,21 +383,20 @@ try {
                 if (is_string($style)) {
                     redirectWith($style, 's=tiras');
                 }
-                [$starts, $ends] = scheduleData('s=tiras');
-                // Se crea SIN equipos (sin asignar); el destino se elige después con overlay_assign
+                // Se crea SIN equipos ni fechas: destino y tiempo de visibilidad se eligen al asignar
                 $data = $style + [
                     'user' => $uid,
                     'scope' => 'none',
                     'active' => $action === 'overlay_create' || (int) $ov['active'] === 1,
-                    'starts' => $starts,
-                    'ends' => $ends,
+                    'starts' => null,
+                    'ends' => null,
                     'users' => [],
                     'devices' => [],
                 ];
                 [$what, $g] = overlayNoun($style['kind']);
                 if ($action === 'overlay_create') {
                     OverlayRepository::create($data, $upload[0] ?? null, $upload[1] ?? '', $upload[2] ?? null);
-                    redirectWith("$what «{$style['name']}» cread$g. Ahora usa «Asignar a equipos» para elegir en qué pantallas se muestra.", 's=tiras');
+                    redirectWith("$what «{$style['name']}» cread$g. Ahora usa «Asignar a equipos» para elegir en qué pantallas y durante cuánto tiempo se muestra.", 's=tiras');
                 }
                 OverlayRepository::update($oid, $data);
                 redirectWith("$what «{$style['name']}» guardad$g. Tus pantallas lo aplicarán en su próxima consulta (≈ 1 min).", 's=tiras');
@@ -410,8 +409,10 @@ try {
                 if ($scope === 'devices' && !$chosen) {
                     redirectWith('Marca al menos un equipo, o elige "Todos mis equipos" o "Sin asignar".', 's=tiras');
                 }
+                // Tiempo de visibilidad de esta asignación: permanente o con fechas
+                [$starts, $ends] = $scope === 'none' ? [null, null] : scheduleData('s=tiras');
                 // assign() solo guarda equipos de este usuario
-                OverlayRepository::assign($oid, $uid, $scope, [], $chosen);
+                OverlayRepository::assign($oid, $uid, $scope, [], $chosen, $starts, $ends);
                 $fresh = OverlayRepository::all($uid);
                 $n = 0;
                 foreach ($fresh as $f) {
@@ -420,7 +421,8 @@ try {
                 [$what, $g] = overlayNoun((string) $ov['kind']);
                 redirectWith($scope === 'none' ? "$what «{$ov['name']}» sin asignar: no se mostrará en ninguna pantalla."
                     : "$what «{$ov['name']}» asignad$g a " . ($scope === 'all' ? 'todos tus equipos' : "$n equipo(s)")
-                    . '. Se muestra en su próxima consulta (≈ 1 min).', 's=tiras');
+                    . ($starts === null && $ends === null ? ' de forma permanente' : ' con fechas')
+                    . '. Se aplica en su próxima consulta (≈ 1 min).', 's=tiras');
             }
             [$what, $g] = overlayNoun((string) $ov['kind']);
             switch ($action) {
@@ -876,8 +878,8 @@ if ($validity['state'] !== 'active') {
         <p class="hint">Una franja con un mensaje (tira) o una imagen (banner) arriba o abajo de la pantalla, sobre tus
           imágenes y videos. Se ve en tus equipos que muestran contenido (autorizados, con el contenido habilitado y vigencia activa).</p>
         <?= overlayFields(null, 'new-') ?>
-        <?= scheduleFields(null, 'ov-new-') ?>
-        <p class="hint">Se crea <strong>sin equipos</strong>: después, en la lista, usa «Asignar a equipos».</p>
+        <p class="hint">Se crea <strong>sin equipos</strong>: después, en la lista, usa «Asignar a equipos» para elegir
+          en qué pantallas y durante cuánto tiempo (permanente o con fechas) se muestra.</p>
         <button class="primary" type="submit">Crear</button>
       </form>
     </details>
@@ -919,6 +921,8 @@ if ($validity['state'] !== 'active') {
           <form method="post"><?= csrfField() ?>
             <input type="hidden" name="action" value="overlay_assign"><input type="hidden" name="overlayId" value="<?= $oid ?>">
             <?= overlayAssignFields($o, $devices) ?>
+            <!-- Tiempo de visibilidad de esta asignación -->
+            <?= scheduleFields($o, 'as' . $oid . '-') ?>
             <button class="primary" type="submit">Guardar asignación</button>
           </form>
         </details>
@@ -927,7 +931,6 @@ if ($validity['state'] !== 'active') {
           <form method="post" autocomplete="off"><?= csrfField() ?>
             <input type="hidden" name="action" value="overlay_update"><input type="hidden" name="overlayId" value="<?= $oid ?>">
             <?= overlayFields($o, 'o' . $oid . '-') ?>
-            <?= scheduleFields($o, 'o' . $oid . '-') ?>
             <button class="primary" type="submit">Guardar cambios</button>
           </form>
         </details>
