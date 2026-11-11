@@ -51,7 +51,9 @@
                                            (lo define loading.html)
     "smartpizarra.language"                es o en (GLOBAL: idioma de todas las pantallas;
                                            ver I18N, debe ser IGUAL a I18N de loading.html)
-    "smartpizarra.league"       mlb, nba, nflnhl o todos
+    "smartpizarra.league" / ".leagues"   liga del equipo (tipo y códigos; "" = sin liga):
+                                solo se leen para el JSON: la asigna el usuario en
+                                smartpizarra.cloud/cuenta/ y llega del servidor)
     "smartpizarra.version" / ".url" / ".email" / ".deviceId"
                                 solo se leen y se muestran (no se editan aquí;
                                 se modifican con updateSettings() de loading.html)
@@ -120,15 +122,17 @@
     orientation     Orientación GLOBAL guardada (null si no existe).
     scale           Escala para la app GUARDADA, como factor % / 100
                     (null si no existe).
-    league          Opción de ligas GUARDADA (mlb, nba, nflnhl, todos; null si no existe).
-    leagues         Ligas de esa opción ("" = todas; null si no existe).
+    league          Liga del equipo: código de su tipo (p. ej. "mlb"); "" = sin liga.
+    leagues         Códigos de esa liga ("LIDOM,MLB,KO"); "" = sin liga.
+                    En esta pantalla NO se elige la liga (la asigna el usuario
+                    en smartpizarra.cloud/cuenta/).
     Lo que se cambió sin pulsar "Guardar" se descarta.
 
   FUNCIONES PUBLICAS (la app las llama con RunJavaScript)
     getConfig()             Devuelve un texto JSON con la configuración
                             en pantalla: {"orientation":90,"language":"en",
                             "scale":1,"league":"mlb",
-                            "leagues":"LIDOM,MLB,..."}
+                            "leagues":"LIDOM,MLB,..."} (liga: solo lectura)
     saveConfig()            Igual que pulsar "Guardar" (no envía JSON).
     exitConfig()            Igual que pulsar "Salir" (envía el JSON).
     checkConnection()       Fuerza una verificación de internet (no envía
@@ -159,7 +163,7 @@
     3. Comunicación         sendToAppInventor(), send() (solo los usa "Salir").
     4. Orientación          layoutManager (gira la página y la ajusta para
                             que siempre quepa en pantalla).
-    5. Configuración        setOrientation(), setLeague(), changeScale(),
+    5. Configuración        setOrientation(), setLanguage(), changeScale(),
                             saveConfig(), exitConfig().
     6. UI                   render(): refleja el estado en los botones.
     7. Teclado              Búsqueda del botón vecino en el contenido
@@ -176,9 +180,9 @@
       => NO están aquí: CONFIG.settings de loading.html.
     Límites o paso de la escala (botones − / +)
       => SCALE_LIMITS (sección 1).
-    Opciones de ligas o sus valores
-      => LEAGUE_OPTIONS (sección 1) y los botones .league del HTML
-         (cada botón lleva su clave en data-league).
+    Liga del equipo (solo lectura, para el JSON)
+      => readDeviceLeague() / storeDeviceLeague() (sección 1). Se asigna en
+         smartpizarra.cloud/cuenta/, no en esta pantalla.
     Agregar un botón nuevo
       => ponerlo en el HTML con class="btn" y añadirlo a su fila en
          el.rows (init()). Las flechas recorren esas filas.
@@ -187,7 +191,7 @@
     Cómo eligen las flechas el siguiente botón
       => findNeighbor() (sección 7).
     Nombres de las claves de localStorage
-      => ORIENTATION_KEY, LANGUAGE_KEY, SCALE_KEY, OWN_SCALE_KEY, LEAGUE_KEY
+      => ORIENTATION_KEY, LANGUAGE_KEY, SCALE_KEY, OWN_SCALE_KEY, DEVICE_LEAGUE_KEY
          (sección 1). Deben ser IGUALES a CONFIG.settings de loading.html.
     Mensaje que se envía a la app al salir
       => exitConfig().
@@ -212,14 +216,13 @@
     Para ver o borrar el valor guardado (consola):
       localStorage.getItem("smartpizarra.orientation")
       localStorage.removeItem("smartpizarra.orientation")
-      localStorage.getItem("smartpizarra.league")
-      localStorage.removeItem("smartpizarra.league")
+      localStorage.getItem("smartpizarra.league")   (liga del equipo, la pone el servidor)
       localStorage.getItem("smartpizarra.config.scale")
       localStorage.removeItem("smartpizarra.config.scale")
 
   ARCHIVOS RELACIONADOS
     loading.html  Crea los settings con sus valores por defecto, los aplica
-                  y los muestra. Usa las mismas claves y LEAGUE_OPTIONS.
+                  y los muestra. Usa las mismas claves.
     example2.html Versión original de esta pantalla (referencia).
 =====================================================================
 -->
@@ -451,35 +454,6 @@
         color: rgba(255, 255, 255, 0.6);
       }
 
-      /* Selector de ligas: 4 opciones en fila (funciona como un <select>,
-           pero gira con la página y se maneja con las flechas) */
-      .league {
-        font-size: 1rem;
-        font-weight: bold;
-        padding: 14px 6px;
-      }
-      /* Con muchas ligas del servidor los botones pasan a otra línea (máx. 4 por línea) */
-      #leagueRow {
-        flex-wrap: wrap;
-      }
-      #leagueRow > .btn {
-        min-width: 22%;
-      }
-
-      /* Valores de la opción elegida (los que viajan en el JSON) */
-      .league-values {
-        margin-top: 8px;
-        min-height: 1.4em;
-        font-size: 0.85rem;
-        color: rgba(255, 255, 255, 0.6);
-        text-align: center;
-        word-break: break-word;
-      }
-      .league-values b {
-        color: var(--accent);
-        font-weight: normal;
-      }
-
       /* Escala: botones − / + y el valor en el centro (el valor no recibe foco) */
       .row > .btn.scale-btn {
         flex: 0 0 90px;
@@ -634,18 +608,6 @@
             </div>
           </div>
 
-          <!-- LIGAS (selector): cada botón lleva en data-league la clave de una
-             opción de LEAGUE_OPTIONS (sección 1 del script), donde están sus valores. -->
-          <div class="section">
-            <div class="section-title" data-i18n="league.title">Ligas</div>
-            <!-- Los botones .league los crea buildLeagueButtons() con las
-               ligas del servidor (smartpizarra.leagueOptions) o, sin ellas,
-               con LEAGUE_OPTIONS fija (MLB, NBA, NFL & NHL, TODOS). -->
-            <div class="row" id="leagueRow"></div>
-            <!-- Valores de la opción elegida (los escribe render) -->
-            <div class="league-values" id="leagueValues"></div>
-          </div>
-
           <!-- ESCALA: − / + cambian el valor en pasos de SCALE_LIMITS.step.
              Es SOLO un valor que se guarda en "smartpizarra.scale" para un
              proceso de la app (Kodular). NO cambia el tamaño de ninguna pantalla:
@@ -712,148 +674,73 @@
         /** Orientaciones permitidas, en grados (mismas que las demás pantallas). */
         var ORIENTATIONS = [0, 90, 180, 270];
 
-        /**
-         * Opciones del selector de ligas. La clave es la que lleva cada botón
-         * en data-league; "label" es el texto y "values" lo que viaja en el JSON.
-         * Para agregar una opción: añadirla aquí (los botones .league los crea
-         * buildLeagueButtons). Si el administrador asignó ligas al usuario,
-         * se usan las del servidor en lugar de esta tabla (ver más abajo).
-         * IMPORTANTE: los "values" deben ser IGUALES a LEAGUE_OPTIONS de
-         * loading.html (mismas claves: mlb, nba, nflnhl, todos).
-         */
-        var LEAGUE_OPTIONS = {
-          mlb: {
-            label: "MLB",
-            values: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
-          },
-          nba: { label: "NBA", values: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK" },
-          nflnhl: {
-            label: "NFL & NHL",
-            values: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
-          },
-          todos: { label: "TODOS", values: "" }, // "" = sin filtro
-        };
-
         /*
-         * LIGAS DEL SERVIDOR (2026-11-11). El administrador asigna ligas al
-         * usuario del equipo en smartpizarra.cloud; api/device.php las envía
-         * a los equipos autorizados (campo leagueOptions) y se guardan en
-         * "smartpizarra.leagueOptions":
-         *   {"rev":"…","options":[{"code":"mlb","label":"MLB","values":"LIDOM,MLB"},…]}
-         * Si existen, REEMPLAZAN a LEAGUE_OPTIONS: una opción por tipo de
-         * liga, en ese orden, más "todos" = todas sus ligas juntas. Sin esa
-         * clave (usuario sin ligas) se usa LEAGUE_OPTIONS fija de siempre.
+         * LIGA DEL EQUIPO (2026-11-11). La asigna el USUARIO en
+         * smartpizarra.cloud/cuenta/ ("Sin liga" o UNA de las ligas que le
+         * dio el administrador); en la TV NO se elige ni se cambia.
+         * api/device.php y api/media.php la envían (campo deviceLeague) y
+         * se guarda en localStorage:
+         *   "smartpizarra.league"  = código del tipo (p. ej. "mlb"); "" = sin liga
+         *   "smartpizarra.leagues" = códigos ("LIDOM,MLB,KO");       "" = sin liga
          * MISMO bloque en loading, config, connection, fingerprint y mirror.
          */
-        var LEAGUE_SERVER_KEY = "smartpizarra.leagueOptions";
-        var LEAGUE_ALL = "todos";
+        var DEVICE_LEAGUE_KEY = "smartpizarra.league";
+        var DEVICE_LEAGUES_KEY = "smartpizarra.leagues";
 
-        /**
-         * Valida las ligas que manda el servidor (o las guardadas).
-         * @returns {{rev:string, options:Array<{code:string,label:string,values:string}>}|null}
-         */
-        function cleanServerLeagues(data) {
-          if (!data || typeof data !== "object" || !(data.options instanceof Array)) return null;
-          var out = [];
-          var seen = {};
-          for (var i = 0; i < data.options.length && out.length < 50; i++) {
-            var o = data.options[i] || {};
-            var code = typeof o.code === "string" ? o.code.trim().toLowerCase() : "";
-            var values = typeof o.values === "string" ? o.values.toUpperCase().replace(/\s+/g, "") : "";
-            if (!/^[a-z0-9_-]{1,20}$/.test(code) || code === LEAGUE_ALL || seen[code]) continue;
-            if (!/^[A-Z0-9_]+(,[A-Z0-9_]+)*$/.test(values)) continue;
-            seen[code] = true;
-            var label = typeof o.label === "string" ? o.label.trim().slice(0, 60) : "";
-            out.push({ code: code, label: label || code.toUpperCase(), values: values });
-          }
-          return out.length ? { rev: String(data.rev || ""), options: out } : null;
+        /** @returns {string} Código de tipo válido (minúsculas) o "". */
+        function cleanLeagueType(value) {
+          var v = typeof value === "string" ? value.trim().toLowerCase() : "";
+          return /^[a-z0-9_-]{1,20}$/.test(v) ? v : "";
         }
 
-        /** @returns {object|null} Ligas del servidor guardadas (validadas) o null. */
-        function readServerLeagues() {
-          var raw = null;
+        /** @returns {string} Códigos válidos "A,B,C" (mayúsculas, sin espacios) o "". */
+        function cleanLeagueCodes(value) {
+          var v = typeof value === "string" ? value.toUpperCase().replace(/\s+/g, "") : "";
+          return /^[A-Z0-9_]+(,[A-Z0-9_]+)*$/.test(v) ? v : "";
+        }
+
+        /**
+         * Liga guardada del equipo (lo que va en los JSON). Sin liga o con
+         * datos no válidos => "" en los dos.
+         * @returns {{league:string, leagues:string}}
+         */
+        function readDeviceLeague() {
+          var league = "";
+          var leagues = "";
           try {
-            raw = window.localStorage.getItem(LEAGUE_SERVER_KEY);
+            league = cleanLeagueType(window.localStorage.getItem(DEVICE_LEAGUE_KEY));
+            leagues = cleanLeagueCodes(window.localStorage.getItem(DEVICE_LEAGUES_KEY));
           } catch (e) {
-            return null;
+            /* sin localStorage: sin liga */
           }
-          if (!raw) return null;
-          try {
-            return cleanServerLeagues(JSON.parse(raw));
-          } catch (e) {
-            return null;
-          }
+          if (!league || !leagues) return { league: "", leagues: "" };
+          return { league: league, leagues: leagues };
         }
 
         /**
-         * Opciones de ligas EFECTIVAS, en orden: las del servidor + "todos"
-         * (todas sus ligas juntas) o, sin ellas, la tabla fija LEAGUE_OPTIONS
-         * (cuyas entradas pueden ser texto o {label, values}).
-         * @returns {Array<{code:string,label:string,values:string}>}
+         * Guarda la liga de una respuesta de api/device.php o api/media.php.
+         * Solo si trae el campo deviceLeague (equipos autorizados); null =
+         * "Sin liga" => "" en las dos claves.
+         * @returns {boolean} true si cambió.
          */
-        function leagueOptionList() {
-          var server = readServerLeagues();
-          var list = [];
-          var i;
-          if (server) {
-            var all = [];
-            var seen = {};
-            for (i = 0; i < server.options.length; i++) {
-              list.push(server.options[i]);
-              var codes = server.options[i].values.split(",");
-              for (var j = 0; j < codes.length; j++) {
-                if (!seen[codes[j]]) {
-                  seen[codes[j]] = true;
-                  all.push(codes[j]);
-                }
-              }
-            }
-            list.push({ code: LEAGUE_ALL, label: "TODOS", values: all.join(",") });
-            return list;
-          }
-          for (var code in LEAGUE_OPTIONS) {
-            if (!Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, code)) continue;
-            var fixed = LEAGUE_OPTIONS[code];
-            list.push({
-              code: code,
-              label: typeof fixed === "string" ? code.toUpperCase() : fixed.label,
-              values: typeof fixed === "string" ? fixed : fixed.values,
-            });
-          }
-          return list;
-        }
-
-        /**
-         * @param {string} code Opción (mlb, nba, todos...).
-         * @returns {string|null} Sus ligas ("" = todas, solo en la tabla fija) o null si no existe.
-         */
-        function leagueValuesFor(code) {
-          var list = leagueOptionList();
-          for (var i = 0; i < list.length; i++) {
-            if (list[i].code === code) return list[i].values;
-          }
-          return null;
-        }
-
-        /**
-         * Guarda las ligas de una respuesta de api/device.php. Solo si trae
-         * el campo leagueOptions (equipos autorizados); null => se borra la
-         * clave (vuelve la tabla fija). Si la opción guardada en
-         * smartpizarra.league ya no existe, pasa a "todos".
-         * @returns {boolean} true si cambió algo.
-         */
-        function storeServerLeagues(res) {
-          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "leagueOptions")) {
+        function storeDeviceLeague(res) {
+          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceLeague")) {
             return false;
           }
-          var clean = cleanServerLeagues(res.leagueOptions);
-          var next = clean ? JSON.stringify(clean) : null;
+          var d = res.deviceLeague;
+          var league = d && typeof d === "object" ? cleanLeagueType(d.code) : "";
+          var leagues = d && typeof d === "object" ? cleanLeagueCodes(d.values) : "";
+          if (!league || !leagues) {
+            league = "";
+            leagues = "";
+          }
           try {
-            if (window.localStorage.getItem(LEAGUE_SERVER_KEY) === next) return false;
-            if (next === null) window.localStorage.removeItem(LEAGUE_SERVER_KEY);
-            else window.localStorage.setItem(LEAGUE_SERVER_KEY, next);
-            var saved = (window.localStorage.getItem("smartpizarra.league") || "").trim().toLowerCase();
-            if (leagueValuesFor(saved) === null) window.localStorage.setItem("smartpizarra.league", LEAGUE_ALL);
+            var ls = window.localStorage;
+            // Restos de la versión anterior (varias ligas por equipo)
+            ls.removeItem("smartpizarra.leagueOptions");
+            if (ls.getItem(DEVICE_LEAGUE_KEY) === league && ls.getItem(DEVICE_LEAGUES_KEY) === leagues) return false;
+            ls.setItem(DEVICE_LEAGUE_KEY, league);
+            ls.setItem(DEVICE_LEAGUES_KEY, leagues);
           } catch (e) {
             return false;
           }
@@ -898,9 +785,6 @@
             "orient.180": "Invertida",
             "orient.270": "Izquierda",
             "lang.title": "Idioma",
-            "league.title": "Ligas",
-            "league.all": "TODOS",
-            "league.allValues": "todas las ligas",
             "scale.title": "Escala",
             "scale.down": "Reducir escala",
             "scale.up": "Aumentar escala",
@@ -929,9 +813,6 @@
             "orient.180": "Inverted",
             "orient.270": "Left",
             "lang.title": "Language ·",
-            "league.title": "Leagues",
-            "league.all": "ALL",
-            "league.allValues": "all leagues",
             "scale.title": "Scale",
             "scale.down": "Decrease scale",
             "scale.up": "Increase scale",
@@ -966,7 +847,6 @@
         /** Tamaño de ESTA pantalla: solo se LEE (se define en loading.html y se
             cambia con su updateSettings; esta página no lo modifica). */
         var OWN_SCALE_KEY = "smartpizarra.config.scale";
-        var LEAGUE_KEY = "smartpizarra.league";
         /** Idioma GLOBAL: uno solo para todas las pantallas. */
         var LANGUAGE_KEY = "smartpizarra.language";
         /** Claves que solo se leen y se muestran (se editan desde loading.html). */
@@ -1027,7 +907,6 @@
         var saved = {
           orientation: null,
           language: null,
-          league: null,
           scale: null,
         };
 
@@ -1035,7 +914,6 @@
         var current = {
           orientation: null,
           language: null,
-          league: null,
           scale: null, // escala para la app (%), no se aplica a la pantalla
         };
 
@@ -1048,13 +926,12 @@
 
         /**
          * Copia una configuración en otra (from => to).
-         * @param {{orientation:?number, language:?string, league:?string, scale:?number}} from
-         * @param {{orientation:?number, language:?string, league:?string, scale:?number}} to
+         * @param {{orientation:?number, language:?string, scale:?number}} from
+         * @param {{orientation:?number, language:?string, scale:?number}} to
          */
         function copyConfig(from, to) {
           to.orientation = from.orientation;
           to.language = from.language;
-          to.league = from.league;
           to.scale = from.scale;
         }
 
@@ -1168,8 +1045,8 @@
                 if (res && res.ok === true) {
                   var ok = res.authorized === true;
                   self.saveFlag(ok);
-                  // Ligas asignadas por el administrador (solo si está autorizado)
-                  storeServerLeagues(res);
+                  // Liga del equipo (la asigna el usuario en /cuenta/; solo si está autorizado)
+                  storeDeviceLeague(res);
                   resolve({
                     authorized: ok,
                     authStatus: ok
@@ -1422,7 +1299,6 @@
          */
         function reloadFromStorage() {
           renderInfo();
-          syncServerLeagues(); // ¿cambiaron las ligas del servidor?
           var own = readOwnScale();
           if (own !== ownScale) {
             ownScale = own;
@@ -1431,18 +1307,15 @@
           if (isDirty()) return;
           var orientation = readSavedOrientation();
           var language = readSavedLanguage();
-          var league = readSavedLeague();
           var scale = readSavedScale();
           if (
             orientation === saved.orientation &&
             language === saved.language &&
-            league === saved.league &&
             scale === saved.scale
           )
             return;
           saved.orientation = orientation;
           saved.language = language;
-          saved.league = league;
           saved.scale = scale;
           copyConfig(saved, current);
           render();
@@ -1498,102 +1371,6 @@
         }
 
         /**
-         * Valida una opción de ligas.
-         * @param {*} value Clave de LEAGUE_OPTIONS (mlb, nba, nflnhl, none).
-         * @returns {string|null} La clave si es válida, o null.
-         */
-        function normalizeLeague(value) {
-          // Sin distinguir mayúsculas, igual que loading.html ("NBA" => "nba")
-          var option =
-            typeof value === "string" ? value.trim().toLowerCase() : "";
-          // Vale si existe en las ligas del servidor o, sin ellas, en LEAGUE_OPTIONS
-          return leagueValuesFor(option) !== null ? option : null;
-        }
-
-        /** @returns {string} Texto del botón de una opción de ligas. */
-        function leagueLabelFor(code) {
-          var list = leagueOptionList();
-          for (var i = 0; i < list.length; i++) {
-            if (list[i].code === code) return list[i].label;
-          }
-          return code;
-        }
-
-        /** @returns {string|null} Texto guardado de las ligas del servidor (para detectar cambios). */
-        function readLeagueSource() {
-          try {
-            return window.localStorage.getItem(LEAGUE_SERVER_KEY);
-          } catch (e) {
-            return null;
-          }
-        }
-
-        /** Ligas del servidor con las que se dibujaron los botones (ver buildLeagueButtons). */
-        var leagueSource = null;
-
-        /**
-         * Si cambiaron las ligas del servidor (las guarda serverAuth u otra
-         * página): rehace los botones, relee la opción guardada (pudo pasar
-         * a "todos") y, si la opción en edición ya no existe, pasa a "todos".
-         * @returns {boolean} true si había cambios.
-         */
-        function syncServerLeagues() {
-          if (readLeagueSource() === leagueSource) return false;
-          buildLeagueButtons();
-          saved.league = readSavedLeague();
-          if (current.league !== null && leagueValuesFor(current.league) === null)
-            current.league = LEAGUE_ALL;
-          render();
-          return true;
-        }
-
-        /**
-         * Crea los botones .league de la fila "Ligas" con las opciones
-         * EFECTIVAS (servidor o LEAGUE_OPTIONS fija) y actualiza la fila de
-         * navegación con el control remoto. Si el foco estaba en un botón de
-         * liga, pasa al de la opción elegida (o al primero).
-         */
-        function buildLeagueButtons() {
-          var row = document.getElementById("leagueRow");
-          var hadFocus =
-            !!el.leagueButtons &&
-            el.leagueButtons.indexOf(document.activeElement) !== -1;
-          var list = leagueOptionList();
-          row.innerHTML = "";
-          el.leagueButtons = [];
-          list.forEach(function (o) {
-            var btn = document.createElement("button");
-            btn.className = "btn league";
-            btn.setAttribute("data-league", o.code);
-            if (o.code === LEAGUE_ALL) {
-              // "TODOS" se traduce (applyLanguage usa data-i18n)
-              btn.setAttribute("data-i18n", "league.all");
-              btn.textContent = t("league.all");
-            } else {
-              btn.textContent = o.label; // MLB, NBA... son nombres propios
-            }
-            btn.addEventListener("click", function () {
-              setLeague(o.code);
-            });
-            row.appendChild(btn);
-            el.leagueButtons.push(btn);
-          });
-          leagueSource = readLeagueSource();
-          if (el.rows) {
-            el.rows[2] = el.leagueButtons; // fila de ligas (ver init)
-            el.focusables = [].concat.apply([], el.rows);
-          }
-          if (hadFocus && el.leagueButtons.length) {
-            var target = el.leagueButtons[0];
-            for (var i = 0; i < el.leagueButtons.length; i++) {
-              if (el.leagueButtons[i].getAttribute("data-league") === current.league)
-                target = el.leagueButtons[i];
-            }
-            target.focus();
-          }
-        }
-
-        /**
          * Lee de localStorage los datos de solo lectura (version, url, email, deviceId).
          * @returns {{version:?string, url:?string, email:?string, deviceId:?string}}
          *          null en los que no existen o están vacíos.
@@ -1613,15 +1390,6 @@
             info[name] = value !== "" ? value : null;
           }
           return info;
-        }
-
-        /**
-         * Lee la opción de ligas guardada en localStorage.
-         * @returns {string|null} Clave guardada, o null si no hay ninguna
-         *          (o si el WebView no permite localStorage).
-         */
-        function readSavedLeague() {
-          return normalizeLeague(readStorage(LEAGUE_KEY));
         }
 
         /**
@@ -1718,7 +1486,6 @@
           return (
             current.orientation !== saved.orientation ||
             current.language !== saved.language ||
-            current.league !== saved.league ||
             current.scale !== saved.scale
           );
         }
@@ -1738,19 +1505,6 @@
           );
           if (scale === current.scale) return;
           current.scale = scale;
-          justSaved = false;
-          saveError = false;
-          render();
-        }
-
-        /**
-         * Cambia la opción de ligas en pantalla. No envía nada a la app.
-         * @param {string} value Clave de LEAGUE_OPTIONS.
-         */
-        function setLeague(value) {
-          var league = normalizeLeague(value);
-          if (league === null || league === current.league) return;
-          current.league = league;
           justSaved = false;
           saveError = false;
           render();
@@ -1800,8 +1554,6 @@
               writeStorage(ORIENTATION_KEY, String(current.orientation))) &&
             (current.language === null ||
               writeStorage(LANGUAGE_KEY, current.language)) &&
-            (current.league === null ||
-              writeStorage(LEAGUE_KEY, current.league)) &&
             (current.scale === null ||
               writeStorage(SCALE_KEY, String(current.scale)));
           if (stored) {
@@ -1826,7 +1578,8 @@
          *   language          => idioma global guardado (null si no existe).
          *   scale             => escala para la app guardada
          *                        (como factor 0.8, 1...; null si no existe).
-         *   league / leagues  => opción guardada y sus ligas ("" = todas; null si no existe).
+         *   league / leagues  => liga del equipo (tipo y códigos; "" = sin liga). La asigna
+         *                        el usuario en smartpizarra.cloud/cuenta/; aquí no se cambia.
          * Si internet aún no se verificó, espera el resultado (máx. EXIT_WAIT_MS)
          * para que "internetStatus" sea real. La app debe cerrar esta pantalla al recibirlo.
          */
@@ -1864,9 +1617,6 @@
             : savedThisSession
               ? "saved"
               : "unchanged";
-          // La consulta pudo traer ligas nuevas del servidor (y pasar la
-          // opción guardada a "todos"): rehacer botones y releer antes de enviar
-          syncServerLeagues();
           if (isDirty()) {
             // Descartar cambios sin guardar: volver a lo guardado
             copyConfig(saved, current);
@@ -1875,9 +1625,9 @@
           send("exit", status, {
             orientation: saved.orientation, // global (null si no existe)
             language: saved.language, // global (null si no existe)
-            league: saved.league,
-            // Ligas de la opción (del servidor si el administrador asignó ligas)
-            leagues: saved.league === null ? null : leagueValuesFor(saved.league),
+            // Liga del equipo (leída AHORA: la consulta de autorización pudo traer otra)
+            league: readDeviceLeague().league,
+            leagues: readDeviceLeague().leagues,
             scale: toZoom(saved.scale), // escala para la app (factor)
             authorized: auth.authorized, // según smartpizarra.cloud (o la última bandera)
             authStatus: authStatus,
@@ -1920,36 +1670,6 @@
             el.orientButtons[i].classList.toggle(
               "selected",
               o === current.orientation,
-            );
-          }
-
-          // Opción de ligas elegida y sus valores
-          for (i = 0; i < el.leagueButtons.length; i++) {
-            el.leagueButtons[i].classList.toggle(
-              "selected",
-              el.leagueButtons[i].getAttribute("data-league") ===
-                current.league,
-            );
-          }
-          el.leagueValues.innerHTML = "";
-          if (current.league === null) {
-            el.leagueValues.textContent = t("unset");
-          } else {
-            // Opción efectiva (ligas del servidor o LEAGUE_OPTIONS fija)
-            var values = leagueValuesFor(current.league) || "";
-            var label = document.createElement("b");
-            // "TODOS" se traduce; MLB, NBA... son nombres propios
-            label.textContent =
-              (current.league === LEAGUE_ALL
-                ? t("league.all")
-                : leagueLabelFor(current.league)) + ": ";
-            el.leagueValues.appendChild(label);
-            el.leagueValues.appendChild(
-              document.createTextNode(
-                values === ""
-                  ? t("league.allValues")
-                  : values.split(",").join(", "),
-              ),
             );
           }
 
@@ -2510,15 +2230,15 @@
 
         /** @returns {string} JSON con la configuración en pantalla:
             {"orientation":90,"language":"en","scale":1,
-             "league":"mlb","leagues":"LIDOM,MLB,..."}
+             "league":"mlb","leagues":"LIDOM,MLB,..."}  (liga del equipo, "" = sin liga)
             (scale = escala para la app como factor; null en lo que no existe) */
         window.getConfig = function () {
           return JSON.stringify({
             orientation: current.orientation,
             language: current.language,
             scale: toZoom(current.scale),
-            league: current.league,
-            leagues: current.league === null ? null : leagueValuesFor(current.league),
+            league: readDeviceLeague().league,
+            leagues: readDeviceLeague().leagues,
           });
         };
 
@@ -2551,9 +2271,6 @@
           el.orientButtons = Array.prototype.slice.call(
             document.querySelectorAll(".orient"),
           );
-          // Botones de ligas: se crean con las opciones efectivas (servidor o fija)
-          buildLeagueButtons();
-          el.leagueValues = document.getElementById("leagueValues");
           el.scaleDownBtn = document.getElementById("scaleDownBtn");
           el.scaleUpBtn = document.getElementById("scaleUpBtn");
           el.scaleValue = document.getElementById("scaleValue");
@@ -2574,7 +2291,6 @@
           el.rows = [
             el.orientButtons,
             el.langButtons,
-            el.leagueButtons,
             [el.scaleDownBtn, el.scaleUpBtn],
             [el.saveBtn, el.exitBtn],
           ];
@@ -2592,7 +2308,6 @@
               setLanguage(btn.getAttribute("data-language"));
             });
           });
-          // (los clics de los botones de ligas los pone buildLeagueButtons)
           el.scaleDownBtn.addEventListener("click", function () {
             changeScale(-SCALE_LIMITS.step);
           });
@@ -2619,11 +2334,10 @@
               focusDefault();
           });
 
-          // Orientación e idioma globales, ligas y escala para la app. Si no
+          // Orientación e idioma globales y escala para la app. Si no
           // existen quedan en null ("Sin configurar"): esta página no crea defaults.
           saved.orientation = readSavedOrientation();
           saved.language = readSavedLanguage();
-          saved.league = readSavedLeague();
           saved.scale = readSavedScale();
           copyConfig(saved, current);
           ownScale = readOwnScale(); // tamaño de esta pantalla (solo lectura)
