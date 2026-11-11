@@ -319,9 +319,9 @@ final class DeviceRepository
     {
         $now = Database::now();
         Database::pdo()->prepare(
-            'INSERT INTO sp_devices (device_id, secret_hash, status, app_version, last_ip, created_at, last_seen_at)
-             VALUES (?, ?, \'pending\', ?, ?, ?, ?)'
-        )->execute([$id, hash('sha256', $secret), $version, $ip, $now, $now]);
+            'INSERT INTO sp_devices (device_id, secret_hash, status, app_version, last_ip, created_at, last_seen_at, online_at)
+             VALUES (?, ?, \'pending\', ?, ?, ?, ?, ?)'
+        )->execute([$id, hash('sha256', $secret), $version, $ip, $now, $now, $now]);
     }
 
     /**
@@ -362,19 +362,27 @@ final class DeviceRepository
         return hash_equals($device['secret_hash'], hash('sha256', $secret));
     }
 
-    /** Anota la última consulta del equipo. */
+    /**
+     * Anota una consulta del equipo: la hace CUALQUIER página que habla con
+     * el servidor (loading, config, connection, fingerprint por api/device.php
+     * y mirror por api/media.php). Refresca la consulta (last_seen_at) y la
+     * "última conexión" del panel (online_at). NO escribe en el historial:
+     * eso solo lo hace el arranque de loading.html (event=boot, BootLog).
+     */
     public static function touch(string $id, ?string $version, string $ip): void
     {
+        $now = Database::now();
         Database::pdo()->prepare(
-            'UPDATE sp_devices SET last_seen_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
+            'UPDATE sp_devices SET last_seen_at = ?, online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
              WHERE device_id = ?'
-        )->execute([Database::now(), $version, $ip, $id]);
+        )->execute([$now, $now, $version, $ip, $id]);
     }
 
     /**
      * Señal "online" de la app nativa Kodular (api/ping.php).
      * Solo toca online_at (y la IP/versión): last_seen_at sigue siendo la
-     * última consulta de las páginas HTML.
+     * última consulta de las páginas HTML (que también refrescan online_at,
+     * ver touch()).
      */
     public static function markOnline(string $id, ?string $version, string $ip): void
     {
@@ -382,21 +390,6 @@ final class DeviceRepository
             'UPDATE sp_devices SET online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
              WHERE device_id = ?'
         )->execute([Database::now(), $version, $ip, $id]);
-    }
-
-    /**
-     * Arranque de loading.html (api/device.php con event=boot): además de la
-     * consulta (last_seen_at) refresca online_at, que es la "última
-     * conexión" que muestra el panel. Así el panel queda al día aunque la
-     * app nativa todavía no haya enviado su señal a api/ping.php.
-     */
-    public static function markBoot(string $id, ?string $version, string $ip): void
-    {
-        $now = Database::now();
-        Database::pdo()->prepare(
-            'UPDATE sp_devices SET last_seen_at = ?, online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
-             WHERE device_id = ?'
-        )->execute([$now, $now, $version, $ip, $id]);
     }
 
     /** Cambia el estado desde el panel. */

@@ -13,7 +13,7 @@
  *    (fingerprint.html la hace cada pocos segundos mientras espera;
  *    loading.html al arrancar la app).
  *  - Cada equipo muestra su fecha de registro y su "Última conexión"
- *    (arranque de loading.html o señal de la app nativa, api/ping.php).
+ *    (cualquier consulta de las páginas de la TV o señal de la app nativa, api/ping.php).
  *  - Historial de arranques (?history=SP-...).
  *  - CONTENIDO (imágenes/videos de mirror.html): permiso aparte de la
  *    autorización, botón "Habilitar contenido" en cada equipo. Un equipo
@@ -45,12 +45,12 @@
  *    AUTORIZADOS. Ver AdRepository (private/lib.php) y api/media.php.
  *
  *  - LIGAS (botón "Ligas", ?view=leagues, 2026-11-11): TIPOS de liga
- *    (código = opción del selector de ligas de la TV, p. ej. "mlb", y su
- *    nombre; orden = orden de los botones) y LIGAS (nombre + tipo +
- *    contenido = códigos "LIDOM,MLB,KO"). Se ASIGNAN a los usuarios en
- *    su ficha (varias por usuario). Sus equipos autorizados las reciben en
- *    api/device.php (LeagueRepository::deviceOptions) y las usan en vez
- *    de la lista fija; sin ligas asignadas la TV usa la lista fija.
+ *    (código, p. ej. "mlb", que la TV guarda en smartpizarra.league, y su
+ *    nombre) y LIGAS (nombre + tipo + contenido = códigos "LIDOM,MLB,KO").
+ *    Se ASIGNAN a los usuarios en su ficha (varias por usuario). Después
+ *    el USUARIO, en /cuenta/, pone a cada uno de sus equipos "Sin liga" o
+ *    UNA de ellas; la TV la recibe (LeagueRepository::devicePayload) y la
+ *    guarda (sin liga => ""). La TV ya no tiene ligas fijas ni selector.
  *
  *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
  *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
@@ -266,7 +266,7 @@ function leagueFields(?array $l, array $types, string $p): string
         . '<textarea id="' . $p . 'codes" name="codes" rows="3" required placeholder="LIDOM, MLB, KO, PRO">'
         . h(str_replace(',', ', ', (string) ($l['codes'] ?? ''))) . '</textarea>'
         . '<p class="owner">Se guardan en MAYÚSCULAS y sin repetir (máx. ' . LeagueRepository::MAX_CODES . '). '
-        . 'En la TV, el botón de su tipo junta los códigos de todas las ligas de ese tipo que tenga el usuario.</p>';
+        . 'La TV del equipo que use esta liga guarda el código de su tipo y estos códigos.</p>';
 }
 
 /** Texto de un usuario para listas: "Empresa — email". */
@@ -397,7 +397,7 @@ try {
                 case 'league_type_up':
                 case 'league_type_down':
                     LeagueRepository::moveType($typeId, $action === 'league_type_up' ? -1 : 1);
-                    redirectWith('Orden de los tipos cambiado (es el orden de los botones en la TV).', 'view=leagues');
+                    redirectWith('Orden de los tipos cambiado.', 'view=leagues');
                 case 'league_type_delete':
                     $type = LeagueRepository::findType($typeId);
                     if ($type === null) {
@@ -561,7 +561,7 @@ try {
                     LeagueRepository::setForUser($uid, $ids);
                     $ids = LeagueRepository::idsForUser($uid); // las que existen de verdad
                     redirectWith(($ids ? 'Ligas de «' . $user['company'] . '» guardadas (' . count($ids) . ').'
-                            : '«' . $user['company'] . '» queda sin ligas: sus TV usarán la lista fija.')
+                            : '«' . $user['company'] . '» queda sin ligas: sus equipos quedan sin liga.')
                         . ' Sus equipos lo recibirán en su próxima consulta.', $back);
                 case 'user_delete':
                     UserRepository::delete($uid);
@@ -1003,7 +1003,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <div class="meta">Todavía no hay ligas. Créalas en <a href="?view=leagues">Ligas</a>.</div>
       <?php else: ?>
         <div class="meta"><?= count($userLeagueIds) ?> liga(s) asignada(s).
-          Sin ninguna, sus TV usan la lista fija de ligas de siempre.</div>
+          El usuario elige en /cuenta/ cuál de ellas usa cada uno de sus equipos (o "Sin liga").
+          Si le quitas una liga, sus equipos que la usaban quedan sin liga.</div>
         <form method="post"><?= csrfField() ?>
           <input type="hidden" name="action" value="user_leagues"><input type="hidden" name="userId" value="<?= $uid ?>">
           <input type="hidden" name="back" value="<?= h($userBack) ?>">
@@ -1195,8 +1196,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
          usuarios en su ficha; sus TV autorizadas las reciben. -->
     <section class="card section">
       <h2>Tipos de liga</h2>
-      <div class="meta">Cada tipo es un botón del selector de ligas de la TV, en este orden. El código es lo que guarda la TV
-        (minúsculas, p. ej. <code>mlb</code>) y no se puede cambiar; el nombre es el texto del botón.</div>
+      <div class="meta">El código es lo que guarda la TV como liga del equipo (minúsculas, p. ej. <code>mlb</code>)
+        y no se puede cambiar; el nombre es el que se ve en las listas. El orden es el de las listas.</div>
       <?php if (!$leagueTypes): ?><p class="owner">Todavía no hay tipos. Crea el primero (p. ej. código <code>mlb</code>, nombre MLB).</p><?php endif; ?>
       <?php foreach ($leagueTypes as $n => $t): $tid = (int) $t['id']; ?>
         <div class="type-row">
@@ -1425,13 +1426,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="meta">
         Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>'
           . ' · <span class="owner">' . contentValidity($d['user_content_until'] ?? null)['text'] . '</span>' : '<em>sin asignar</em>' ?><br>
-        <?php if ($d['user_id']): $devLeagues = LeagueRepository::forDevice($d); ?>
-          <!-- Ligas que usa (las de su usuario o las que el usuario eligió para este equipo en /cuenta/) -->
-          Ligas: <?= !$devLeagues ? '<em>lista fija</em> (su usuario no tiene ligas)'
-            : h(implode(', ', array_map(static fn($l) => $l['name'], $devLeagues)))
-              . ' <span class="owner">(' . ((int) ($d['leagues_all'] ?? 1) === 1 ? 'todas las de su usuario' : 'elegidas por el usuario') . ')</span>' ?><br>
+        <?php if ($d['user_id']): $devLeague = LeagueRepository::deviceLeague($d); ?>
+          <!-- Liga del equipo (la elige su usuario en /cuenta/) -->
+          Liga: <?= $devLeague === null ? '<em>sin liga</em>'
+            : h($devLeague['name']) . ' <span class="owner">(' . h($devLeague['type_name']) . ': '
+              . h(str_replace(',', ', ', $devLeague['codes'])) . ')</span>' ?><br>
         <?php endif; ?>
-        <!-- Última conexión: arranque de loading.html o señal de la app nativa -->
+        <!-- Última conexión: cualquier consulta de las páginas de la TV (device.php / media.php) o señal de la app nativa (ping.php) -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>
         · Arranques: <?= (int) ($d['boots'] ?? 0) ?>

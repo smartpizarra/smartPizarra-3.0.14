@@ -78,6 +78,9 @@ try {
     if (!DeviceRepository::secretMatches($device, $secret)) {
         Http::json(['ok' => false, 'error' => 'secret_mismatch'], 403);
     }
+    // Toda consulta válida de mirror.html (lista o descarga) refresca la
+    // última conexión del panel (online_at); el historial NO (solo loading.html)
+    DeviceRepository::touch($id, null, Http::clientIp());
     $auth = DeviceRepository::authPayload($device);
     // Permiso de contenido (aparte de la autorización); solo lo da el administrador
     $mediaEnabled = DeviceRepository::mediaEnabled($device);
@@ -122,8 +125,7 @@ try {
         MediaRepository::send($media);
     }
 
-    // action=list: anota la consulta (como api/device.php) y responde la lista
-    DeviceRepository::touch($id, null, Http::clientIp());
+    // action=list: responde la lista (la consulta ya se anotó arriba)
     $items = [];
     if ($allowed) {
         foreach (MediaRepository::forDevice($id) as $m) {

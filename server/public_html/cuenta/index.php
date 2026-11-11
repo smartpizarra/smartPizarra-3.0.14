@@ -13,11 +13,12 @@
  *    que ve el administrador) de los equipos asignados a él (acción
  *    device_label, comprueba que el equipo sea suyo). Autorizar, revocar
  *    y habilitar el contenido lo hace el administrador.
- *  - LIGAS POR EQUIPO (acción device_leagues): de las ligas que le asignó
- *    el administrador, elige cuáles usa cada uno de sus equipos ("Todas
- *    mis ligas" o "Solo estas"). La TV las recibe en api/media.php
- *    (mirror.html, ≈ 1 min) o api/device.php y las guarda en su
- *    localStorage (smartpizarra.leagueOptions).
+ *  - LIGA DE CADA EQUIPO (acción device_league): para cada uno de sus
+ *    equipos elige "Sin liga" o UNA de las ligas que le asignó el
+ *    administrador (es el ÚNICO sitio donde se cambia la liga de una TV).
+ *    La TV la recibe en api/media.php (mirror.html, ≈ 1 min) o
+ *    api/device.php y la guarda en su localStorage (smartpizarra.league =
+ *    código del tipo, smartpizarra.leagues = códigos; "" sin liga).
  *  - Contenido (imágenes/videos): cada archivo es PERMANENTE o CON FECHAS
  *    (desde/hasta, opcionales, en la hora de su navegador => UTC), como
  *    los anuncios del administrador; fuera del periodo api/media.php no
@@ -265,8 +266,8 @@ try {
             session_regenerate_id(true);
             $_SESSION['pwd'] = passwordStamp(UserRepository::find((int) $user['id']) ?? []);
             redirectWith('Contraseña cambiada.', 's=cuenta');
-        } elseif ($action === 'device_leagues') {
-            /* ---- Ligas de uno de SUS equipos (de las que le asignó el administrador) ---- */
+        } elseif ($action === 'device_league') {
+            /* ---- Liga de uno de SUS equipos: "Sin liga" o UNA de las que le asignó el administrador ---- */
             if ((int) $user['must_change_password'] === 1) {
                 redirectWith('Primero elige tu contraseña.', 's=cuenta');
             }
@@ -275,16 +276,15 @@ try {
             if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
                 redirectWith('Ese equipo no está asignado a tu cuenta.', 's=equipos');
             }
-            $all = param($_POST, 'leagueMode') !== 'some';
-            // Solo ligas de este usuario (setForDevice también lo comprueba)
-            $mine = LeagueRepository::idsForUser((int) $user['id']);
-            $ids = array_values(array_intersect(array_map('intval', (array) ($_POST['leagues'] ?? [])), $mine));
-            if (!$all && !$ids) {
-                redirectWith('Marca al menos una liga o elige "Todas mis ligas".', 's=equipos');
+            $raw = param($_POST, 'leagueId');
+            $leagueId = ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null; // "" = Sin liga
+            // setDeviceLeague solo acepta ligas asignadas a este usuario
+            if (!LeagueRepository::setDeviceLeague($id, $leagueId)) {
+                redirectWith('Esa liga no está asignada a tu cuenta.', 's=equipos');
             }
-            LeagueRepository::setForDevice($id, $all, $ids);
             $name = $device['label'] ? $device['label'] . " ($id)" : $id;
-            redirectWith(($all ? "$name usará todas tus ligas." : "$name usará " . count($ids) . ' liga(s).')
+            $league = $leagueId === null ? null : LeagueRepository::find($leagueId);
+            redirectWith(($league === null ? "$name queda sin liga." : "$name usará la liga «{$league['name']}».")
                 . ' La TV lo recibe en su próxima consulta (≈ 1 min si está mostrando contenido).', 's=equipos');
         } elseif ($action === 'device_label') {
             /* ---- Nombre (alias) de uno de SUS equipos ---- */
@@ -499,9 +499,11 @@ if ($validity['state'] !== 'active') {
     @media (prefers-color-scheme: dark) { input[type=datetime-local] { color-scheme: dark; } }
     .date-field { display: flex; gap: 4px; align-items: stretch; }
     .date-field button { padding: 6px 10px; flex: 0 0 auto; }
-    /* Ligas de cada equipo (pestaña Equipos) */
-    .league-checks { margin: 4px 0 0 4px; }
-    .league-type { font-weight: 600; font-size: .9rem; margin: 8px 0 2px; }
+    /* Liga de cada equipo (pestaña Equipos) */
+    .league-form label { margin-top: 8px; }
+    .league-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .league-row select { flex: 1 1 220px; min-width: 0; font: inherit; padding: 8px 10px; border-radius: 8px;
+      border: 1px solid var(--line); background: var(--bg); color: var(--text); }
     /* Nombre del equipo (pestaña Equipos) */
     .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     .label-form input[type=text] { flex: 1 1 220px; min-width: 0; padding: 8px 10px; }
@@ -587,7 +589,7 @@ if ($validity['state'] !== 'active') {
     <!-- ============ EQUIPOS (solo el nombre es editable) ============ -->
     <div class="section-head">
       <h2>Mis equipos</h2>
-      <span class="hint">Puedes ponerle un nombre a cada equipo. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
+      <span class="hint">Puedes ponerle un nombre y una liga a cada equipo. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
     </div>
     <?php if (!$devices): ?>
       <div class="card empty block">Todavía no tienes equipos asignados.</div>
@@ -621,40 +623,29 @@ if ($validity['state'] !== 'active') {
                  maxlength="100" placeholder="Nombre del equipo (p. ej. Local Centro)">
           <button type="submit">Guardar nombre</button>
         </form>
-        <!-- Ligas de este equipo: todas las mías o solo algunas (llegan a la TV en ≈ 1 min) -->
+        <!-- Liga de este equipo: "Sin liga" o UNA de mis ligas (llega a la TV en ≈ 1 min) -->
         <?php if (!$myLeagues): ?>
-          <p class="hint">Ligas: la lista de siempre (el administrador todavía no te asignó ligas).</p>
-        <?php else:
-            $devAll = (int) ($d['leagues_all'] ?? 1) === 1;
-            $devChosen = $devAll ? [] : LeagueRepository::idsForDevice((string) $d['device_id']);
-            $devNow = LeagueRepository::forDevice($d); // las que usa ahora
-            $did = h($d['device_id']);
-        ?>
-          <details class="edit">
-            <summary>Ligas de este equipo: <?= $devAll ? 'todas mis ligas (' . count($myLeagues) . ')'
-                : h(implode(', ', array_map(static fn($l) => $l['name'], $devNow))) ?></summary>
-            <form method="post"><?= csrfField() ?>
-              <input type="hidden" name="action" value="device_leagues">
-              <input type="hidden" name="deviceId" value="<?= $did ?>">
-              <fieldset class="targets" data-leagues>
-                <legend>Ligas que usa este equipo</legend>
-                <label class="inline"><input type="radio" name="leagueMode" value="all" <?= $devAll ? 'checked' : '' ?>> Todas mis ligas (también las que me asignen después)</label>
-                <label class="inline"><input type="radio" name="leagueMode" value="some" <?= $devAll ? '' : 'checked' ?>> Solo estas:</label>
-                <div class="league-checks">
-                  <?php $lastType = null; foreach ($myLeagues as $l): ?>
-                    <?php if ($lastType !== (int) $l['type_id']): $lastType = (int) $l['type_id']; ?>
-                      <div class="league-type"><?= h($l['type_name']) ?></div>
-                    <?php endif; ?>
-                    <label class="inline"><input type="checkbox" name="leagues[]" value="<?= (int) $l['id'] ?>"
-                      <?= in_array((int) $l['id'], $devChosen, true) ? 'checked' : '' ?>> <?= h($l['name']) ?>
-                      <span class="hint"><?= h(str_replace(',', ', ', $l['codes'])) ?></span></label>
-                  <?php endforeach; ?>
-                </div>
-              </fieldset>
-              <button class="primary" type="submit">Guardar ligas</button>
-              <span class="hint">La TV lo recibe en su próxima consulta (≈ 1 min si está mostrando contenido).</span>
-            </form>
-          </details>
+          <p class="hint">Liga: sin liga (el administrador todavía no te asignó ligas).</p>
+        <?php else: $devLeague = LeagueRepository::deviceLeague($d); $did = h($d['device_id']); ?>
+          <form method="post" class="league-form"><?= csrfField() ?>
+            <input type="hidden" name="action" value="device_league">
+            <input type="hidden" name="deviceId" value="<?= $did ?>">
+            <label for="lg-<?= $did ?>">Liga de este equipo</label>
+            <div class="league-row">
+              <select id="lg-<?= $did ?>" name="leagueId">
+                <option value="">Sin liga</option>
+                <?php $lastType = null; foreach ($myLeagues as $l): ?>
+                  <?php if ($lastType !== (int) $l['type_id']): ?>
+                    <?= $lastType !== null ? '</optgroup>' : '' ?><optgroup label="<?= h($l['type_name']) ?>">
+                  <?php $lastType = (int) $l['type_id']; endif; ?>
+                  <option value="<?= (int) $l['id'] ?>" <?= $devLeague && (int) $devLeague['id'] === (int) $l['id'] ? 'selected' : '' ?>>
+                    <?= h($l['name'] . ' — ' . str_replace(',', ', ', $l['codes'])) ?></option>
+                <?php endforeach; ?>
+                <?= $lastType !== null ? '</optgroup>' : '' ?>
+              </select>
+              <button type="submit">Guardar liga</button>
+            </div>
+          </form>
         <?php endif; ?>
       </section>
     <?php endforeach; ?>
@@ -756,7 +747,7 @@ if ($validity['state'] !== 'active') {
             <dt>Cliente desde</dt><dd><?= dateTag($user['created_at']) ?></dd>
             <dt>Vigencia</dt><dd><?= $validity['text'] ?></dd>
             <!-- Ligas asignadas por el administrador (opciones del selector de ligas de sus TV) -->
-            <dt>Ligas</dt><dd><?php if (!$myLeagues): ?>Las de siempre (sin ligas asignadas)<?php else: ?>
+            <dt>Ligas</dt><dd><?php if (!$myLeagues): ?>Ninguna asignada (tus equipos quedan sin liga)<?php else: ?>
               <?php foreach ($myLeagues as $i => $l): ?><?= $i ? '<br>' : '' ?><strong><?= h($l['type_name']) ?></strong> · <?= h($l['name']) ?>
                 <span class="hint"><?= h(str_replace(',', ', ', $l['codes'])) ?></span><?php endforeach; ?>
             <?php endif; ?></dd>
@@ -790,16 +781,6 @@ if ($validity['state'] !== 'active') {
   (function () {
     "use strict";
     // Al subir: botón desactivado y aviso (un video grande tarda)
-    // Ligas de un equipo: con "Todas mis ligas" las casillas no cuentan (se desactivan)
-    document.querySelectorAll("fieldset[data-leagues]").forEach(function (fs) {
-      function sync() {
-        var some = fs.querySelector("input[name=leagueMode][value=some]").checked;
-        fs.querySelectorAll("input[name='leagues[]']").forEach(function (c) { c.disabled = !some; });
-      }
-      fs.querySelectorAll("input[name=leagueMode]").forEach(function (r) { r.addEventListener("change", sync); });
-      sync();
-    });
-
     var form = document.getElementById("uploadForm");
     if (form) {
       form.addEventListener("submit", function () {

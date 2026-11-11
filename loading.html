@@ -51,6 +51,8 @@
   páginas. Los defaults que NO se editaron conservan el valor guardado
   (lo elegido en config.html o con updateSettings). Los defaults usados
   se anotan en "smartpizarra.defaults". deviceId nunca se reemplaza.
+  La LIGA (league / leagues) tampoco: su default "" solo se pone si la
+  clave NO existe (onlyIfMissing); el valor lo actualiza el servidor.
 
   Si otra página los modifica, esta los vuelve a leer al recibir el
   evento "storage", al volver a mostrarse o al cambiar el tamaño.
@@ -780,6 +782,9 @@
             league: {
               key: DEVICE_LEAGUE_KEY,
               defaultValue: "",
+              // El default solo se escribe si la clave NO existe: nunca pisa
+              // lo guardado (ni al cambiar este default ni si es inválido)
+              onlyIfMissing: true,
               parse: function (raw) {
                 return raw === null ? null : cleanLeagueType(raw);
               },
@@ -788,6 +793,7 @@
             leagues: {
               key: DEVICE_LEAGUES_KEY,
               defaultValue: "",
+              onlyIfMissing: true, // igual que league
               parse: function (raw) {
                 return raw === null ? null : cleanLeagueCodes(raw);
               },
@@ -966,13 +972,23 @@
            * se haya cambiado con config.html o updateSettings).
            * Sin registro previo (primera vez) no se pisa nada: solo se anota.
            * Los defaults que son función (deviceId) nunca se reemplazan.
+           * Los settings con onlyIfMissing (la liga) solo se crean si la clave
+           * NO existe; lo guardado no se toca (lo actualiza el servidor).
            */
           init() {
             const previous = this._readDefaults();
             const current = {};
             Object.keys(this.schema).forEach((name) => {
               const def = this.schema[name];
-              let value = def.parse(this._read(def.key));
+              const raw = this._read(def.key);
+              if (def.onlyIfMissing) {
+                // Solo crear el default si no existe; si existe, se respeta
+                if (raw === null) this._write(def.key, def.defaultValue);
+                const parsed = def.parse(raw === null ? def.defaultValue : raw);
+                this.values[name] = parsed === null ? def.defaultValue : parsed;
+                return; // no entra en el registro de defaults
+              }
+              let value = def.parse(raw);
               // defaultValue puede ser una función (ej. id generado al azar)
               const isFn = typeof def.defaultValue === "function";
               if (!isFn) {

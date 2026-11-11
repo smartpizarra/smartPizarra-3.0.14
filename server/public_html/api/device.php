@@ -4,7 +4,7 @@
  *  SMART PIZARRA - API DE DISPOSITIVOS
  *  URL: https://smartpizarra.cloud/api/device.php
  * =====================================================================
- *  La llaman fingerprint.html y loading.html desde la TV box.
+ *  La llaman loading, config, connection y fingerprint desde la TV box.
  *
  *  PETICIÓN (POST, application/x-www-form-urlencoded: así el WebView no
  *  hace la verificación previa CORS)
@@ -16,10 +16,13 @@
  *  QUÉ HACE
  *    - Equipo nuevo: lo registra como "pending" (límite por IP y hora).
  *    - Equipo conocido: comprueba el secreto y anota la consulta.
- *    - event=boot: anota el arranque en el historial (sp_boots, máx.
- *      boots_per_device_per_hour por equipo) y refresca la "última
- *      conexión" del panel (online_at). Las consultas de fingerprint.html
- *      (cada pocos segundos) no cuentan como arranques.
+ *    - TODA consulta válida refresca la "última conexión" del panel
+ *      (online_at) y la última consulta (last_seen_at), sea de la página
+ *      que sea (api/media.php hace lo mismo con mirror.html).
+ *    - event=boot (SOLO lo envía loading.html al arrancar): además anota
+ *      el arranque en el historial (sp_boots, máx. boots_per_device_per_hour
+ *      por equipo). Es lo ÚNICO que escribe en el historial: las consultas
+ *      de config, connection y fingerprint no cuentan como arranques.
  *    - Devuelve su estado. Solo quien tiene el secreto puede consultarlo:
  *      conocer el ID (que se ve en pantalla y en el QR) no basta.
  *
@@ -78,14 +81,15 @@ try {
         // Otro equipo (o alguien) usa este ID: no se revela su estado.
         // Se resuelve borrando el registro desde el panel.
         Http::json(['ok' => false, 'error' => 'secret_mismatch'], 403);
-    } elseif (!$isBoot) {
+    } else {
+        // Cualquier página: refresca la última conexión (online_at) y la consulta
         DeviceRepository::touch($id, $version, $ip);
     }
 
     if ($isBoot) {
-        // Arranque de loading.html: refresca la última conexión del panel y
-        // lo anota en el historial (con límite por equipo y hora).
-        DeviceRepository::markBoot($id, $version, $ip);
+        // Arranque de loading.html: SOLO él escribe en el historial
+        // (con límite por equipo y hora). Un equipo recién creado ya tiene
+        // online_at = ahora (create()).
         $perHour = (int) ($config['boots_per_device_per_hour'] ?? 30);
         if (RateLimiter::hit('boot:' . $id, $perHour, 3600)) {
             BootLog::record($id, $version, $ip, (int) ($config['boot_history_days'] ?? 365));

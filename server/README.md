@@ -19,7 +19,9 @@ En el panel cada equipo muestra:
 - **Última conexión**: `● En línea · hace 20 s`, `● Desconectado · hace 3 h` o `Sin conexión registrada`. La refrescan cada arranque de `loading.html` y la señal de la app nativa (`api/ping.php`). Se recalcula sola cada 30 s;
 - **Arranques**: cuántas veces se ejecutó `loading.html` en ese equipo y la fecha del último. El botón **Historial** abre la lista de arranques (fecha y hora, IP y versión; los 300 más recientes).
 
-Cada vez que se ejecuta `loading.html`, llama a `api/device.php` con `event=boot`. El servidor guarda una fila en `sp_boots` y actualiza la última conexión. `fingerprint.html` no envía `event`, así que sus consultas no cuentan como arranques. En `config.php`, `boot_history_days` (365) fija cuántos días se guardan y `boots_per_device_per_hour` (30) limita las filas si la app se reinicia en bucle. Al eliminar un equipo se borra también su historial.
+Cada vez que se ejecuta `loading.html`, llama a `api/device.php` con `event=boot`. El servidor guarda una fila en `sp_boots`. **Solo `loading.html` escribe en el historial**: `config.html`, `connection.html` y `fingerprint.html` no envían `event`, así que sus consultas no cuentan como arranques.
+
+**Última conexión**: la refresca **cualquier página que habla con el servidor** (`loading`, `config`, `connection` y `fingerprint` por `api/device.php`; `mirror` por `api/media.php`, al pedir la lista o descargar), además de la señal de la app nativa (`api/ping.php`). En `config.php`, `boot_history_days` (365) fija cuántos días se guardan y `boots_per_device_per_hour` (30) limita las filas si la app se reinicia en bucle. Al eliminar un equipo se borra también su historial.
 
 ## Usuarios
 

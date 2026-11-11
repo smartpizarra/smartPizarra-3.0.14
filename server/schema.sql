@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   status        VARCHAR(10)  NOT NULL DEFAULT 'pending', -- pending | authorized | revoked
   media_enabled TINYINT(1)   NOT NULL DEFAULT 0, -- 1 = el administrador le permite mostrar imágenes/videos (mirror.html)
   media_enabled_at DATETIME  NULL,              -- último cambio de ese permiso (UTC)
-  leagues_all   TINYINT(1)   NOT NULL DEFAULT 1, -- 1 = todas las ligas de su usuario; 0 = solo las de sp_device_leagues
+  league_id     INT UNSIGNED NULL,              -- liga del equipo (sp_leagues.id, la elige el usuario); NULL = sin liga. FK al final del archivo
   user_id       INT UNSIGNED NULL,              -- usuario dueño (sp_users.id); NULL = sin asignar
   label         VARCHAR(100) NULL,              -- ALIAS libre puesto desde el panel
   app_version   VARCHAR(20)  NULL,              -- versión que informó el equipo
@@ -187,12 +187,8 @@ CREATE TABLE IF NOT EXISTS sp_user_leagues (
   CONSTRAINT fk_ul_league FOREIGN KEY (league_id) REFERENCES sp_leagues (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Ligas elegidas por el usuario para cada equipo (solo si sp_devices.leagues_all = 0).
-CREATE TABLE IF NOT EXISTS sp_device_leagues (
-  device_id   VARCHAR(32)  NOT NULL,
-  league_id   INT UNSIGNED NOT NULL,
-  PRIMARY KEY (device_id, league_id),
-  KEY idx_dl_league (league_id),
-  CONSTRAINT fk_dl_device FOREIGN KEY (device_id) REFERENCES sp_devices (device_id) ON DELETE CASCADE,
-  CONSTRAINT fk_dl_league FOREIGN KEY (league_id) REFERENCES sp_leagues (id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Liga de cada equipo (sp_devices.league_id): FK aquí porque sp_leagues se crea después de sp_devices.
+ALTER TABLE sp_devices
+  ADD KEY idx_device_league (league_id),
+  ADD CONSTRAINT fk_device_league FOREIGN KEY (league_id) REFERENCES sp_leagues (id) ON DELETE SET NULL;

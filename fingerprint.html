@@ -654,134 +654,73 @@
         var FIT_RATIO = 0.9; // fracción de la pantalla (girada) que ocupa la tarjeta
         var WATCH_MS = 1000; // cada cuánto se vuelven a leer los settings
 
-        /** Ligas de cada opción ("leagues" en los JSON). IGUALES a loading.html. */
-        var LEAGUE_OPTIONS = {
-          mlb: "LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
-          nba: "NBA,CBK,NBAPROP,WNBA,WCBK,EUBK",
-          nflnhl: "NHL,NFL,CFB,CFBAA,CFL,SOC,SOCCER,BOX,BOXING,TEN,TENNIS",
-          todos: "",
-        };
-
         /*
-         * LIGAS DEL SERVIDOR (2026-11-11). El administrador asigna ligas al
-         * usuario del equipo en smartpizarra.cloud; api/device.php las envía
-         * a los equipos autorizados (campo leagueOptions) y se guardan en
-         * "smartpizarra.leagueOptions":
-         *   {"rev":"…","options":[{"code":"mlb","label":"MLB","values":"LIDOM,MLB"},…]}
-         * Si existen, REEMPLAZAN a LEAGUE_OPTIONS: una opción por tipo de
-         * liga, en ese orden, más "todos" = todas sus ligas juntas. Sin esa
-         * clave (usuario sin ligas) se usa LEAGUE_OPTIONS fija de siempre.
+         * LIGA DEL EQUIPO (2026-11-11). La asigna el USUARIO en
+         * smartpizarra.cloud/cuenta/ ("Sin liga" o UNA de las ligas que le
+         * dio el administrador); en la TV NO se elige ni se cambia.
+         * api/device.php y api/media.php la envían (campo deviceLeague) y
+         * se guarda en localStorage:
+         *   "smartpizarra.league"  = código del tipo (p. ej. "mlb"); "" = sin liga
+         *   "smartpizarra.leagues" = códigos ("LIDOM,MLB,KO");       "" = sin liga
          * MISMO bloque en loading, config, connection, fingerprint y mirror.
          */
-        var LEAGUE_SERVER_KEY = "smartpizarra.leagueOptions";
-        var LEAGUE_ALL = "todos";
+        var DEVICE_LEAGUE_KEY = "smartpizarra.league";
+        var DEVICE_LEAGUES_KEY = "smartpizarra.leagues";
 
-        /**
-         * Valida las ligas que manda el servidor (o las guardadas).
-         * @returns {{rev:string, options:Array<{code:string,label:string,values:string}>}|null}
-         */
-        function cleanServerLeagues(data) {
-          if (!data || typeof data !== "object" || !(data.options instanceof Array)) return null;
-          var out = [];
-          var seen = {};
-          for (var i = 0; i < data.options.length && out.length < 50; i++) {
-            var o = data.options[i] || {};
-            var code = typeof o.code === "string" ? o.code.trim().toLowerCase() : "";
-            var values = typeof o.values === "string" ? o.values.toUpperCase().replace(/\s+/g, "") : "";
-            if (!/^[a-z0-9_-]{1,20}$/.test(code) || code === LEAGUE_ALL || seen[code]) continue;
-            if (!/^[A-Z0-9_]+(,[A-Z0-9_]+)*$/.test(values)) continue;
-            seen[code] = true;
-            var label = typeof o.label === "string" ? o.label.trim().slice(0, 60) : "";
-            out.push({ code: code, label: label || code.toUpperCase(), values: values });
-          }
-          return out.length ? { rev: String(data.rev || ""), options: out } : null;
+        /** @returns {string} Código de tipo válido (minúsculas) o "". */
+        function cleanLeagueType(value) {
+          var v = typeof value === "string" ? value.trim().toLowerCase() : "";
+          return /^[a-z0-9_-]{1,20}$/.test(v) ? v : "";
         }
 
-        /** @returns {object|null} Ligas del servidor guardadas (validadas) o null. */
-        function readServerLeagues() {
-          var raw = null;
+        /** @returns {string} Códigos válidos "A,B,C" (mayúsculas, sin espacios) o "". */
+        function cleanLeagueCodes(value) {
+          var v = typeof value === "string" ? value.toUpperCase().replace(/\s+/g, "") : "";
+          return /^[A-Z0-9_]+(,[A-Z0-9_]+)*$/.test(v) ? v : "";
+        }
+
+        /**
+         * Liga guardada del equipo (lo que va en los JSON). Sin liga o con
+         * datos no válidos => "" en los dos.
+         * @returns {{league:string, leagues:string}}
+         */
+        function readDeviceLeague() {
+          var league = "";
+          var leagues = "";
           try {
-            raw = window.localStorage.getItem(LEAGUE_SERVER_KEY);
+            league = cleanLeagueType(window.localStorage.getItem(DEVICE_LEAGUE_KEY));
+            leagues = cleanLeagueCodes(window.localStorage.getItem(DEVICE_LEAGUES_KEY));
           } catch (e) {
-            return null;
+            /* sin localStorage: sin liga */
           }
-          if (!raw) return null;
-          try {
-            return cleanServerLeagues(JSON.parse(raw));
-          } catch (e) {
-            return null;
-          }
+          if (!league || !leagues) return { league: "", leagues: "" };
+          return { league: league, leagues: leagues };
         }
 
         /**
-         * Opciones de ligas EFECTIVAS, en orden: las del servidor + "todos"
-         * (todas sus ligas juntas) o, sin ellas, la tabla fija LEAGUE_OPTIONS
-         * (cuyas entradas pueden ser texto o {label, values}).
-         * @returns {Array<{code:string,label:string,values:string}>}
+         * Guarda la liga de una respuesta de api/device.php o api/media.php.
+         * Solo si trae el campo deviceLeague (equipos autorizados); null =
+         * "Sin liga" => "" en las dos claves.
+         * @returns {boolean} true si cambió.
          */
-        function leagueOptionList() {
-          var server = readServerLeagues();
-          var list = [];
-          var i;
-          if (server) {
-            var all = [];
-            var seen = {};
-            for (i = 0; i < server.options.length; i++) {
-              list.push(server.options[i]);
-              var codes = server.options[i].values.split(",");
-              for (var j = 0; j < codes.length; j++) {
-                if (!seen[codes[j]]) {
-                  seen[codes[j]] = true;
-                  all.push(codes[j]);
-                }
-              }
-            }
-            list.push({ code: LEAGUE_ALL, label: "TODOS", values: all.join(",") });
-            return list;
-          }
-          for (var code in LEAGUE_OPTIONS) {
-            if (!Object.prototype.hasOwnProperty.call(LEAGUE_OPTIONS, code)) continue;
-            var fixed = LEAGUE_OPTIONS[code];
-            list.push({
-              code: code,
-              label: typeof fixed === "string" ? code.toUpperCase() : fixed.label,
-              values: typeof fixed === "string" ? fixed : fixed.values,
-            });
-          }
-          return list;
-        }
-
-        /**
-         * @param {string} code Opción (mlb, nba, todos...).
-         * @returns {string|null} Sus ligas ("" = todas, solo en la tabla fija) o null si no existe.
-         */
-        function leagueValuesFor(code) {
-          var list = leagueOptionList();
-          for (var i = 0; i < list.length; i++) {
-            if (list[i].code === code) return list[i].values;
-          }
-          return null;
-        }
-
-        /**
-         * Guarda las ligas de una respuesta de api/device.php. Solo si trae
-         * el campo leagueOptions (equipos autorizados); null => se borra la
-         * clave (vuelve la tabla fija). Si la opción guardada en
-         * smartpizarra.league ya no existe, pasa a "todos".
-         * @returns {boolean} true si cambió algo.
-         */
-        function storeServerLeagues(res) {
-          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "leagueOptions")) {
+        function storeDeviceLeague(res) {
+          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceLeague")) {
             return false;
           }
-          var clean = cleanServerLeagues(res.leagueOptions);
-          var next = clean ? JSON.stringify(clean) : null;
+          var d = res.deviceLeague;
+          var league = d && typeof d === "object" ? cleanLeagueType(d.code) : "";
+          var leagues = d && typeof d === "object" ? cleanLeagueCodes(d.values) : "";
+          if (!league || !leagues) {
+            league = "";
+            leagues = "";
+          }
           try {
-            if (window.localStorage.getItem(LEAGUE_SERVER_KEY) === next) return false;
-            if (next === null) window.localStorage.removeItem(LEAGUE_SERVER_KEY);
-            else window.localStorage.setItem(LEAGUE_SERVER_KEY, next);
-            var saved = (window.localStorage.getItem("smartpizarra.league") || "").trim().toLowerCase();
-            if (leagueValuesFor(saved) === null) window.localStorage.setItem("smartpizarra.league", LEAGUE_ALL);
+            var ls = window.localStorage;
+            // Restos de la versión anterior (varias ligas por equipo)
+            ls.removeItem("smartpizarra.leagueOptions");
+            if (ls.getItem(DEVICE_LEAGUE_KEY) === league && ls.getItem(DEVICE_LEAGUES_KEY) === leagues) return false;
+            ls.setItem(DEVICE_LEAGUE_KEY, league);
+            ls.setItem(DEVICE_LEAGUES_KEY, leagues);
           } catch (e) {
             return false;
           }
@@ -925,12 +864,6 @@
           return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
         }
 
-        /** @returns {string|null} Opción de ligas guardada si existe (servidor o LEAGUE_OPTIONS), o null. */
-        function readLeague() {
-          var option = (readStorage(KEYS.league) || "").trim().toLowerCase();
-          return leagueValuesFor(option) !== null ? option : null;
-        }
-
         /**
          * Agrega a un mensaje los settings leídos AHORA de localStorage
          * (null en los que no existen). Mismos nombres que loading.html.
@@ -938,14 +871,14 @@
          * @returns {object} El mismo mensaje, completado.
          */
         function withSettings(msg) {
-          var league = readLeague();
+          var lg = readDeviceLeague(); // liga del equipo ("" = sin liga)
           var appScale = readScale(KEYS.appScale);
           msg.version = readText(KEYS.version);
           msg.url = readText(KEYS.url);
           msg.email = readText(KEYS.email);
           msg.deviceId = readText(KEYS.deviceId);
-          msg.league = league;
-          msg.leagues = league === null ? null : leagueValuesFor(league); // del servidor si hay ligas asignadas
+          msg.league = lg.league; // código del tipo de liga ("" = sin liga; la asigna el usuario en /cuenta/)
+          msg.leagues = lg.leagues; // códigos de la liga ("" = sin liga)
           msg.orientation = readOrientation(); // global
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
@@ -1777,8 +1710,8 @@
                     ? "revoked"
                     : "pending";
               setAuthorizedFlag(res.authorized === true);
-              // Ligas asignadas por el administrador (solo si está autorizado)
-              storeServerLeagues(res);
+              // Liga del equipo (la asigna el usuario en /cuenta/; solo si está autorizado)
+              storeDeviceLeague(res);
             } else if (res && res.httpStatus === 403) {
               // El ID existe en el servidor con otro secreto: se resuelve
               // eliminándolo en el panel. Por seguridad, sin autorización.
