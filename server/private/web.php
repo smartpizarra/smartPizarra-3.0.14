@@ -451,6 +451,12 @@ function overlayNoun(string $kind): array
     return $kind === 'text' ? ['Tira', 'a'] : ['Banner', 'o'];
 }
 
+/** ¿Está asignada a algún equipo? (scope none = sin asignar: no se ve en ninguna pantalla) */
+function overlayAssigned(array $o): bool
+{
+    return $o['scope'] !== 'none' && ($o['scope'] === 'all' || !empty($o['users']) || !empty($o['devices']));
+}
+
 /** Resumen de una tira/banner para las listas: "Tira · Abajo · Mediana · Desplazándose (normal)". */
 function overlaySummary(array $o): string
 {

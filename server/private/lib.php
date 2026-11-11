@@ -1448,6 +1448,10 @@ final class AdRepository
  *    de ciertos usuarios (users) o equipos concretos (devices). Llega a
  *    cualquier equipo AUTORIZADO (como los anuncios).
  * Fechas opcionales (UTC) y pausa (active = 0).
+ * ASIGNACIÓN (2026-11-11): se CREAN SIN EQUIPOS (scope none = "sin
+ * asignar", no se ve en ninguna pantalla) y después se ASIGNAN con
+ * assign() (formulario "Asignar a equipos" de cada tira en los paneles).
+ * update() cambia el estilo, las fechas y la pausa, nunca el destino.
  * En cada equipo se muestra como mucho UNA por posición (resolve()):
  *  1) la del administrador antes que la del usuario;
  *  2) la más concreta: equipo > usuario > todos;
@@ -1462,8 +1466,8 @@ final class OverlayRepository
     public const SIZES = ['s', 'm', 'l'];
     public const MOTIONS = ['static', 'scroll'];
     public const SPEEDS = ['slow', 'normal', 'fast'];
-    /** Destinos del administrador (el usuario solo usa all / devices). */
-    public const SCOPES = ['all', 'users', 'devices'];
+    /** Destinos: none = sin asignar (al crear); el usuario solo usa none / all / devices. */
+    public const SCOPES = ['none', 'all', 'users', 'devices'];
     /** Máximo de caracteres del mensaje de una tira. */
     public const MAX_MESSAGE = 200;
     /** Imágenes admitidas para un banner (solo imágenes, nada de video). */
@@ -1565,22 +1569,43 @@ final class OverlayRepository
         }
     }
 
-    /** Cambia los datos (no la imagen ni el tipo). Mismo $data que create(). */
+    /**
+     * Cambia estilo, fechas y pausa (no la imagen, el tipo ni el DESTINO:
+     * eso es assign()). Claves de $data: las de create() salvo
+     * user/scope/users/devices, que aquí no se usan.
+     */
     public static function update(int $id, array $data): void
     {
+        Database::pdo()->prepare(
+            'UPDATE sp_overlays SET name = ?, message = IF(kind = \'text\', ?, NULL), bg_color = ?, fg_color = ?,
+               motion = ?, speed = ?, band_size = ?, place = ?, active = ?, starts_at = ?, ends_at = ?,
+               updated_at = ? WHERE id = ?'
+        )->execute([
+            $data['name'], $data['message'], $data['bg'], $data['fg'], $data['motion'], $data['speed'],
+            $data['size'], $data['place'], $data['active'] ? 1 : 0, $data['starts'], $data['ends'],
+            Database::now(), $id,
+        ]);
+    }
+
+    /**
+     * ASIGNA una tira/banner: none (sin asignar), all (todos los equipos;
+     * los del usuario si es suya), users (equipos de ciertos usuarios; solo
+     * del administrador) o devices (equipos concretos; si es de un usuario,
+     * solo los SUYOS). Un usuario no puede usar "users" (pasa a none).
+     * @param ?int $owner Dueño de la tira (null = administrador).
+     */
+    public static function assign(int $id, ?int $owner, string $scope, array $users, array $devices): void
+    {
+        $scope = self::pick($scope, self::SCOPES);
+        if ($owner !== null && $scope === 'users') {
+            $scope = 'none';
+        }
         $pdo = Database::pdo();
         $pdo->beginTransaction();
         try {
-            $pdo->prepare(
-                'UPDATE sp_overlays SET name = ?, message = IF(kind = \'text\', ?, NULL), bg_color = ?, fg_color = ?,
-                   motion = ?, speed = ?, band_size = ?, place = ?, scope = ?, active = ?, starts_at = ?, ends_at = ?,
-                   updated_at = ? WHERE id = ?'
-            )->execute([
-                $data['name'], $data['message'], $data['bg'], $data['fg'], $data['motion'], $data['speed'],
-                $data['size'], $data['place'], $data['scope'], $data['active'] ? 1 : 0, $data['starts'],
-                $data['ends'], Database::now(), $id,
-            ]);
-            self::writeTargets($id, $data['user'], $data['scope'], $data['users'], $data['devices']);
+            $pdo->prepare('UPDATE sp_overlays SET scope = ?, updated_at = ? WHERE id = ?')
+                ->execute([$scope, Database::now(), $id]);
+            self::writeTargets($id, $owner, $scope, $users, $devices);
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();

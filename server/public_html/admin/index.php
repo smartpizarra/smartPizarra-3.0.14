@@ -46,9 +46,10 @@
  *
  *  - TIRAS Y BANNERS (botón "Tiras", ?view=overlays, 2026-11-11): franja
  *    ARRIBA o ABAJO de mirror.html, tira de texto (colores, fija o
- *    desplazándose) o banner de imagen; destino: todos los equipos, los
- *    de ciertos usuarios o equipos concretos; fechas opcionales, pausar,
- *    editar, eliminar; vista previa del banner (?ov=ID). Tienen prioridad
+ *    desplazándose) o banner de imagen; fechas opcionales, pausar,
+ *    editar, eliminar; vista previa del banner (?ov=ID). Se CREAN SIN
+ *    EQUIPOS y luego se ASIGNAN ("Asignar a equipos": sin asignar, todos
+ *    los equipos, los de ciertos usuarios o equipos concretos; ov_assign). Tienen prioridad
  *    sobre las del usuario en la misma posición. Debajo, las de TODOS los
  *    usuarios (solo pausar/activar y eliminar: moderación).
  *    Ver OverlayRepository (private/lib.php) y api/media.php.
@@ -241,16 +242,13 @@ function adFields(?array $ad, array $users, array $devices): string
 }
 
 /**
- * Campos de DESTINO, FECHAS y ACTIVO de una tira/banner del administrador
- * (el estilo lo pone overlayFields() de web.php).
+ * Campos de FECHAS y ACTIVA de una tira/banner del administrador (el estilo
+ * lo pone overlayFields() de web.php; el destino, overlayAdminTargets()).
  * @param array<string,mixed>|null $o Tira a editar (null = nueva).
  */
-function overlayAdminFields(?array $o, array $users, array $devices): string
+function overlayAdminFields(?array $o): string
 {
     $p = $o ? 'o' . (int) $o['id'] . '-' : 'ovnew-';
-    $scope = $o['scope'] ?? 'all';
-    $chosenUsers = array_flip($o['users'] ?? []);
-    $chosenDevices = array_flip($o['devices'] ?? []);
     $utc = static fn(?string $v) => $v ? (string) utcTs($v) : '';
     $date = static fn(string $name, string $text, ?string $value) =>
         '<div><label for="' . $p . $name . '">' . $text . '</label>'
@@ -261,8 +259,22 @@ function overlayAdminFields(?array $o, array $users, array $devices): string
         . $date('starts', 'Desde (opcional)', $o['starts_at'] ?? null)
         . $date('ends', 'Hasta (opcional)', $o['ends_at'] ?? null)
         . '<div><label>&nbsp;</label><label class="inline"><input type="checkbox" name="active" value="1"' . (!$o || (int) $o['active'] === 1 ? ' checked' : '') . '> Activa</label></div>'
-        . '</div><fieldset class="targets" data-scope><legend>Mostrar en</legend>';
-    foreach (['all' => 'Todos los equipos', 'users' => 'Equipos de estos usuarios', 'devices' => 'Estos equipos'] as $k => $text) {
+        . '</div>';
+    return $html;
+}
+
+/**
+ * Formulario "Asignar a equipos" de una tira/banner del administrador:
+ * sin asignar, todos los equipos, los de ciertos usuarios (también sus
+ * equipos futuros) o equipos concretos.
+ */
+function overlayAdminTargets(array $o, array $users, array $devices): string
+{
+    $scope = (string) $o['scope'];
+    $chosenUsers = array_flip($o['users']);
+    $chosenDevices = array_flip($o['devices']);
+    $html = '<fieldset class="targets" data-scope><legend>Mostrar en</legend>';
+    foreach (['none' => 'Sin asignar', 'all' => 'Todos los equipos', 'users' => 'Equipos de estos usuarios', 'devices' => 'Estos equipos'] as $k => $text) {
         $html .= '<label class="inline"><input type="radio" name="scope" value="' . $k . '"' . ($scope === $k ? ' checked' : '') . '> ' . $text . '</label>';
     }
     $html .= '<div class="pick" data-for="users"><span class="owner">Usuarios (también sus equipos futuros):</span>';
@@ -288,25 +300,32 @@ function overlayAdminFields(?array $o, array $users, array $devices): string
 }
 
 /**
- * Destino, fechas y activo de una tira/banner del administrador desde el
- * formulario. Si algo no es válido redirige a ?view=overlays.
- * @return array{user:null,scope:string,active:bool,starts:?string,ends:?string,users:int[],devices:string[]}
+ * Asignación de una tira/banner del administrador desde el formulario
+ * "Asignar a equipos". Si falta marcar algo redirige a ?view=overlays.
+ * @return array{0:string,1:int[],2:string[]} [scope, usuarios, equipos]
  */
-function overlayAdminData(): array
+function overlayAdminTargetData(): array
 {
-    $scope = param($_POST, 'scope');
-    if (!in_array($scope, OverlayRepository::SCOPES, true)) {
-        $scope = 'all';
-    }
+    $scope = OverlayRepository::pick(param($_POST, 'scope'), OverlayRepository::SCOPES);
     $users = array_values(array_filter(array_map('intval', (array) ($_POST['users'] ?? [])), static fn($v) => $v > 0));
     $devices = array_values(array_filter(array_map(static fn($v) => strtoupper(trim((string) $v)), (array) ($_POST['devices'] ?? [])),
         static fn($v) => DeviceRepository::isValidId($v)));
     if ($scope === 'users' && !$users) {
-        redirectWith('Marca al menos un usuario o elige "Todos los equipos".', 'view=overlays');
+        redirectWith('Marca al menos un usuario, o elige otra opción.', 'view=overlays');
     }
     if ($scope === 'devices' && !$devices) {
-        redirectWith('Marca al menos un equipo o elige "Todos los equipos".', 'view=overlays');
+        redirectWith('Marca al menos un equipo, o elige otra opción.', 'view=overlays');
     }
+    return [$scope, $users, $devices];
+}
+
+/**
+ * Fechas y activa de una tira/banner del administrador desde el formulario
+ * (crear o editar). Una NUEVA queda sin asignar (scope none).
+ * @return array{user:null,scope:string,active:bool,starts:?string,ends:?string,users:int[],devices:string[]}
+ */
+function overlayAdminData(): array
+{
     $tz = (int) param($_POST, 'tz');
     $starts = localToUtc(param($_POST, 'starts'), $tz);
     $ends = localToUtc(param($_POST, 'ends'), $tz);
@@ -318,18 +337,21 @@ function overlayAdminData(): array
     }
     return [
         'user' => null,
-        'scope' => $scope,
+        'scope' => 'none', // se asigna después (ov_assign)
         'active' => param($_POST, 'active') === '1',
         'starts' => $starts,
         'ends' => $ends,
-        'users' => $users,
-        'devices' => $devices,
+        'users' => [],
+        'devices' => [],
     ];
 }
 
 /** Texto del destino de una tira/banner (del administrador o de un usuario). */
 function overlayTargetText(array $o, array $usersById): string
 {
+    if (!overlayAssigned($o)) {
+        return 'Sin asignar: no se muestra en ninguna pantalla';
+    }
     if ($o['user_id'] !== null) {
         return $o['scope'] === 'devices' ? 'Equipos: ' . ($o['devices'] ? implode(', ', $o['devices']) : 'ninguno') : 'Todos los equipos del usuario';
     }
@@ -565,7 +587,7 @@ try {
                 redirectWith('Esa tira o banner ya no existe.', 'view=overlays');
             }
             // Las de los usuarios: el administrador solo puede pausar/activar o eliminar
-            if ($action === 'ov_update' && $ov['user_id'] !== null) {
+            if (($action === 'ov_update' || $action === 'ov_assign') && $ov['user_id'] !== null) {
                 redirectWith('Las tiras de los usuarios solo se pueden pausar o eliminar.', 'view=overlays');
             }
             [$what, $g] = overlayNoun((string) ($ov['kind'] ?? param($_POST, 'kind')));
@@ -585,13 +607,20 @@ try {
                         redirectWith($style, 'view=overlays');
                     }
                     $data = $style + overlayAdminData();
+                    [$what, $g] = overlayNoun($style['kind']);
                     if ($action === 'ov_create') {
                         OverlayRepository::create($data, $upload[0] ?? null, $upload[1] ?? '', $upload[2] ?? null);
-                    } else {
-                        OverlayRepository::update($oid, $data);
+                        redirectWith("$what «{$style['name']}» cread$g. Ahora usa «Asignar a equipos» para elegir dónde se muestra.", 'view=overlays');
                     }
-                    [$what, $g] = overlayNoun($style['kind']);
-                    redirectWith("$what «{$style['name']}» " . ($action === 'ov_create' ? "cread$g" : "guardad$g") . '. Las pantallas lo aplican en su próxima consulta (≈ 1 min).', 'view=overlays');
+                    OverlayRepository::update($oid, $data);
+                    redirectWith("$what «{$style['name']}» guardad$g. Las pantallas lo aplican en su próxima consulta (≈ 1 min).", 'view=overlays');
+                case 'ov_assign':
+                    [$scope, $aUsers, $aDevices] = overlayAdminTargetData();
+                    OverlayRepository::assign($oid, null, $scope, $aUsers, $aDevices);
+                    $text = ['none' => 'sin asignar: no se mostrará en ninguna pantalla', 'all' => 'asignad' . $g . ' a todos los equipos',
+                        'users' => 'asignad' . $g . ' a los equipos de ' . count($aUsers) . ' usuario(s)',
+                        'devices' => 'asignad' . $g . ' a ' . count($aDevices) . ' equipo(s)'][$scope];
+                    redirectWith("$what «{$ov['name']}» $text." . ($scope === 'none' ? '' : ' Se aplica en la próxima consulta (≈ 1 min).'), 'view=overlays');
                 case 'ov_pause':
                 case 'ov_resume':
                     OverlayRepository::setActive($oid, $action === 'ov_resume');
@@ -1370,7 +1399,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <form method="post" enctype="multipart/form-data" autocomplete="off"><?= csrfField() ?>
         <input type="hidden" name="action" value="ov_create">
         <?= overlayFields(null, 'ovnew-') ?>
-        <?= overlayAdminFields(null, $users, $allDevices) ?>
+        <?= overlayAdminFields(null) ?>
+        <p class="owner">Se crea <strong>sin equipos</strong>: después, en la lista, usa «Asignar a equipos».</p>
         <button class="primary" type="submit">Crear</button>
         <span class="owner">Las fechas usan la hora de este navegador.</span>
       </form>
@@ -1403,12 +1433,21 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               <button type="submit">Eliminar</button></form>
           </div>
           <?php if ($o['user_id'] === null): ?>
+            <!-- Asignación a equipos (aparte de la edición) -->
+            <details class="edit" <?= overlayAssigned($o) ? '' : 'open' ?>>
+              <summary>Asignar a equipos</summary>
+              <form method="post"><?= csrfField() ?>
+                <input type="hidden" name="action" value="ov_assign"><input type="hidden" name="overlayId" value="<?= $oid ?>">
+                <?= overlayAdminTargets($o, $users, $allDevices) ?>
+                <button class="primary" type="submit">Guardar asignación</button>
+              </form>
+            </details>
             <details class="edit">
               <summary>Editar</summary>
               <form method="post" autocomplete="off"><?= csrfField() ?>
                 <input type="hidden" name="action" value="ov_update"><input type="hidden" name="overlayId" value="<?= $oid ?>">
                 <?= overlayFields($o, 'o' . $oid . '-') ?>
-                <?= overlayAdminFields($o, $users, $allDevices) ?>
+                <?= overlayAdminFields($o) ?>
                 <button class="primary" type="submit">Guardar cambios</button>
               </form>
             </details>

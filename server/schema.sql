@@ -207,7 +207,7 @@ CREATE TABLE IF NOT EXISTS sp_overlays (
   stored_name   VARCHAR(80)  NULL DEFAULT NULL,        -- nombre en private/media/ (ov-aleatorio.ext)
   size_bytes    BIGINT UNSIGNED NULL DEFAULT NULL,
   sha256        CHAR(64)     NULL DEFAULT NULL,        -- huella: si cambia, el equipo la vuelve a descargar
-  scope         VARCHAR(8)   NOT NULL DEFAULT 'all',   -- all | users (solo admin) | devices
+  scope         VARCHAR(8)   NOT NULL DEFAULT 'none',  -- none (sin asignar) | all | users (solo admin) | devices
   active        TINYINT(1)   NOT NULL DEFAULT 1,       -- 0 = pausada
   starts_at     DATETIME     NULL DEFAULT NULL,        -- desde (UTC); NULL = ya
   ends_at       DATETIME     NULL DEFAULT NULL,        -- hasta (UTC, sin incluir); NULL = sin fin

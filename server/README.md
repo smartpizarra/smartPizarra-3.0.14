@@ -211,8 +211,9 @@ Cómo funciona:
 
 - Una **tira** es una franja con un mensaje (colores de fondo y de letra), **fija** o **desplazándose** (velocidad lenta, normal o rápida). Un **banner** es una franja con una imagen (JPG, PNG, WEBP o GIF; mejor ancha, p. ej. 1920×160).
 - Va **arriba o abajo** de la pantalla de `mirror.html`, con tamaño pequeña, mediana o grande. El contenido se ajusta al espacio que queda (la franja no lo tapa). Solo se ve mientras hay contenido o anuncios en pantalla, no sobre los avisos.
-- El **usuario** la pone en todos sus equipos o en algunos, permanente o con fechas. Llega a sus equipos que muestran su contenido (autorizados, con el contenido habilitado y vigencia activa).
-- El **administrador** la pone en todos los equipos, en los de ciertos usuarios o en equipos concretos, con fechas opcionales. Llega a cualquier equipo autorizado. También ve las de los usuarios y puede pausarlas o eliminarlas.
+- Se **crea sin equipos** ("Sin asignar": no se ve en ninguna pantalla) y después se **asigna** con «Asignar a equipos» en cada una. Editarla (texto, colores, fechas…) no cambia su asignación.
+- El **usuario** la asigna a todos sus equipos (también los futuros) o a algunos; es permanente o con fechas. Llega a sus equipos que muestran su contenido (autorizados, con el contenido habilitado y vigencia activa).
+- El **administrador** asigna las suyas a todos los equipos, a los de ciertos usuarios o a equipos concretos, con fechas opcionales. Llegan a cualquier equipo autorizado. También ve las de los usuarios y puede pausarlas o eliminarlas (no asignarlas ni editarlas).
 - En cada pantalla se ve **una arriba y una abajo**: primero la del administrador, luego la más concreta (equipo > usuario > todos) y, si empatan, la editada más recientemente.
 - La TV la recibe en la consulta de `mirror.html` (~60 s). El banner se descarga una sola vez. Si tiene fecha de fin, la TV la quita a su hora aunque no tenga internet.
 - Una tira que se desplaza gasta CPU en el TV box (unos 40 % de un núcleo, medido); una fija, casi nada.
