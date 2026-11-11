@@ -28,6 +28,12 @@
  *    contraseña, se ven sus equipos (?user=ID) y se pueden AUTORIZAR o
  *    REVOCAR TODOS sus equipos de una vez (o uno a uno en cada tarjeta). Al eliminar un usuario sus equipos quedan
  *    sin asignar, con el estado que tenían.
+ *    Organización (2026-11-11): ?view=users es una LISTA COMPACTA (una fila
+ *    por usuario) con buscador (q: empresa, email o teléfono) y filtros por
+ *    estado (us=active|expired|none|temp|nodevices); "Nuevo usuario" va
+ *    plegado. Cada usuario se abre en su FICHA (?view=users&user=ID) con
+ *    secciones separadas: Vigencia, Equipos, Contenido, Datos, Acceso y
+ *    Eliminar. Las acciones hechas desde la ficha vuelven a la ficha.
  *
  *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
  *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
@@ -219,10 +225,10 @@ try {
                         UserRepository::update($uid, $email, $phone, $company);
                         redirectWith("Datos de «{$company}» guardados.", $back);
                     }
-                    [, $password] = UserRepository::create($email, $phone, $company);
-                    // La contraseña temporal se muestra UNA sola vez
+                    [$newId, $password] = UserRepository::create($email, $phone, $company);
+                    // La contraseña temporal se muestra UNA sola vez (en la ficha del usuario nuevo)
                     $_SESSION['newPassword'] = ['email' => $email, 'company' => $company, 'password' => $password];
-                    redirectWith("Usuario «{$company}» creado.", 'view=users');
+                    redirectWith("Usuario «{$company}» creado.", 'view=users&user=' . $newId);
                 case 'user_reset':
                     $password = UserRepository::resetPassword($uid);
                     $_SESSION['newPassword'] = ['email' => $user['email'], 'company' => $user['company'], 'password' => $password];
@@ -335,6 +341,46 @@ try {
     $mediaAll = $loggedIn && $view === 'media' ? MediaRepository::allForAdmin($mediaUser) : [];
     $mediaTotals = $loggedIn && $view === 'media' ? MediaRepository::totals($mediaUser) : [0, 0];
     $mediaBack = http_build_query(array_filter(['view' => 'media', 'user' => $mediaUser]));
+
+    /*
+     * Vista Usuarios organizada: lista compacta filtrada (búsqueda + estado)
+     * o la FICHA de un usuario (?view=users&user=ID).
+     */
+    $userStates = ['all' => 'Todos', 'active' => 'Vigentes', 'expired' => 'Vencidos', 'none' => 'Sin vigencia',
+        'temp' => 'Contraseña temporal', 'nodevices' => 'Sin equipos'];
+    $userState = param($_GET, 'us');
+    if (!isset($userStates[$userState])) {
+        $userState = 'all';
+    }
+    $userCard = $view === 'users' && $userFilter ? ($usersById[$userFilter] ?? null) : null;
+    $userCounts = array_fill_keys(array_keys($userStates), 0);
+    $userList = [];
+    if ($view === 'users') {
+        $needle = mb_strtolower($q);
+        foreach ($users as $u) {
+            // Estados de cada usuario (uno puede estar en varios filtros)
+            $u['validity'] = contentValidity($u['content_until'] ?? null);
+            $tags = ['all', $u['validity']['state']];
+            if ((int) $u['must_change_password'] === 1) {
+                $tags[] = 'temp';
+            }
+            if ((int) $u['devices'] === 0) {
+                $tags[] = 'nodevices';
+            }
+            // La búsqueda (empresa, email o teléfono) se aplica antes de contar
+            if ($needle !== '' && !str_contains(mb_strtolower($u['company'] . ' ' . $u['email'] . ' ' . $u['phone']), $needle)) {
+                continue;
+            }
+            foreach ($tags as $t) {
+                $userCounts[$t]++;
+            }
+            if (in_array($userState, $tags, true)) {
+                $userList[] = $u;
+            }
+        }
+    }
+    // Volver a la ficha tras una acción hecha desde ella
+    $userBack = $userCard ? 'view=users&user=' . (int) $userCard['id'] : 'view=users';
     $flash = $_SESSION['flash'] ?? '';
     unset($_SESSION['flash']);
     // Contraseña temporal recién creada/restablecida (se muestra una vez)
@@ -379,6 +425,12 @@ try {
     $mediaAll = [];
     $mediaTotals = [0, 0];
     $mediaBack = '';
+    $userStates = [];
+    $userState = 'all';
+    $userCard = null;
+    $userCounts = [];
+    $userList = [];
+    $userBack = 'view=users';
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -430,6 +482,29 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .user-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: baseline; }
     .user-name { font-weight: 600; font-size: 1.05rem; }
     .new-user { margin-bottom: 12px; }
+    .new-user summary { cursor: pointer; color: var(--accent); }
+    .new-user[open] summary { margin-bottom: 4px; }
+    /* Lista compacta de usuarios: una fila por usuario, abre su ficha */
+    .user-list { padding: 0; overflow: hidden; }
+    .user-row { display: flex; gap: 10px 14px; align-items: center; flex-wrap: wrap; padding: 12px 16px;
+      color: var(--text); text-decoration: none; border-bottom: 1px solid var(--line); }
+    .user-row:last-child { border-bottom: 0; }
+    .user-row:hover, .user-row:focus { background: var(--bg); }
+    .user-main { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; }
+    .user-main .owner { overflow-wrap: anywhere; }
+    .user-facts { display: flex; gap: 6px 8px; flex-wrap: wrap; align-items: center; }
+    .chev { color: var(--muted); font-size: 1.4rem; line-height: 1; }
+    @media (max-width: 560px) { .chev { display: none; } } /* en móvil la fila entera ya es el enlace */
+    /* Ficha de un usuario */
+    .user-card-head, .section { margin-bottom: 10px; }
+    .section h2 { font-size: 1rem; }
+    .section .validity { margin: 0; }
+    .danger { border-color: var(--bad); }
+    .back { margin-right: 8px; padding: 6px 10px; font-size: .9rem; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+    .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+    .stat b { display: block; font-size: 1.3rem; }
+    .stat span { font-size: .8rem; color: var(--muted); }
     .focus-user { margin-bottom: 12px; }
     /* Historial de arranques */
     .history-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
@@ -486,7 +561,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php endif; ?>
 
   <form class="tools" method="get">
-    <input type="search" name="q" value="<?= h($q) ?>" placeholder="Buscar por ID, alias, empresa o email" aria-label="Buscar">
+    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa o email' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
       <option value="">Todos los usuarios</option>
@@ -496,77 +571,165 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <?php endforeach; ?>
     </select>
     <?php if ($view === 'list' && isset($_GET['filter'])): ?><input type="hidden" name="filter" value="<?= h($filter) ?>"><?php endif; ?>
-    <?php if ($view === 'media'): ?><input type="hidden" name="view" value="media"><?php endif; ?>
+    <?php if ($view === 'media' || $view === 'users'): ?><input type="hidden" name="view" value="<?= h($view) ?>"><?php endif; ?>
+    <?php if ($view === 'users' && $userState !== 'all'): ?><input type="hidden" name="us" value="<?= h($userState) ?>"><?php endif; ?>
     <button type="submit">Buscar</button>
     <button type="button" id="scanBtn" class="primary">Escanear QR</button>
   </form>
 
-  <?php if ($view === 'users' && !$historyDevice): ?>
-    <!-- ================= GESTIÓN DE USUARIOS =================
-         Datos requeridos: email (para entrar en /cuenta/), teléfono y
-         empresa. La contraseña la genera el sistema y la cambia el usuario.
-         Solo el administrador autoriza y revoca equipos. -->
-    <form class="card new-user" method="post" autocomplete="off"><?= csrfField() ?>
-      <h2>Nuevo usuario</h2>
-      <input type="hidden" name="action" value="user_create">
-      <div class="user-grid">
-        <div><label for="nu-company">Empresa</label>
-          <input type="text" id="nu-company" name="company" maxlength="100" required></div>
-        <div><label for="nu-email">Email</label>
-          <input type="email" id="nu-email" name="email" maxlength="190" required></div>
-        <div><label for="nu-phone">Teléfono</label>
-          <input type="tel" id="nu-phone" name="phone" maxlength="30" required placeholder="+52 55 1234 5678"></div>
+  <?php if ($view === 'users' && !$historyDevice && $userCard): $uid = (int) $userCard['id']; $uv = contentValidity($userCard['content_until'] ?? null); ?>
+    <!-- ================= FICHA DE UN USUARIO (?view=users&user=ID) =================
+         Todo lo de un usuario, separado por secciones. Las acciones vuelven aquí ($userBack). -->
+    <section class="card user-card-head">
+      <div class="user-head">
+        <span>
+          <a class="btn back" href="<?= h(panelUrl(['view' => 'users'])) ?>">&larr; Usuarios</a>
+          <span class="user-name"><?= h($userCard['company']) ?></span>
+        </span>
+        <span>
+          <?php if ((int) $userCard['must_change_password'] === 1): ?><span class="badge pending">Contraseña temporal</span><?php endif; ?>
+          <span class="badge <?= ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$uv['state']] ?>"><?= ['active' => 'Vigente', 'expired' => 'Vencida', 'none' => 'Sin vigencia'][$uv['state']] ?></span>
+        </span>
       </div>
-      <button class="primary" type="submit">Crear usuario</button>
-      <span class="owner">Se generará una contraseña temporal para entregarle.</span>
-    </form>
-    <?php if (!$users): ?><div class="card empty">Todavía no hay usuarios.</div><?php endif; ?>
-    <?php foreach ($users as $u): $uid = (int) $u['id']; ?>
-      <section class="card device">
-        <div class="user-head">
-          <span class="user-name"><?= h($u['company']) ?></span>
-          <span class="owner"><?= (int) $u['devices'] ?> equipo(s) · <?= (int) $u['authorized'] ?> autorizado(s)</span>
+      <div class="meta">
+        <?= h($userCard['email']) ?> · Tel. <?= h($userCard['phone']) ?><br>
+        Creado el <?= dateTag($userCard['created_at']) ?>
+        · Último acceso a /cuenta/: <?= $userCard['last_login_at'] ? dateTag($userCard['last_login_at']) : 'nunca' ?>
+      </div>
+      <!-- Resumen en cifras -->
+      <div class="stats">
+        <div class="stat"><b><?= (int) $userCard['devices'] ?></b><span>Equipos</span></div>
+        <div class="stat"><b><?= (int) $userCard['authorized'] ?></b><span>Autorizados</span></div>
+        <div class="stat"><b><?= (int) $userCard['media'] ?></b><span>Archivos</span></div>
+        <div class="stat"><b><?= $uv['state'] === 'active' ? (int) $uv['days'] : '—' ?></b><span>Días de vigencia</span></div>
+      </div>
+    </section>
+
+    <!-- Vigencia del contenido (días) -->
+    <section class="card section">
+      <h2>Vigencia del contenido</h2>
+      <?= validityBlock($userCard, $userBack) ?>
+    </section>
+
+    <!-- Equipos: ver y autorizar/revocar todos -->
+    <section class="card section">
+      <h2>Equipos</h2>
+      <div class="meta"><?= (int) $userCard['devices'] ?> equipo(s) asignado(s), <?= (int) $userCard['authorized'] ?> autorizado(s).
+        Para asignar un equipo, búscalo en Dispositivos y elige este usuario en su selector.</div>
+      <div class="actions">
+        <a class="btn" href="<?= h(panelUrl(['user' => $uid])) ?>">Ver sus equipos</a>
+        <form method="post" data-confirm="¿Autorizar TODOS los equipos de «<?= h($userCard['company']) ?>» (<?= (int) $userCard['devices'] ?>)?"><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_authorize_all"><input type="hidden" name="userId" value="<?= $uid ?>">
+          <input type="hidden" name="back" value="<?= h($userBack) ?>">
+          <button class="ok" type="submit" <?= (int) $userCard['authorized'] === (int) $userCard['devices'] ? 'disabled' : '' ?>>Autorizar todos</button></form>
+        <form method="post" data-confirm="¿Revocar la autorización de TODOS los equipos de «<?= h($userCard['company']) ?>» (<?= (int) $userCard['devices'] ?>)?"><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_revoke_all"><input type="hidden" name="userId" value="<?= $uid ?>">
+          <input type="hidden" name="back" value="<?= h($userBack) ?>">
+          <button class="bad" type="submit" <?= (int) $userCard['devices'] === 0 ? 'disabled' : '' ?>>Revocar todos</button></form>
+      </div>
+    </section>
+
+    <!-- Contenido subido por el usuario -->
+    <section class="card section">
+      <h2>Contenido</h2>
+      <div class="meta"><?= (int) $userCard['media'] ?> archivo(s) subido(s) desde /cuenta/.</div>
+      <div class="actions">
+        <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver su contenido</a>
+      </div>
+    </section>
+
+    <!-- Datos de contacto (editar) -->
+    <section class="card section">
+      <h2>Datos</h2>
+      <form method="post" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="user_update"><input type="hidden" name="userId" value="<?= $uid ?>">
+        <input type="hidden" name="back" value="<?= h($userBack) ?>">
+        <div class="user-grid">
+          <div><label for="c<?= $uid ?>">Empresa</label>
+            <input type="text" id="c<?= $uid ?>" name="company" value="<?= h($userCard['company']) ?>" maxlength="100" required></div>
+          <div><label for="e<?= $uid ?>">Email</label>
+            <input type="email" id="e<?= $uid ?>" name="email" value="<?= h($userCard['email']) ?>" maxlength="190" required></div>
+          <div><label for="p<?= $uid ?>">Teléfono</label>
+            <input type="tel" id="p<?= $uid ?>" name="phone" value="<?= h($userCard['phone']) ?>" maxlength="30" required></div>
         </div>
-        <div class="meta">
-          Creado el <?= dateTag($u['created_at']) ?>
-          · Último acceso: <?= $u['last_login_at'] ? dateTag($u['last_login_at']) : 'nunca' ?>
-          <?= (int) $u['must_change_password'] === 1 ? ' · <strong>contraseña temporal sin cambiar</strong>' : '' ?>
+        <button type="submit">Guardar datos</button>
+      </form>
+    </section>
+
+    <!-- Acceso a /cuenta/ -->
+    <section class="card section">
+      <h2>Acceso</h2>
+      <div class="meta"><?= (int) $userCard['must_change_password'] === 1
+          ? 'Todavía tiene la contraseña temporal: deberá cambiarla al entrar.'
+          : 'Contraseña cambiada por el usuario.' ?></div>
+      <form method="post" data-confirm="¿Generar una contraseña nueva para «<?= h($userCard['company']) ?>»? La actual dejará de funcionar."><?= csrfField() ?>
+        <input type="hidden" name="action" value="user_reset"><input type="hidden" name="userId" value="<?= $uid ?>">
+        <input type="hidden" name="back" value="<?= h($userBack) ?>">
+        <button type="submit">Restablecer contraseña</button></form>
+    </section>
+
+    <!-- Eliminar (separado para no pulsarlo por error) -->
+    <section class="card section danger">
+      <h2>Eliminar usuario</h2>
+      <div class="meta">Sus <?= (int) $userCard['devices'] ?> equipo(s) quedarán sin asignar CONSERVANDO su autorización; sus archivos se borran.</div>
+      <form method="post" data-confirm="¿Eliminar el usuario «<?= h($userCard['company']) ?>»? Sus <?= (int) $userCard['devices'] ?> equipo(s) quedarán sin asignar CONSERVANDO su autorización."><?= csrfField() ?>
+        <input type="hidden" name="action" value="user_delete"><input type="hidden" name="userId" value="<?= $uid ?>">
+        <button class="bad" type="submit">Eliminar usuario</button></form>
+    </section>
+
+  <?php elseif ($view === 'users' && !$historyDevice): ?>
+    <!-- ================= LISTA DE USUARIOS =================
+         Una fila por usuario (resumen); todo lo demás está en su ficha.
+         Datos requeridos al crear: email (para entrar en /cuenta/), teléfono y
+         empresa. La contraseña la genera el sistema y la cambia el usuario. -->
+    <details class="card new-user" <?= !$users ? 'open' : '' ?>>
+      <summary><strong>+ Nuevo usuario</strong></summary>
+      <form method="post" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="user_create">
+        <div class="user-grid">
+          <div><label for="nu-company">Empresa</label>
+            <input type="text" id="nu-company" name="company" maxlength="100" required></div>
+          <div><label for="nu-email">Email</label>
+            <input type="email" id="nu-email" name="email" maxlength="190" required></div>
+          <div><label for="nu-phone">Teléfono</label>
+            <input type="tel" id="nu-phone" name="phone" maxlength="30" required placeholder="+52 55 1234 5678"></div>
         </div>
-        <!-- Vigencia del contenido (días) -->
-        <?= validityBlock($u, 'view=users') ?>
-        <!-- Editar datos -->
-        <form method="post" autocomplete="off"><?= csrfField() ?>
-          <input type="hidden" name="action" value="user_update"><input type="hidden" name="userId" value="<?= $uid ?>">
-          <div class="user-grid">
-            <div><label for="c<?= $uid ?>">Empresa</label>
-              <input type="text" id="c<?= $uid ?>" name="company" value="<?= h($u['company']) ?>" maxlength="100" required></div>
-            <div><label for="e<?= $uid ?>">Email</label>
-              <input type="email" id="e<?= $uid ?>" name="email" value="<?= h($u['email']) ?>" maxlength="190" required></div>
-            <div><label for="p<?= $uid ?>">Teléfono</label>
-              <input type="tel" id="p<?= $uid ?>" name="phone" value="<?= h($u['phone']) ?>" maxlength="30" required></div>
-          </div>
-          <div class="actions">
-            <button type="submit">Guardar datos</button>
-            <a class="btn" href="<?= h(panelUrl(['user' => $uid])) ?>">Ver equipos</a>
-            <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver contenido (<?= (int) $u['media'] ?>)</a>
-          </div>
-        </form>
-        <div class="actions">
-          <form method="post" data-confirm="¿Autorizar TODOS los equipos de «<?= h($u['company']) ?>» (<?= (int) $u['devices'] ?>)?"><?= csrfField() ?>
-            <input type="hidden" name="action" value="user_authorize_all"><input type="hidden" name="userId" value="<?= $uid ?>">
-            <button class="ok" type="submit" <?= (int) $u['authorized'] === (int) $u['devices'] ? 'disabled' : '' ?>>Autorizar todos sus equipos</button></form>
-          <form method="post" data-confirm="¿Revocar la autorización de TODOS los equipos de «<?= h($u['company']) ?>» (<?= (int) $u['devices'] ?>)?"><?= csrfField() ?>
-            <input type="hidden" name="action" value="user_revoke_all"><input type="hidden" name="userId" value="<?= $uid ?>">
-            <button class="bad" type="submit" <?= (int) $u['devices'] === 0 ? 'disabled' : '' ?>>Revocar todos sus equipos</button></form>
-          <form method="post" data-confirm="¿Generar una contraseña nueva para «<?= h($u['company']) ?>»? La actual dejará de funcionar."><?= csrfField() ?>
-            <input type="hidden" name="action" value="user_reset"><input type="hidden" name="userId" value="<?= $uid ?>">
-            <button type="submit">Restablecer contraseña</button></form>
-          <form method="post" data-confirm="¿Eliminar el usuario «<?= h($u['company']) ?>»? Sus <?= (int) $u['devices'] ?> equipo(s) quedarán sin asignar CONSERVANDO su autorización."><?= csrfField() ?>
-            <input type="hidden" name="action" value="user_delete"><input type="hidden" name="userId" value="<?= $uid ?>">
-            <button type="submit">Eliminar usuario</button></form>
-        </div>
-      </section>
-    <?php endforeach; ?>
+        <button class="primary" type="submit">Crear usuario</button>
+        <span class="owner">Se generará una contraseña temporal para entregarle.</span>
+      </form>
+    </details>
+
+    <!-- Filtros por estado (con la búsqueda aplicada) -->
+    <nav class="tabs">
+      <?php foreach ($userStates as $key => $text): ?>
+        <a class="<?= $userState === $key ? 'on' : '' ?>" href="<?= h(panelUrl(['view' => 'users', 'us' => $key === 'all' ? '' : $key, 'q' => $q])) ?>">
+          <?= h($text) ?> (<?= (int) $userCounts[$key] ?>)
+        </a>
+      <?php endforeach; ?>
+    </nav>
+
+    <?php if (!$userList): ?>
+      <div class="card empty"><?= !$users ? 'Todavía no hay usuarios.' : ($q !== '' ? 'Ningún usuario coincide con «' . h($q) . '».' : 'No hay usuarios en esta lista.') ?></div>
+    <?php else: ?>
+      <div class="card user-list">
+        <?php foreach ($userList as $u): $uid = (int) $u['id']; $v = $u['validity']; ?>
+          <!-- Fila: toda ella abre la ficha del usuario -->
+          <a class="user-row" href="<?= h(panelUrl(['view' => 'users', 'user' => $uid])) ?>">
+            <span class="user-main">
+              <span class="user-name"><?= h($u['company']) ?></span>
+              <span class="owner"><?= h($u['email']) ?> · <?= h($u['phone']) ?></span>
+            </span>
+            <span class="user-facts">
+              <span class="badge <?= ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$v['state']] ?>">
+                <?= $v['state'] === 'active' ? 'Vigente · ' . (int) $v['days'] . ' d' : ($v['state'] === 'expired' ? 'Vencida' : 'Sin vigencia') ?></span>
+              <?php if ((int) $u['must_change_password'] === 1): ?><span class="badge pending">Contraseña temporal</span><?php endif; ?>
+              <span class="owner"><?= (int) $u['devices'] ?> equipo(s) · <?= (int) $u['authorized'] ?> aut. · <?= (int) $u['media'] ?> archivo(s)</span>
+            </span>
+            <span class="chev" aria-hidden="true">&rsaquo;</span>
+          </a>
+        <?php endforeach; ?>
+      </div>
+    <?php endif; ?>
 
   <?php elseif ($view === 'media' && !$historyDevice): ?>
     <!-- ============ CONTENIDO SUBIDO POR LOS USUARIOS ============
@@ -656,7 +819,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     <section class="card focus-user">
       <div class="user-head">
         <span class="user-name"><?= h($focusUser['company']) ?></span>
-        <a class="btn" href="?view=users">Usuarios</a>
+        <a class="btn" href="<?= h(panelUrl(['view' => 'users', 'user' => $fu])) ?>">Ficha del usuario</a>
       </div>
       <div class="meta"><?= h($focusUser['email']) ?> · Tel. <?= h($focusUser['phone']) ?>
         · <?= (int) $focusUser['devices'] ?> equipo(s), <?= (int) $focusUser['authorized'] ?> autorizado(s)</div>
