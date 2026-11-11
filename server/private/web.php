@@ -451,6 +451,12 @@ function overlayNoun(string $kind): array
     return $kind === 'text' ? ['Tira', 'a'] : ['Banner', 'o'];
 }
 
+/** Texto del aviso tras asignar: las otras tiras/banners a las que se quitaron esos equipos. */
+function overlayExclusiveText(array $changed): string
+{
+    return $changed ? ' Cada equipo muestra una sola: se quitó de esos equipos a «' . implode('», «', $changed) . '».' : '';
+}
+
 /** ¿Está asignada a algún equipo? (scope none = sin asignar: no se ve en ninguna pantalla) */
 function overlayAssigned(array $o): bool
 {
