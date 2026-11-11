@@ -8,8 +8,11 @@
  *    con email, teléfono y empresa, y le entrega una contraseña temporal.
  *  - Entra aquí con su email y esa contraseña; la primera vez (o tras un
  *    "Restablecer contraseña" del administrador) DEBE cambiarla.
- *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión),
- *    SOLO LECTURA: autorizar y revocar equipos lo hace el administrador.
+ *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión).
+ *    Solo puede PONER/EDITAR EL NOMBRE (alias, columna label, el mismo
+ *    que ve el administrador) de los equipos asignados a él (acción
+ *    device_label, comprueba que el equipo sea suyo). Autorizar, revocar
+ *    y habilitar el contenido lo hace el administrador.
  *  - Puede cambiar su contraseña cuando quiera (pide la actual).
  *
  *  Seguridad: sesión propia (cookie "sp_user" solo en /cuenta/), token
@@ -184,6 +187,26 @@ try {
             session_regenerate_id(true);
             $_SESSION['pwd'] = passwordStamp(UserRepository::find((int) $user['id']) ?? []);
             redirectWith('Contraseña cambiada.', 's=cuenta');
+        } elseif ($action === 'device_label') {
+            /* ---- Nombre (alias) de uno de SUS equipos ---- */
+            if ((int) $user['must_change_password'] === 1) {
+                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+            }
+            $id = strtoupper(trim(param($_POST, 'deviceId')));
+            $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
+            // Solo equipos asignados a este usuario (nunca los de otro)
+            if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
+                redirectWith('Ese equipo no está asignado a tu cuenta.', 's=equipos');
+            }
+            // Texto en UTF-8 (si llega en Windows-1252 se convierte, para no perder ñ/acentos)
+            $raw = param($_POST, 'label');
+            if (!mb_check_encoding($raw, 'UTF-8')) {
+                $raw = mb_convert_encoding($raw, 'UTF-8', 'Windows-1252');
+            }
+            // Sin saltos de línea ni caracteres de control; máx. 100 (setLabel recorta)
+            $label = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $raw));
+            DeviceRepository::setLabel($id, $label);
+            redirectWith($label === '' ? "Nombre de $id quitado." : "Nombre de $id guardado: «" . mb_substr($label, 0, 100) . '».', 's=equipos');
         } elseif (str_starts_with($action, 'media_')) {
             /* ---- Contenido para mirror.html (imágenes y videos) ---- */
             if ((int) $user['must_change_password'] === 1) {
@@ -358,6 +381,10 @@ if ($validity['state'] !== 'active') {
     dl.data { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
     dl.data dt { color: var(--muted); }
     dl.data dd { margin: 0; overflow-wrap: anywhere; }
+    /* Nombre del equipo (pestaña Equipos) */
+    .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    .label-form input[type=text] { flex: 1 1 220px; min-width: 0; padding: 8px 10px; }
+    .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   </style>
 </head>
 <body>
@@ -436,10 +463,10 @@ if ($validity['state'] !== 'active') {
     </section>
 
   <?php elseif ($section === 'equipos'): ?>
-    <!-- ======================= EQUIPOS (solo lectura) ======================= -->
+    <!-- ============ EQUIPOS (solo el nombre es editable) ============ -->
     <div class="section-head">
       <h2>Mis equipos</h2>
-      <span class="hint">Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
+      <span class="hint">Puedes ponerle un nombre a cada equipo. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
     </div>
     <?php if (!$devices): ?>
       <div class="card empty block">Todavía no tienes equipos asignados.</div>
@@ -464,6 +491,15 @@ if ($validity['state'] !== 'active') {
           <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
           <?= $mOn ? '' : '<br><span class="hint">Para mostrar tus imágenes y videos aquí, pide al administrador que habilite el contenido.</span>' ?>
         </div>
+        <!-- Nombre del equipo (vacío = sin nombre, se muestra solo el ID) -->
+        <form method="post" class="label-form" autocomplete="off"><?= csrfField() ?>
+          <input type="hidden" name="action" value="device_label">
+          <input type="hidden" name="deviceId" value="<?= h($d['device_id']) ?>">
+          <label for="lbl-<?= h($d['device_id']) ?>" class="sr">Nombre del equipo</label>
+          <input type="text" id="lbl-<?= h($d['device_id']) ?>" name="label" value="<?= h((string) $d['label']) ?>"
+                 maxlength="100" placeholder="Nombre del equipo (p. ej. Local Centro)">
+          <button type="submit">Guardar nombre</button>
+        </form>
       </section>
     <?php endforeach; ?>
 
