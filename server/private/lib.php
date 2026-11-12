@@ -241,6 +241,11 @@ final class Database
             return 'Falta la columna image_fit (ajuste del banner): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-overlays-fit.sql.';
         }
+        // Gestión de rutas (URL de contenido por usuario)
+        if (!in_array('sp_routes', $tables, true) || !in_array('route_id', $userCols, true)) {
+            return 'Falta la gestión de rutas (tabla sp_routes / columna sp_users.route_id): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-12-routes.sql.';
+        }
         return null;
     }
 
@@ -2146,6 +2151,206 @@ final class LeagueRepository
             'name' => (string) $l['name'],
             'values' => (string) $l['codes'],
         ];
+    }
+}
+
+/**
+ * GESTIÓN DE RUTAS (tabla sp_routes + sp_users.route_id), 2026-11-12.
+ *
+ * Una ruta es una URL de contenido que el administrador construye POR
+ * PARTES (nunca la escribe completa): URL base + agent, pageIndex, timer,
+ * showParams, otherQ (Y/N) y pageSize. La URL final se arma con buildUrl()
+ * en este orden fijo, y el último parámetro, leagues, se rellena con los
+ * códigos de la LIGA DEL EQUIPO (la elige el usuario en /cuenta/; sin liga
+ * => "leagues=" vacío). Ej.:
+ *   https://sport.grupoazar.do/PizarrasV2?agent=df&pageIndex=0&timer=60&showParams=&otherQ=N&pageSize=14&leagues=NBA
+ * Cada USUARIO tiene como mucho UNA ruta (sp_users.route_id); una ruta se
+ * asigna a uno o varios usuarios (setUsers) y TODOS sus equipos la heredan.
+ * api/device.php y api/media.php envían a cada equipo autorizado
+ * "deviceRoute" (urlForDevice: su URL final, o null) y la TV la guarda en
+ * localStorage (smartpizarra.routeUrl; "" = sin ruta).
+ */
+final class RouteRepository
+{
+    /** URL base por defecto y valores iniciales del formulario. */
+    public const DEFAULTS = [
+        'base_url' => 'https://sport.grupoazar.do/PizarrasV2',
+        'agent' => 'df',
+        'page_index' => 0,
+        'timer' => 60,
+        'show_params' => '',
+        'other_q' => 'N',
+        'page_size' => 14,
+    ];
+    /** Límite de los parámetros numéricos. */
+    public const MAX_NUMBER = 100000;
+
+    /**
+     * Valida y normaliza los datos de una ruta.
+     * @param array<string,string> $in Campos del formulario (name, base_url, agent, page_index, timer, show_params, other_q, page_size).
+     * @return array<string,mixed>|string Datos limpios o el texto del error.
+     */
+    public static function clean(array $in): array|string
+    {
+        $text = static function (string $v, int $max): string {
+            if (!mb_check_encoding($v, 'UTF-8')) {
+                $v = mb_convert_encoding($v, 'UTF-8', 'Windows-1252');
+            }
+            return mb_substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $v)), 0, $max);
+        };
+        $name = $text((string) ($in['name'] ?? ''), 100);
+        if ($name === '') {
+            return 'Escribe un nombre para la ruta.';
+        }
+        $base = trim((string) ($in['base_url'] ?? ''));
+        $parts = parse_url($base);
+        if ($base === '' || strlen($base) > 500 || $parts === false || !in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true)
+            || empty($parts['host']) || isset($parts['query']) || isset($parts['fragment']) || preg_match('/[\s"\'<>]/', $base)) {
+            return 'La URL base debe empezar por https:// (o http://) y no llevar parámetros ("?..."): p. ej. ' . self::DEFAULTS['base_url'];
+        }
+        $out = ['name' => $name, 'base_url' => $base];
+        foreach (['page_index' => 'pageIndex', 'timer' => 'timer', 'page_size' => 'pageSize'] as $k => $label) {
+            $v = trim((string) ($in[$k] ?? ''));
+            if (!preg_match('/^\d{1,6}$/', $v) || (int) $v > self::MAX_NUMBER) {
+                return "«{$label}» debe ser un número entero entre 0 y " . self::MAX_NUMBER . '.';
+            }
+            $out[$k] = (int) $v;
+        }
+        $out['agent'] = $text((string) ($in['agent'] ?? ''), 100);
+        $out['show_params'] = $text((string) ($in['show_params'] ?? ''), 200);
+        $out['other_q'] = strtoupper(trim((string) ($in['other_q'] ?? ''))) === 'Y' ? 'Y' : 'N';
+        return $out;
+    }
+
+    /** Valor de un parámetro en la URL: codificado, pero las comas quedan tal cual ("LIDOM,MLB"). */
+    private static function enc(string $v): string
+    {
+        return str_replace('%2C', ',', rawurlencode($v));
+    }
+
+    /**
+     * URL final de una ruta, con "leagues" = $leagues (códigos de la liga del
+     * equipo, "" = sin liga). Orden fijo de los parámetros.
+     */
+    public static function buildUrl(array $r, string $leagues): string
+    {
+        return $r['base_url'] . '?agent=' . self::enc((string) $r['agent'])
+            . '&pageIndex=' . (int) $r['page_index']
+            . '&timer=' . (int) $r['timer']
+            . '&showParams=' . self::enc((string) $r['show_params'])
+            . '&otherQ=' . ($r['other_q'] === 'Y' ? 'Y' : 'N')
+            . '&pageSize=' . (int) $r['page_size']
+            . '&leagues=' . self::enc($leagues);
+    }
+
+    /**
+     * Todas las rutas con sus usuarios ('users' = [[id, company], ...]).
+     * @return array<int,array<string,mixed>>
+     */
+    public static function all(): array
+    {
+        $pdo = Database::pdo();
+        $rows = $pdo->query('SELECT * FROM sp_routes ORDER BY name, id')->fetchAll();
+        $byId = [];
+        foreach ($rows as $i => $r) {
+            $rows[$i]['users'] = [];
+            $byId[(int) $r['id']] = $i;
+        }
+        foreach ($pdo->query('SELECT id, company, route_id FROM sp_users WHERE route_id IS NOT NULL ORDER BY company') as $u) {
+            if (isset($byId[(int) $u['route_id']])) {
+                $rows[$byId[(int) $u['route_id']]]['users'][] = ['id' => (int) $u['id'], 'company' => (string) $u['company']];
+            }
+        }
+        return $rows;
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_routes WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /** Crea una ruta (datos de clean()). @return int Id. */
+    public static function create(array $d): int
+    {
+        $now = Database::now();
+        Database::pdo()->prepare(
+            'INSERT INTO sp_routes (name, base_url, agent, page_index, timer, show_params, other_q, page_size, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$d['name'], $d['base_url'], $d['agent'], $d['page_index'], $d['timer'], $d['show_params'], $d['other_q'], $d['page_size'], $now, $now]);
+        return (int) Database::pdo()->lastInsertId();
+    }
+
+    /** Cambia una ruta (datos de clean()). Los equipos la reciben en su próxima consulta. */
+    public static function update(int $id, array $d): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_routes SET name = ?, base_url = ?, agent = ?, page_index = ?, timer = ?, show_params = ?, other_q = ?,
+               page_size = ?, updated_at = ? WHERE id = ?'
+        )->execute([$d['name'], $d['base_url'], $d['agent'], $d['page_index'], $d['timer'], $d['show_params'], $d['other_q'], $d['page_size'], Database::now(), $id]);
+    }
+
+    /** Borra una ruta; sus usuarios quedan sin ruta (ON DELETE SET NULL). */
+    public static function delete(int $id): void
+    {
+        Database::pdo()->prepare('DELETE FROM sp_routes WHERE id = ?')->execute([$id]);
+    }
+
+    /**
+     * Usuarios de una ruta: los marcados pasan a tener ESTA ruta (si tenían
+     * otra, la cambian: un usuario tiene una sola); los que la tenían y ya no
+     * están marcados quedan sin ruta.
+     * @param int[] $userIds
+     * @return int Usuarios que quedan con la ruta.
+     */
+    public static function setUsers(int $routeId, array $userIds): int
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $userIds), static fn($v) => $v > 0)));
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            if ($ids) {
+                $in = implode(',', array_fill(0, count($ids), '?'));
+                $pdo->prepare("UPDATE sp_users SET route_id = NULL WHERE route_id = ? AND id NOT IN ($in)")->execute(array_merge([$routeId], $ids));
+                $pdo->prepare("UPDATE sp_users SET route_id = ? WHERE id IN ($in)")->execute(array_merge([$routeId], $ids));
+            } else {
+                $pdo->prepare('UPDATE sp_users SET route_id = NULL WHERE route_id = ?')->execute([$routeId]);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        $stmt = $pdo->prepare('SELECT COUNT(*) FROM sp_users WHERE route_id = ?');
+        $stmt->execute([$routeId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** @return array<string,mixed>|null Ruta del USUARIO dueño de un equipo (o null). */
+    public static function forDevice(array $device): ?array
+    {
+        if (empty($device['user_id'])) {
+            return null;
+        }
+        $stmt = Database::pdo()->prepare('SELECT r.* FROM sp_routes r JOIN sp_users u ON u.route_id = r.id WHERE u.id = ?');
+        $stmt->execute([(int) $device['user_id']]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /**
+     * URL final para un equipo: la ruta de su usuario con leagues = códigos
+     * de la liga del equipo ("" sin liga). null = su usuario no tiene ruta.
+     */
+    public static function urlForDevice(array $device): ?string
+    {
+        $r = self::forDevice($device);
+        if ($r === null) {
+            return null;
+        }
+        $league = LeagueRepository::devicePayload($device);
+        return self::buildUrl($r, $league === null ? '' : (string) $league['values']);
     }
 }
 

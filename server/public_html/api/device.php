@@ -36,6 +36,9 @@
  *          {"code":"mlb","label":"MLB","name":"Caribe","values":"LIDOM,MLB,KO"}
  *        o null = "Sin liga". Las páginas guardan code en smartpizarra.league
  *        y values en smartpizarra.leagues ("" sin liga).
+ *        Y "deviceRoute" (2026-11-12): la URL de la RUTA de su usuario
+ *        (panel > Rutas) con leagues = códigos de la liga del equipo, o null
+ *        = sin ruta. Las páginas la guardan en smartpizarra.routeUrl ("" sin ruta).
  *    400 {"ok":false,"error":"bad_request"}      datos con formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el ID ya existe con otro secreto
  *    405 {"ok":false,"error":"method"}           no es POST
@@ -107,6 +110,8 @@ try {
     // está autorizado no se envía (la TV conserva lo que tenía).
     if ($payload['authorized']) {
         $payload['deviceLeague'] = LeagueRepository::devicePayload($device);
+        // Ruta de su USUARIO (URL final con leagues = liga de este equipo) o null
+        $payload['deviceRoute'] = RouteRepository::urlForDevice($device);
     }
     Http::json($payload);
 } catch (Throwable $e) {

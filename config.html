@@ -110,6 +110,7 @@
        "internetStatus":"online","version":"3.0.14","url":"smartpizarra.com",
        "email":"smartpizarra@gmail.com","deviceId":"SP-XXXX-XXXX-XXXX",
        "league":"mlb","leagues":"LIDOM,MLB,KO,PRO,AAAI,AAAP,LMP,LVBP,CARIB",
+       "routeUrl":"https://sport.grupoazar.do/PizarrasV2?agent=df&...&leagues=LIDOM,MLB,...",
        "orientation":90,"language":"en","scale":1,
        "authorized":true,"authStatus":"authorized"}
 
@@ -750,6 +751,55 @@
           return true;
         }
 
+        /*
+         * RUTA DEL EQUIPO (2026-11-12). El ADMINISTRADOR crea rutas en el
+         * panel (Gestión de Rutas: URL base + agent, pageIndex, timer,
+         * showParams, otherQ, pageSize) y las asigna a USUARIOS; todos los
+         * equipos del usuario la heredan. api/device.php y api/media.php
+         * envían la URL final (campo deviceRoute; leagues = códigos de la liga
+         * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
+         *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
+         * Va en el JSON a la app como "routeUrl".
+         * MISMO bloque en loading, config, connection, fingerprint y mirror.
+         */
+        var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+
+        /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
+        function cleanRouteUrl(value) {
+          var v = typeof value === "string" ? value.trim() : "";
+          return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
+        }
+
+        /** @returns {string} URL de la ruta guardada ("" = sin ruta o no válida). */
+        function readDeviceRoute() {
+          try {
+            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY));
+          } catch (e) {
+            return ""; // sin localStorage: sin ruta
+          }
+        }
+
+        /**
+         * Guarda la ruta de una respuesta de api/device.php o api/media.php.
+         * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
+         * ruta => "".
+         * @returns {boolean} true si cambió.
+         */
+        function storeDeviceRoute(res) {
+          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
+            return false;
+          }
+          var url = cleanRouteUrl(res.deviceRoute);
+          try {
+            var ls = window.localStorage;
+            if (ls.getItem(DEVICE_ROUTE_KEY) === url) return false;
+            ls.setItem(DEVICE_ROUTE_KEY, url);
+          } catch (e) {
+            return false;
+          }
+          return true;
+        }
+
         /** Límites y paso (en %) de la escala que se elige con − / +.
             Mismos límites que acepta loading.html (10 a 300). */
         var SCALE_LIMITS = { min: 10, max: 300, step: 5 };
@@ -1050,6 +1100,8 @@
                   self.saveFlag(ok);
                   // Liga del equipo (la asigna el usuario en /cuenta/; solo si está autorizado)
                   storeDeviceLeague(res);
+                  // Ruta de su usuario (Gestión de Rutas del panel)
+                  storeDeviceRoute(res);
                   resolve({
                     authorized: ok,
                     authStatus: ok
@@ -1631,6 +1683,7 @@
             // Liga del equipo (leída AHORA: la consulta de autorización pudo traer otra)
             league: readDeviceLeague().league,
             leagues: readDeviceLeague().leagues,
+            routeUrl: readDeviceRoute(), // ruta de su usuario ("" = sin ruta)
             scale: toZoom(saved.scale), // escala para la app (factor)
             authorized: auth.authorized, // según smartpizarra.cloud (o la última bandera)
             authStatus: authStatus,
@@ -2242,6 +2295,7 @@
             scale: toZoom(current.scale),
             league: readDeviceLeague().league,
             leagues: readDeviceLeague().leagues,
+            routeUrl: readDeviceRoute(), // ruta de su usuario ("" = sin ruta)
           });
         };
 

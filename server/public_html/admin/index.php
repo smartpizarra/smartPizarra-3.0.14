@@ -56,6 +56,15 @@
  *    usuarios (solo pausar/activar y eliminar: moderación).
  *    Ver OverlayRepository (private/lib.php) y api/media.php.
  *
+ *  - GESTIÓN DE RUTAS (botón "Rutas", ?view=routes, 2026-11-12): URL de
+ *    contenido que se construye POR PARTES (URL base + agent, pageIndex,
+ *    timer, showParams, otherQ Y/N, pageSize; vista previa de la URL final)
+ *    y se asigna a uno o varios USUARIOS (cada usuario tiene una sola: si
+ *    se le asigna otra, cambia). Todos los equipos del usuario la heredan;
+ *    "leagues" se rellena con los códigos de la liga de CADA equipo.
+ *    Acciones route_create / route_update / route_users / route_delete.
+ *    Ver RouteRepository (private/lib.php).
+ *
  *  - LIGAS (botón "Ligas", ?view=leagues, 2026-11-11): TIPOS de liga
  *    (código, p. ej. "mlb", que la TV guarda en smartpizarra.league, y su
  *    nombre) y LIGAS (nombre + tipo + contenido = códigos "LIDOM,MLB,KO").
@@ -419,6 +428,59 @@ function overlayTargetText(array $o, array $usersById): string
     return adTargetText($o, $usersById);
 }
 
+/**
+ * Campos de una RUTA (crear o editar): nombre, URL base y cada parámetro
+ * por separado, con la VISTA PREVIA de la URL final (la arma el JS igual
+ * que RouteRepository::buildUrl; leagues = liga de cada equipo).
+ * @param array<string,mixed>|null $r Ruta (null = nueva: valores por defecto).
+ */
+function routeFields(?array $r, string $p): string
+{
+    $v = $r ?? RouteRepository::DEFAULTS + ['name' => ''];
+    $in = static fn(string $name, string $label, string $type, string $value, string $extra = '') =>
+        '<div><label for="' . $p . $name . '">' . $label . '</label><input type="' . $type . '" id="' . $p . $name . '" name="' . $name
+        . '" value="' . h($value) . '" data-route="' . $name . '"' . $extra . '></div>';
+    $num = ' min="0" max="' . RouteRepository::MAX_NUMBER . '" step="1" required';
+    return '<div class="route-form" data-route-form>'
+        . $in('name', 'Nombre (solo para el panel)', 'text', (string) $v['name'], ' maxlength="100" placeholder="p. ej. Pizarra deportes" required')
+        . $in('base_url', 'URL base (sin "?" ni parámetros)', 'url', (string) $v['base_url'], ' maxlength="500" required')
+        . '<div class="user-grid">'
+        . $in('agent', 'agent (texto)', 'text', (string) $v['agent'], ' maxlength="100"')
+        . $in('page_index', 'pageIndex (número)', 'number', (string) $v['page_index'], $num)
+        . $in('timer', 'timer (número)', 'number', (string) $v['timer'], $num)
+        . $in('show_params', 'showParams (texto)', 'text', (string) $v['show_params'], ' maxlength="200"')
+        . '<div><label for="' . $p . 'other_q">otherQ</label><select id="' . $p . 'other_q" name="other_q" data-route="other_q">'
+        . '<option value="N"' . ($v['other_q'] === 'Y' ? '' : ' selected') . '>N</option>'
+        . '<option value="Y"' . ($v['other_q'] === 'Y' ? ' selected' : '') . '>Y</option></select></div>'
+        . $in('page_size', 'pageSize (número)', 'number', (string) $v['page_size'], $num)
+        . '</div>'
+        . '<label>URL final (leagues = la liga de cada equipo, que elige el usuario en /cuenta/; sin liga queda vacío)</label>'
+        . '<code class="route-url" data-route-preview>' . h(RouteRepository::buildUrl($v, '')) . '</code>'
+        . '</div>';
+}
+
+/**
+ * Casillas de USUARIOS de una ruta. Un usuario tiene una sola ruta: si ya
+ * tiene otra se indica (al guardar, pasa a esta).
+ * @param array<int,array<string,mixed>> $users UserRepository::all().
+ * @param array<int,string> $routeNames id => nombre de las rutas.
+ */
+function routeUsersFields(array $r, array $users, array $routeNames): string
+{
+    $html = '<fieldset class="targets"><legend>Usuarios con esta ruta (y todos sus equipos)</legend>';
+    if (!$users) {
+        $html .= '<span class="owner">No hay usuarios.</span>';
+    }
+    foreach ($users as $u) {
+        $uid = (int) $u['id'];
+        $cur = (int) ($u['route_id'] ?? 0);
+        $html .= '<label class="inline"><input type="checkbox" name="users[]" value="' . $uid . '"' . ($cur === (int) $r['id'] ? ' checked' : '') . '> '
+            . h($u['company']) . ' <span class="owner">(' . (int) $u['devices'] . ' equipo(s)'
+            . ($cur && $cur !== (int) $r['id'] ? ' · ahora: ' . h($routeNames[$cur] ?? '#' . $cur) : '') . ')</span></label>';
+    }
+    return $html . '</fieldset>';
+}
+
 /** Texto del destino de un anuncio para la lista. */
 function adTargetText(array $ad, array $usersById): string
 {
@@ -639,6 +701,35 @@ try {
                     redirectWith("Liga «{$league['name']}» eliminada (y quitada de sus usuarios).", 'view=leagues');
                 default:
                     redirectWith('Acción desconocida.', 'view=leagues');
+            }
+        } elseif (str_starts_with($action, 'route_')) {
+            /* ---- GESTIÓN DE RUTAS (vista ?view=routes) ---- */
+            $routeId = (int) param($_POST, 'routeId');
+            $route = $action === 'route_create' ? null : RouteRepository::find($routeId);
+            if ($action !== 'route_create' && $route === null) {
+                redirectWith('Esa ruta ya no existe.', 'view=routes');
+            }
+            switch ($action) {
+                case 'route_create':
+                case 'route_update':
+                    $data = RouteRepository::clean($_POST);
+                    if (is_string($data)) {
+                        redirectWith($data, 'view=routes');
+                    }
+                    if ($action === 'route_create') {
+                        RouteRepository::create($data);
+                        redirectWith("Ruta «{$data['name']}» creada. Asígnala a uno o varios usuarios: sus equipos la recibirán en su próxima consulta.", 'view=routes');
+                    }
+                    RouteRepository::update($routeId, $data);
+                    redirectWith("Ruta «{$data['name']}» guardada. Los equipos de sus usuarios reciben la URL nueva en su próxima consulta (≈ 1 min).", 'view=routes');
+                case 'route_users':
+                    $n = RouteRepository::setUsers($routeId, (array) ($_POST['users'] ?? []));
+                    redirectWith("Ruta «{$route['name']}»: $n usuario(s). Todos sus equipos la reciben en su próxima consulta (≈ 1 min).", 'view=routes');
+                case 'route_delete':
+                    RouteRepository::delete($routeId);
+                    redirectWith("Ruta «{$route['name']}» eliminada; sus usuarios quedan sin ruta.", 'view=routes');
+                default:
+                    redirectWith('Acción desconocida.', 'view=routes');
             }
         } elseif (str_starts_with($action, 'ov_')) {
             /* ---- TIRAS Y BANNERS (vista ?view=overlays) ---- */
@@ -873,7 +964,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'leagues'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -940,6 +1031,9 @@ try {
     $allDevices = $loggedIn && ($view === 'ads' || $view === 'overlays') ? DeviceRepository::search(null, '', null) : [];
     // Tiras y banners (?view=overlays): las del administrador y, aparte, las de los usuarios
     $overlaysAll = $loggedIn && $view === 'overlays' ? OverlayRepository::all(null, true) : [];
+    // Rutas (?view=routes) y nombre de la ruta de cada usuario (ficha)
+    $routes = $loggedIn && ($view === 'routes' || $userCard) ? RouteRepository::all() : [];
+    $routeNames = array_column($routes, 'name', 'id');
     usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
     // Ligas: vista ?view=leagues y sección "Ligas" de la ficha de un usuario
     $needLeagues = $loggedIn && ($view === 'leagues' || $userCard);
@@ -999,6 +1093,8 @@ try {
     $ads = [];
     $allDevices = [];
     $overlaysAll = [];
+    $routes = [];
+    $routeNames = [];
     $leagueTypes = [];
     $leagues = [];
     $userLeagueIds = [];
@@ -1065,6 +1161,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     textarea { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);
       border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
 <?= overlayStyles() ?>
+    /* Rutas (?view=routes): URL final en una caja que corta en cualquier punto */
+    .route-url { display: block; padding: 8px 10px; margin: 6px 0; border-radius: 8px; background: var(--bg);
+      border: 1px solid var(--line); font: .85rem/1.4 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; word-break: break-all; }
+    .route-form select { width: 100%; padding: 9px 10px; font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 8px; }
+    input[type=url] { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 8px; }
     .ov-list-title { margin: 18px 0 8px; }
     [data-dates][hidden] { display: none; } /* fechas ocultas con "Permanente" */
     /* Anuncios (?view=ads) */
@@ -1161,6 +1264,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'media' ? 'on' : '' ?>" href="?view=media">Contenido</a>
       <a class="btn <?= $view === 'ads' ? 'on' : '' ?>" href="?view=ads">Anuncios</a>
       <a class="btn <?= $view === 'overlays' ? 'on' : '' ?>" href="?view=overlays">Tiras</a>
+      <a class="btn <?= $view === 'routes' ? 'on' : '' ?>" href="?view=routes">Rutas</a>
       <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues">Ligas</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
@@ -1177,8 +1281,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     </div>
   <?php endif; ?>
 
-  <!-- Buscador (oculto en Anuncios, Tiras y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= in_array($view, ['ads', 'overlays', 'leagues'], true) ? ' hidden-tools' : '' ?>" method="get">
+  <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
+  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues'], true) ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa o email' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
@@ -1253,6 +1357,19 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="meta"><?= (int) $userCard['media'] ?> archivo(s) subido(s) desde /cuenta/.</div>
       <div class="actions">
         <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver su contenido</a>
+      </div>
+    </section>
+
+    <!-- Ruta del usuario (una): todos sus equipos la reciben; se gestiona en Rutas -->
+    <section class="card section">
+      <h2>Ruta</h2>
+      <div class="meta">
+        <?php if (!empty($userCard['route_id']) && isset($routeNames[(int) $userCard['route_id']])): ?>
+          <strong><?= h($routeNames[(int) $userCard['route_id']]) ?></strong>: sus equipos reciben esta URL (con la liga de cada uno).
+        <?php else: ?>
+          Sin ruta.
+        <?php endif; ?>
+        <a href="?view=routes">Gestión de Rutas</a>
       </div>
     </section>
 
@@ -1517,6 +1634,56 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <?php endif; ?>
         </section>
       <?php endforeach; ?>
+    <?php endforeach; ?>
+
+  <?php elseif ($view === 'routes' && !$historyDevice): ?>
+    <!-- ================= GESTIÓN DE RUTAS =================
+         URL de contenido construida por partes; se asigna a usuarios y la
+         heredan todos sus equipos (leagues = liga de cada equipo). -->
+    <h2 class="ov-list-title">Gestión de Rutas</h2>
+    <details class="card new-user" <?= !$routes ? 'open' : '' ?>>
+      <summary><strong>+ Nueva ruta</strong></summary>
+      <form method="post" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="route_create">
+        <?= routeFields(null, 'rnew-') ?>
+        <button class="primary" type="submit">Crear ruta</button>
+      </form>
+    </details>
+    <?php if (!$routes): ?><div class="card empty">Todavía no hay rutas.</div><?php endif; ?>
+    <?php foreach ($routes as $r): $rid = (int) $r['id']; ?>
+      <section class="card device">
+        <div class="user-head">
+          <span class="media-name"><?= h($r['name']) ?></span>
+          <span class="badge <?= $r['users'] ? 'authorized' : 'off' ?>"><?= count($r['users']) ?> usuario(s)</span>
+        </div>
+        <code class="route-url"><?= h(RouteRepository::buildUrl($r, '')) ?></code>
+        <div class="meta">
+          <?= $r['users'] ? 'Usuarios: ' . h(implode(', ', array_column($r['users'], 'company'))) : 'Sin usuarios: ningún equipo la recibe.' ?><br>
+          leagues = la liga de cada equipo (la elige el usuario en /cuenta/). Actualizada <?= dateTag($r['updated_at']) ?>
+        </div>
+        <div class="actions">
+          <form method="post" data-confirm="¿Eliminar la ruta «<?= h($r['name']) ?>»? Sus usuarios quedarán sin ruta."><?= csrfField() ?>
+            <input type="hidden" name="action" value="route_delete"><input type="hidden" name="routeId" value="<?= $rid ?>">
+            <button type="submit">Eliminar</button></form>
+        </div>
+        <details class="edit" <?= $r['users'] ? '' : 'open' ?>>
+          <summary>Asignar a usuarios</summary>
+          <form method="post"><?= csrfField() ?>
+            <input type="hidden" name="action" value="route_users"><input type="hidden" name="routeId" value="<?= $rid ?>">
+            <?= routeUsersFields($r, $users, $routeNames) ?>
+            <span class="owner">Cada usuario tiene una sola ruta: si marcas uno que tiene otra, pasa a esta.</span><br>
+            <button class="primary" type="submit">Guardar usuarios</button>
+          </form>
+        </details>
+        <details class="edit">
+          <summary>Editar parámetros</summary>
+          <form method="post" autocomplete="off"><?= csrfField() ?>
+            <input type="hidden" name="action" value="route_update"><input type="hidden" name="routeId" value="<?= $rid ?>">
+            <?= routeFields($r, 'r' . $rid . '-') ?>
+            <button class="primary" type="submit">Guardar cambios</button>
+          </form>
+        </details>
+      </section>
     <?php endforeach; ?>
 
   <?php elseif ($view === 'leagues' && !$historyDevice): ?>
@@ -1819,6 +1986,30 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <!-- Fechas locales, "hace X", En línea/Desconectado y confirmaciones -->
   <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
+  <script nonce="<?= h($nonce) ?>">
+  /* Rutas: URL final en vivo (mismo orden y codificación que RouteRepository::buildUrl) */
+  (function () {
+    "use strict";
+    function enc(v) {
+      return encodeURIComponent(v).replace(/[!'()*]/g, function (c) {
+        return "%" + c.charCodeAt(0).toString(16).toUpperCase();
+      }).replace(/%2C/g, ",");
+    }
+    document.querySelectorAll("[data-route-form]").forEach(function (form) {
+      var out = form.querySelector("[data-route-preview]");
+      function val(n) { var el = form.querySelector("[data-route=" + n + "]"); return el ? el.value.trim() : ""; }
+      function num(n) { var v = parseInt(val(n), 10); return isNaN(v) || v < 0 ? 0 : v; }
+      function update() {
+        out.textContent = val("base_url") + "?agent=" + enc(val("agent")) + "&pageIndex=" + num("page_index") +
+          "&timer=" + num("timer") + "&showParams=" + enc(val("show_params")) + "&otherQ=" + (val("other_q") === "Y" ? "Y" : "N") +
+          "&pageSize=" + num("page_size") + "&leagues=";
+      }
+      form.addEventListener("input", update);
+      form.addEventListener("change", update);
+      update();
+    });
+  })();
+  </script>
   <script nonce="<?= h($nonce) ?>"><?= timeScript($onlineTimeout) ?></script>
   <script nonce="<?= h($nonce) ?>">
   (function () {

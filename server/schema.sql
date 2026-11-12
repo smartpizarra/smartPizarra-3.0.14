@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS sp_users (
   last_login_at        DATETIME     NULL,              -- último acceso a /cuenta/ (UTC)
   content_until        DATETIME     NULL,              -- VIGENCIA: el contenido se muestra hasta esta fecha (UTC); NULL = sin vigencia
   content_changed_at   DATETIME     NULL,              -- último cambio de la vigencia (UTC)
+  route_id             INT UNSIGNED NULL,              -- RUTA del usuario (sp_routes.id; NULL = sin ruta). FK al final
   PRIMARY KEY (id),
   UNIQUE KEY uq_user_email (email)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -245,3 +246,24 @@ CREATE TABLE IF NOT EXISTS sp_overlay_devices (
 ALTER TABLE sp_devices
   ADD KEY idx_device_league (league_id),
   ADD CONSTRAINT fk_device_league FOREIGN KEY (league_id) REFERENCES sp_leagues (id) ON DELETE SET NULL;
+
+-- RUTAS (URL de contenido por usuario). Ver migrations/2026-11-12-routes.sql.
+CREATE TABLE IF NOT EXISTS sp_routes (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name         VARCHAR(100) NOT NULL,                 -- nombre para el panel (p. ej. "Pizarra deportes")
+  base_url     VARCHAR(500) NOT NULL,                 -- https://sport.grupoazar.do/PizarrasV2 (sin "?")
+  agent        VARCHAR(100) NOT NULL DEFAULT '',      -- agent (texto)
+  page_index   INT UNSIGNED NOT NULL DEFAULT 0,       -- pageIndex (número)
+  timer        INT UNSIGNED NOT NULL DEFAULT 60,      -- timer (número, segundos)
+  show_params  VARCHAR(200) NOT NULL DEFAULT '',      -- showParams (texto)
+  other_q      CHAR(1)      NOT NULL DEFAULT 'N',     -- otherQ: Y | N
+  page_size    INT UNSIGNED NOT NULL DEFAULT 14,      -- pageSize (número)
+  created_at   DATETIME     NOT NULL,                 -- UTC
+  updated_at   DATETIME     NOT NULL,                 -- UTC
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Ruta de cada usuario (sp_users.route_id): FK aquí porque sp_routes se crea después de sp_users.
+ALTER TABLE sp_users
+  ADD KEY idx_user_route (route_id),
+  ADD CONSTRAINT fk_user_route FOREIGN KEY (route_id) REFERENCES sp_routes (id) ON DELETE SET NULL;

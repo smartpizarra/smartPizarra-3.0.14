@@ -57,6 +57,8 @@
  *         Autorizado: también "deviceLeague" (siempre, aunque sea "unchanged"):
  *              {"code","label","name","values"} o null ("Sin liga") — la liga del
  *              equipo, igual que api/device.php; mirror.html la guarda en localStorage.
+ *              Y "deviceRoute": URL de la ruta de su usuario (con leagues = liga del
+ *              equipo) o null, igual que api/device.php (smartpizarra.routeUrl).
  *         200 {"ok":true,"status":"pending|revoked","authorized":false,"mediaEnabled":…,"revision":"","items":[]}
  *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"<huella de ads>","items":[],"ads":[...]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
@@ -199,6 +201,8 @@ try {
     // smartpizarra.leagues en cada consulta (≈ 1 min). Solo autorizados.
     if ($auth['authorized']) {
         $out['deviceLeague'] = LeagueRepository::devicePayload($device);
+        // Ruta de su usuario (URL final) o null = sin ruta
+        $out['deviceRoute'] = RouteRepository::urlForDevice($device);
     }
     if ($revision !== '' && hash_equals($revision, (string) ($_POST['rev'] ?? ''))) {
         $out['unchanged'] = true;

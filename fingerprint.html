@@ -75,7 +75,7 @@
     "..." = TODOS llevan "internetStatus" ("" mientras la primera
     verificación no ha terminado) y los settings leídos de localStorage
     (null si no existen): "version","url","email","deviceId","league",
-    "leagues","orientation","language","scale" (escala para la app, factor).
+    "leagues","routeUrl" (ruta de su usuario, "" = sin ruta),"orientation","language","scale" (escala para la app, factor).
     Autorización (solo cuando la bandera CAMBIA):
       {"origin":"fingerPrint","action":"authorized","status":"success","token":"", ...}
       {"origin":"fingerPrint","action":"unauthorized","status":"revoked|pending|conflict","token":"", ...}
@@ -727,6 +727,55 @@
           return true;
         }
 
+        /*
+         * RUTA DEL EQUIPO (2026-11-12). El ADMINISTRADOR crea rutas en el
+         * panel (Gestión de Rutas: URL base + agent, pageIndex, timer,
+         * showParams, otherQ, pageSize) y las asigna a USUARIOS; todos los
+         * equipos del usuario la heredan. api/device.php y api/media.php
+         * envían la URL final (campo deviceRoute; leagues = códigos de la liga
+         * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
+         *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
+         * Va en el JSON a la app como "routeUrl".
+         * MISMO bloque en loading, config, connection, fingerprint y mirror.
+         */
+        var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+
+        /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
+        function cleanRouteUrl(value) {
+          var v = typeof value === "string" ? value.trim() : "";
+          return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
+        }
+
+        /** @returns {string} URL de la ruta guardada ("" = sin ruta o no válida). */
+        function readDeviceRoute() {
+          try {
+            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY));
+          } catch (e) {
+            return ""; // sin localStorage: sin ruta
+          }
+        }
+
+        /**
+         * Guarda la ruta de una respuesta de api/device.php o api/media.php.
+         * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
+         * ruta => "".
+         * @returns {boolean} true si cambió.
+         */
+        function storeDeviceRoute(res) {
+          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
+            return false;
+          }
+          var url = cleanRouteUrl(res.deviceRoute);
+          try {
+            var ls = window.localStorage;
+            if (ls.getItem(DEVICE_ROUTE_KEY) === url) return false;
+            ls.setItem(DEVICE_ROUTE_KEY, url);
+          } catch (e) {
+            return false;
+          }
+          return true;
+        }
+
         /** Textos por idioma (claves es/en IGUALES a I18N de loading.html). */
         var I18N = {
           es: {
@@ -879,6 +928,7 @@
           msg.deviceId = readText(KEYS.deviceId);
           msg.league = lg.league; // código del tipo de liga ("" = sin liga; la asigna el usuario en /cuenta/)
           msg.leagues = lg.leagues; // códigos de la liga ("" = sin liga)
+          msg.routeUrl = readDeviceRoute(); // ruta de su usuario ("" = sin ruta)
           msg.orientation = readOrientation(); // global
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
@@ -1712,6 +1762,8 @@
               setAuthorizedFlag(res.authorized === true);
               // Liga del equipo (la asigna el usuario en /cuenta/; solo si está autorizado)
               storeDeviceLeague(res);
+              // Ruta de su usuario (Gestión de Rutas del panel)
+              storeDeviceRoute(res);
             } else if (res && res.httpStatus === 403) {
               // El ID existe en el servidor con otro secreto: se resuelve
               // eliminándolo en el panel. Por seguridad, sin autorización.

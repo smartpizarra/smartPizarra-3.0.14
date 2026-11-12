@@ -224,6 +224,19 @@ Cómo funciona:
 - La TV la recibe en la consulta de `mirror.html` (~60 s). El banner se descarga una sola vez. Si tiene fecha de fin, la TV la quita a su hora aunque no tenga internet.
 - Una tira que se desplaza gasta CPU en el TV box (unos 40 % de un núcleo, medido); una fija, casi nada.
 
+Para la **Gestión de Rutas** (botón *Rutas* del panel):
+
+1. Ejecuta una vez `migrations/2026-11-12-routes.sql` (crea `sp_routes` y la columna `sp_users.route_id`). Si sale _Duplicate column name 'route_id'_, ya estaba hecha.
+2. Sube `private/lib.php`, `admin/index.php`, `api/device.php` y `api/media.php`.
+3. Sube a los assets de Kodular `loading.html`, `config.html`, `connection.html`, `fingerprint.html` y `mirror.html`.
+
+Cómo funciona:
+
+- Una **ruta** es una URL que se construye **por partes**, sin escribirla completa: URL base (p. ej. `https://sport.grupoazar.do/PizarrasV2`) + `agent` (texto), `pageIndex` (número), `timer` (número), `showParams` (texto), `otherQ` (Y/N) y `pageSize` (número). El formulario muestra la URL final mientras se escribe.
+- El parámetro **`leagues`** no se escribe: se rellena en **cada equipo** con los códigos de su liga (la que eligió el usuario en `/cuenta/` → *Equipos*), p. ej. `leagues=LIDOM,MLB,LMP`. Sin liga queda `leagues=` vacío.
+- Cada ruta se **asigna a uno o varios usuarios** («Asignar a usuarios»). Cada usuario tiene **una sola** ruta: si se le asigna otra, cambia. **Todos sus equipos** la heredan, también los que se le asignen después; no hace falta ir equipo por equipo.
+- Los equipos autorizados reciben la URL final (`deviceRoute`) en cada consulta (`api/device.php` y `api/media.php`) y la guardan en `localStorage` (`smartpizarra.routeUrl`; `""` = sin ruta). Todas las páginas la envían a la app en su JSON como `"routeUrl"`. Si se edita la ruta, se quita al usuario o se borra, los equipos lo reciben en su siguiente consulta (~1 min con `mirror.html`).
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas

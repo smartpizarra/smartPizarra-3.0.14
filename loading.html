@@ -30,6 +30,7 @@
                                                                    se guarda, la edita config.html;
                                                                    NO es el tamaño de una pantalla)
     smartpizarra.version / url / email / deviceId / league / leagues (liga del equipo, "" = sin liga)
+    smartpizarra.routeUrl (ruta de su usuario, Gestión de Rutas del panel; "" = sin ruta; JSON "routeUrl")
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
     smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
     smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
@@ -622,6 +623,55 @@
           return true;
         }
 
+        /*
+         * RUTA DEL EQUIPO (2026-11-12). El ADMINISTRADOR crea rutas en el
+         * panel (Gestión de Rutas: URL base + agent, pageIndex, timer,
+         * showParams, otherQ, pageSize) y las asigna a USUARIOS; todos los
+         * equipos del usuario la heredan. api/device.php y api/media.php
+         * envían la URL final (campo deviceRoute; leagues = códigos de la liga
+         * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
+         *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
+         * Va en el JSON a la app como "routeUrl".
+         * MISMO bloque en loading, config, connection, fingerprint y mirror.
+         */
+        var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+
+        /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
+        function cleanRouteUrl(value) {
+          var v = typeof value === "string" ? value.trim() : "";
+          return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
+        }
+
+        /** @returns {string} URL de la ruta guardada ("" = sin ruta o no válida). */
+        function readDeviceRoute() {
+          try {
+            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY));
+          } catch (e) {
+            return ""; // sin localStorage: sin ruta
+          }
+        }
+
+        /**
+         * Guarda la ruta de una respuesta de api/device.php o api/media.php.
+         * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
+         * ruta => "".
+         * @returns {boolean} true si cambió.
+         */
+        function storeDeviceRoute(res) {
+          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
+            return false;
+          }
+          var url = cleanRouteUrl(res.deviceRoute);
+          try {
+            var ls = window.localStorage;
+            if (ls.getItem(DEVICE_ROUTE_KEY) === url) return false;
+            ls.setItem(DEVICE_ROUTE_KEY, url);
+          } catch (e) {
+            return false;
+          }
+          return true;
+        }
+
         /**
          * Textos por idioma (GLOBAL: "smartpizarra.language"). Las claves de
          * idioma deben ser IGUALES a I18N de config.html, que es donde el
@@ -796,6 +846,15 @@
               onlyIfMissing: true, // igual que league
               parse: function (raw) {
                 return raw === null ? null : cleanLeagueCodes(raw);
+              },
+            },
+            /** URL de la ruta de su usuario ("" = sin ruta). La pone el servidor; aquí solo se crea si falta. */
+            routeUrl: {
+              key: DEVICE_ROUTE_KEY,
+              defaultValue: "",
+              onlyIfMissing: true, // igual que la liga
+              parse: function (raw) {
+                return raw === null ? null : cleanRouteUrl(raw);
               },
             },
           }),
@@ -1792,6 +1851,10 @@
                 if (storeDeviceLeague(res)) {
                   console.log("Liga del equipo actualizada:", readDeviceLeague());
                 }
+                // Ruta de su usuario (Gestión de Rutas del panel; solo si está autorizado)
+                if (storeDeviceRoute(res)) {
+                  console.log("Ruta del equipo actualizada:", readDeviceRoute());
+                }
                 console.log("Autorización:", authorized);
               });
           }
@@ -1823,6 +1886,8 @@
               // Liga del equipo (la asigna el usuario en /cuenta/): tipo y códigos; "" = sin liga
               league: readDeviceLeague().league,
               leagues: readDeviceLeague().leagues,
+              // Ruta de su usuario (URL completa, leagues = liga del equipo); "" = sin ruta
+              routeUrl: readDeviceRoute(),
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas
               scale: v.appScale / 100, // escala para la app (factor), la edita config.html
