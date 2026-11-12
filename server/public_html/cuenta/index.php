@@ -89,7 +89,7 @@ function targetFields(array $devices, bool $all, array $selected, string $uid): 
     $html = '<fieldset class="targets"><legend>Mostrar en</legend>'
         . '<label class="inline"><input type="radio" name="target" value="all"' . ($all ? ' checked' : '') . '> Todos mis dispositivos</label>'
         . '<label class="inline"><input type="radio" name="target" value="some"' . ($all ? '' : ' checked') . '> Solo en:</label>'
-        . '<div class="device-checks">' . (count($devices) > 1 ? deviceFilterBox() : '');
+        . '<div class="device-checks">' . ($devices ? deviceFilterBox() : '');
     if (!$devices) {
         $html .= '<span class="hint">Todavía no tienes dispositivos asignados.</span>';
     }
@@ -185,8 +185,8 @@ function overlayAssignFields(array $o, array $devices): string
     foreach (['none' => 'Sin asignar', 'all' => 'Todos mis dispositivos', 'devices' => 'Solo en:'] as $k => $text) {
         $html .= '<label class="inline"><input type="radio" name="scope" value="' . $k . '"' . ($scope === $k ? ' checked' : '') . '> ' . $text . '</label>';
     }
-    // Buscador (solo si hay varios dispositivos)
-    $html .= '<div class="device-checks">' . (count($devices) > 1 ? deviceFilterBox() : '');
+    // Buscador de dispositivos (siempre que tenga alguno)
+    $html .= '<div class="device-checks">' . ($devices ? deviceFilterBox() : '');
     if (!$devices) {
         $html .= '<span class="hint">Todavía no tienes dispositivos asignados.</span>';
     }

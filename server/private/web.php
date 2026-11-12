@@ -265,7 +265,8 @@ function baseStyles(): string
     .online.on { color: var(--ok); } .online.off { color: var(--bad); } .online.never { color: var(--muted); }
     .empty { color: var(--muted); text-align: center; padding: 24px; }
     /* Buscador de las listas de dispositivos al asignar (deviceFilterBox / deviceFilterScript) */
-    .device-filter { display: block; width: 100%; margin: 6px 0 4px; }
+    .device-filter-title { display: block; font-weight: 600; font-size: .9rem; margin-top: 8px; }
+    .device-filter { display: block; width: 100%; margin: 4px 0 6px; }
     .device-hidden { display: none !important; }
 CSS;
 }
@@ -278,7 +279,9 @@ CSS;
  */
 function deviceFilterBox(string $placeholder = 'Buscar dispositivo por nombre, ID o MAC del case'): string
 {
-    return '<input type="search" class="device-filter" data-device-filter placeholder="' . h($placeholder) . '" aria-label="Buscar dispositivo">'
+    // Título visible + caja (la caja debe quedar DENTRO de la lista: el JS usa su contenedor)
+    return '<span class="device-filter-title">&#128269; Buscar dispositivo</span>'
+        . '<input type="search" class="device-filter" data-device-filter placeholder="' . h($placeholder) . '" aria-label="Buscar dispositivo">'
         . '<span class="hint device-hidden" data-device-filter-none>Ningún dispositivo coincide.</span>';
 }
 

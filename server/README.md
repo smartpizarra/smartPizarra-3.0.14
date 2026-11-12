@@ -283,7 +283,7 @@ Cómo funciona:
 **Buscador de dispositivos al asignar** y **"Dispositivos" en `/cuenta/`** (sube `private/web.php`, `admin/index.php` y `cuenta/index.php`; sin migración):
 
 - En `/cuenta/` todos los textos dicen **dispositivo(s)** en lugar de equipo(s): pestaña *Dispositivos*, *Mis dispositivos*, *Todos mis dispositivos*, *Asignar a dispositivos*… La dirección sigue siendo `?s=equipos`, así que los enlaces guardados siguen funcionando.
-- Las listas de casillas para elegir dispositivos tienen una **caja de búsqueda** que filtra mientras se escribe. Solo aparece cuando hay más de un dispositivo.
+- Las listas de casillas para elegir dispositivos tienen una **caja de búsqueda** que filtra mientras se escribe, con el título «Buscar dispositivo». En `/cuenta/` aparece siempre que el usuario tenga dispositivos (al subir y editar contenido, y en «Asignar a dispositivos» de cada tira y banner); en el panel del administrador, cuando hay más de un equipo.
   - Usuario (*Contenido* y *Tiras y banners*): por nombre, ID o MAC del case.
   - Administrador (*Anuncios* y *Tiras*): por alias, alias del administrador, ID, empresa, MAC que envía la TV o MAC del case.
   - La MAC se encuentra completa o por un trozo, sin importar `:` o `-`. Las casillas marcadas que quedan ocultas por el filtro **siguen marcadas**. Pulsar Enter en la caja no envía el formulario.
