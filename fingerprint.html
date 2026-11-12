@@ -75,7 +75,7 @@
     "..." = TODOS llevan "internetStatus" ("" mientras la primera
     verificación no ha terminado) y los settings leídos de localStorage
     (null si no existen): "version","url","email","deviceId",
-    "routeUrl" (ruta de su usuario con la liga dentro, sin ruta = https://smartpizarra.cloud/none),"orientation","language","scale" (escala para la app, factor).
+    "routeUrl" (ruta de su usuario con la liga dentro, sin ruta = http://localhost/none.html),"orientation","language","scale" (escala para la app, factor).
     Autorización (solo cuando la bandera CAMBIA):
       {"origin":"fingerPrint","action":"authorized","status":"success","token":"", ...}
       {"origin":"fingerPrint","action":"unauthorized","status":"revoked|pending|conflict","token":"", ...}
@@ -661,22 +661,26 @@
          * envían la URL final (campo deviceRoute; leagues = códigos de la liga
          * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
          *   "smartpizarra.routeUrl" = URL completa; SIN RUTA (null del servidor,
-         *   o clave vacía/no válida) => NO_ROUTE_URL (2026-11-12): una página del
-         *   servidor que dice que el equipo no puede mostrar el contenido y que
-         *   se comunique con su supervisor. Así la app siempre recibe una URL.
+         *   o clave vacía/no válida) => NO_ROUTE_URL: la pantalla LOCAL none.html
+         *   (assets de Kodular) que dice que el equipo no puede mostrar el
+         *   contenido y que se comunique con su supervisor, y que sigue
+         *   consultando el servidor. Así la app siempre recibe una URL.
          * Va en el JSON a la app como "routeUrl".
          * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
          * (parámetro leagues); storeDeviceRoute borra las claves viejas
          * smartpizarra.league / .leagues / .leagueOptions.
-         * MISMO bloque en loading, config, connection, fingerprint y mirror.
+         * MISMO bloque en loading, config, connection, fingerprint, mirror y none.
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
-        /** URL por defecto SIN ruta (server/public_html/none/index.html). */
-        var NO_ROUTE_URL = "https://smartpizarra.cloud/none";
+        /** URL por defecto SIN ruta: la pantalla local none.html (assets de Kodular). */
+        var NO_ROUTE_URL = "http://localhost/none.html";
+        /** URL "sin ruta" de la versión anterior (en el servidor): se sustituye por NO_ROUTE_URL. */
+        var OLD_NO_ROUTE_RE = /^https?:\/\/(www\.)?smartpizarra\.cloud\/none\/?$/i;
 
         /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
         function cleanRouteUrl(value) {
           var v = typeof value === "string" ? value.trim() : "";
+          if (OLD_NO_ROUTE_RE.test(v)) return ""; // antigua página del servidor => NO_ROUTE_URL
           return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
         }
 
@@ -863,7 +867,7 @@
           msg.url = readText(KEYS.url);
           msg.email = readText(KEYS.email);
           msg.deviceId = readText(KEYS.deviceId);
-          msg.routeUrl = readDeviceRoute(); // ruta de su usuario con la liga del equipo dentro (sin ruta = https://smartpizarra.cloud/none)
+          msg.routeUrl = readDeviceRoute(); // ruta de su usuario con la liga del equipo dentro (sin ruta = http://localhost/none.html)
           msg.orientation = readOrientation(); // global
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)

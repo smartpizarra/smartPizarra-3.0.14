@@ -31,8 +31,8 @@
                                                                    NO es el tamaño de una pantalla)
     smartpizarra.version / url / email / deviceId
     smartpizarra.routeUrl (ruta de su usuario, Gestión de Rutas del panel, con la LIGA del equipo
-      dentro (leagues=...); JSON "routeUrl"). SIN RUTA => "https://smartpizarra.cloud/none" (página
-      del servidor: el equipo no puede mostrar el contenido, comuníquese con su supervisor).
+      dentro (leagues=...); JSON "routeUrl"). SIN RUTA => "http://localhost/none.html" (pantalla
+      local none.html: el equipo no puede mostrar el contenido, comuníquese con su supervisor).
       La liga ya no se guarda aparte.
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
     smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
@@ -55,7 +55,7 @@
   páginas. Los defaults que NO se editaron conservan el valor guardado
   (lo elegido en config.html o con updateSettings). Los defaults usados
   se anotan en "smartpizarra.defaults". deviceId nunca se reemplaza.
-  La RUTA (routeUrl) tampoco: su default (https://smartpizarra.cloud/none)
+  La RUTA (routeUrl) tampoco: su default (http://localhost/none.html)
   solo se pone si la clave NO existe o no es válida (onlyIfMissing); el
   valor lo actualiza el servidor. La liga del
   equipo ya no se guarda: va dentro de la URL de la ruta (leagues=...).
@@ -563,22 +563,27 @@
          * envían la URL final (campo deviceRoute; leagues = códigos de la liga
          * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
          *   "smartpizarra.routeUrl" = URL completa; SIN RUTA (null del servidor,
-         *   o clave vacía/no válida) => NO_ROUTE_URL (2026-11-12): una página del
-         *   servidor que dice que el equipo no puede mostrar el contenido y que
-         *   se comunique con su supervisor. Así la app siempre recibe una URL.
+         *   o clave vacía/no válida) => NO_ROUTE_URL: la pantalla LOCAL none.html
+         *   (assets de Kodular) que dice que el equipo no puede mostrar el
+         *   contenido y que se comunique con su supervisor, y que sigue
+         *   consultando el servidor. Así la app siempre recibe una URL.
          * Va en el JSON a la app como "routeUrl".
          * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
          * (parámetro leagues); storeDeviceRoute borra las claves viejas
          * smartpizarra.league / .leagues / .leagueOptions.
-         * MISMO bloque en loading, config, connection, fingerprint y mirror.
+         * MISMO bloque en loading, config, connection, fingerprint, mirror y none.
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
-        /** URL por defecto SIN ruta (server/public_html/none/index.html). */
+        /** URL por defecto SIN ruta: la pantalla local none.html (assets de Kodular). */
         var NO_ROUTE_URL = "none";
+        /** URL "sin ruta" de la versión anterior (en el servidor): se sustituye por NO_ROUTE_URL. */
+        var OLD_NO_ROUTE_RE =
+          /^https?:\/\/(www\.)?smartpizarra\.cloud\/none\/?$/i;
 
         /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
         function cleanRouteUrl(value) {
           var v = typeof value === "string" ? value.trim() : "";
+          if (OLD_NO_ROUTE_RE.test(v)) return ""; // antigua página del servidor => NO_ROUTE_URL
           return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
         }
 
@@ -1814,7 +1819,7 @@
               // "online" a api/ping.php. Solo viaja a la app (WebViewString,
               // dentro del equipo); nunca se muestra en pantalla.
               deviceSecret: v.deviceSecret,
-              // Ruta de su usuario (URL completa, leagues = liga del equipo); sin ruta = https://smartpizarra.cloud/none
+              // Ruta de su usuario (URL completa, leagues = liga del equipo); sin ruta = http://localhost/none.html
               routeUrl: readDeviceRoute(),
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas

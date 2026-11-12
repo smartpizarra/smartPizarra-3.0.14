@@ -1,0 +1,633 @@
+<!doctype html>
+<!--
+=====================================================================
+  SMART PIZARRA - PANTALLA "SIN RUTA" (none.html)
+  PARA ANDROID WEBVIEW (assets de Kodular: http://localhost/none.html)
+=====================================================================
+  QUE HACE
+  La muestra la app cuando el equipo NO tiene una ruta de contenido
+  (su usuario no tiene ruta en el panel > Gestión de Rutas): las páginas
+  guardan entonces en smartpizarra.routeUrl la URL de ESTA página
+  (NO_ROUTE_URL = "http://localhost/none.html") y la app la abre.
+    - Avisa de que el equipo no puede mostrar el contenido y que se
+      comunique con su supervisor (texto en el idioma global; el otro
+      idioma debajo, más pequeño).
+    - Cada CHECK_MS (30 s) consulta smartpizarra.cloud (api/device.php,
+      igual que fingerprint.html) y, tras CADA consulta, envía a la app un
+      JSON con la ruta: cuando el administrador asigne una ruta al usuario,
+      "routeUrl" deja de ser NO_ROUTE_URL y la app puede abrir la pizarra.
+    - Protege la pantalla (puede quedarse horas): el bloque salta a otra
+      posición cada DRIFT_MS (60 s) y la paleta cambia cada THEME_MS
+      (10 min); sin blanco puro ni colores saturados.
+
+  SETTINGS (localStorage). Los crea loading.html.
+    Lee:  "smartpizarra.orientation"   0/90/180/270  GLOBAL: gira la página
+          "smartpizarra.language"      es | en       GLOBAL: idioma
+          "smartpizarra.deviceId" / ".deviceSecret" / ".apiUrl"   para consultar
+          "smartpizarra.version" / ".url" / ".email" / ".scale"   solo en el JSON
+    Escribe (con lo que responda el servidor, como las demás páginas):
+          "smartpizarra.authorized"    "1" | "0"
+          "smartpizarra.routeUrl"      URL de la ruta (NO_ROUTE_URL = sin ruta)
+  Se releen cada 1 s (orientación e idioma se aplican en vivo).
+
+  CONTRATO DE SALIDA: UN JSON tras CADA consulta al servidor (cada 30 s,
+  la primera al abrir la página):
+    {"origin":"none","action":"check","status":"ok|error",
+     "internetStatus":"online|offline","httpStatus":200|403|404|0,
+     "authorized":true|false,
+     "authStatus":"authorized|pending|revoked|conflict|unknown",
+     "routeUrl":"http://localhost/none.html" | "https://sport...&leagues=...",
+     "hasRoute":true|false (routeUrl distinta de NO_ROUTE_URL),
+     "routeChanged":true|false (cambió en esta consulta),
+     "error":"",
+     "version","url","email","deviceId","orientation","language",
+     "scale" (escala para la app, factor; null si no existen)}
+    status "error" = sin respuesta válida del servidor (sin internet o
+    error): authStatus "unknown", authorized = última bandera guardada,
+    routeUrl = la guardada.
+  Sin deviceId / secreto / apiUrl no hay consulta y no se envía nada.
+
+  FUNCIONES PÚBLICAS (la app las llama con RunJavaScript)
+    noneCheck()    Consulta ya el servidor (y envía el JSON).
+    noneStatus()   Texto JSON con el estado actual (sin consultar).
+
+  RENDIMIENTO (TV box): sin animaciones ni transiciones; la pantalla
+  solo se redibuja al saltar el bloque (1 vez/min) o al cambiar algo.
+  Con la app en segundo plano no consulta. JavaScript ES5. Sin
+  recursos externos.
+=====================================================================
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Contenido no disponible - Smart Pizarra</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
+      }
+
+      /* #stage: se rota 0/90/180/270 (ancho y alto se intercambian a 90/270).
+         El JS fija su tamaño y la letra base (4 % del lado corto). */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5em;
+      }
+
+      /* PALETAS (las rota el JS cada THEME_MS): sin blanco puro ni colores
+         saturados; el degradado cambia de dirección */
+      #stage,
+      #stage.theme-0 {
+        background: linear-gradient(135deg, #141a5e 0%, #251570 100%);
+        color: rgba(236, 238, 248, 0.85);
+      }
+
+      #stage.theme-1 {
+        background: linear-gradient(315deg, #0f3346 0%, #182660 100%);
+        color: rgba(232, 242, 246, 0.85);
+      }
+
+      #stage.theme-2 {
+        background: linear-gradient(45deg, #2e1546 0%, #1b1c58 100%);
+        color: rgba(244, 236, 244, 0.85);
+      }
+
+      #stage .accent,
+      #stage.theme-0 .accent {
+        color: #e8bf62; /* amarillo suave */
+      }
+
+      #stage.theme-1 .accent {
+        color: #86c7e8; /* celeste */
+      }
+
+      #stage.theme-2 .accent {
+        color: #eaa98a; /* coral suave */
+      }
+
+      /* Bloque que se mueve (transform: solo recompone) */
+      #box {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        max-width: 100%;
+      }
+
+      .icon {
+        width: 4.5em;
+        height: 4.5em;
+        margin-bottom: 1em;
+      }
+
+      h1 {
+        font-size: 2em;
+        font-weight: 700;
+        line-height: 1.2;
+        margin-bottom: 0.6em;
+      }
+
+      .text {
+        font-size: 1.15em;
+        line-height: 1.45;
+        max-width: 32em;
+      }
+
+      .text strong {
+        font-weight: 700;
+      }
+
+      /* El otro idioma, más discreto */
+      .alt {
+        margin-top: 2.2em;
+        font-size: 0.8em;
+        max-width: 36em;
+        opacity: 0.65;
+      }
+
+      .brand {
+        margin-top: 3em;
+        font-size: 0.7em;
+        letter-spacing: 0.08em;
+        opacity: 0.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage" class="theme-0">
+      <div id="box">
+        <svg class="icon accent" viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 2 1 21h22L12 2zm0 4.6L19.5 19h-15L12 6.6zM11 10v5h2v-5h-2zm0 6v2h2v-2h-2z" />
+        </svg>
+        <h1 class="accent" id="title"></h1>
+        <p class="text"><span id="line1"></span><br /><span id="line2a"></span><strong id="line2b"></strong><span id="line2c"></span></p>
+        <p class="alt" id="alt"></p>
+        <p class="brand">SMART PIZARRA</p>
+      </div>
+    </div>
+
+    <script>
+      // Todo dentro de una IIFE; lo público se publica en window.*
+      (function () {
+        "use strict";
+
+        /* ==================================================================
+           1. CONFIGURACIÓN
+           ================================================================== */
+
+        var CHECK_MS = 30000; // consulta al servidor (y JSON a la app)
+        var CHECK_TIMEOUT_MS = 8000; // espera máxima de una consulta
+        var WATCH_MS = 1000; // relectura de orientación e idioma
+        var DRIFT_MS = 60000; // protección de pantalla: salto del bloque
+        var THEME_MS = 600000; // protección de pantalla: cambio de paleta
+        var THEMES = 3; // #stage.theme-0 .. theme-2 (CSS)
+        var MAX_SHIFT = 0.12; // salto máximo: 12 % del lado corto (y nunca fuera del espacio libre)
+        var MIN_STEP = 0.03; // cada salto mueve al menos un 3 % del lado corto
+        var ORIENTATIONS = [0, 90, 180, 270];
+
+        /** Claves de localStorage (iguales a CONFIG.settings de loading.html). */
+        var KEYS = {
+          orientation: "smartpizarra.orientation",
+          language: "smartpizarra.language",
+          deviceId: "smartpizarra.deviceId",
+          deviceSecret: "smartpizarra.deviceSecret", // nunca se muestra
+          apiUrl: "smartpizarra.apiUrl", // https://smartpizarra.cloud/api/device.php
+          authorized: "smartpizarra.authorized",
+          version: "smartpizarra.version",
+          url: "smartpizarra.url",
+          email: "smartpizarra.email",
+          appScale: "smartpizarra.scale",
+        };
+
+        /*
+         * RUTA DEL EQUIPO (2026-11-12). El ADMINISTRADOR crea rutas en el
+         * panel (Gestión de Rutas: URL base + agent, pageIndex, timer,
+         * showParams, otherQ, pageSize) y las asigna a USUARIOS; todos los
+         * equipos del usuario la heredan. api/device.php y api/media.php
+         * envían la URL final (campo deviceRoute; leagues = códigos de la liga
+         * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
+         *   "smartpizarra.routeUrl" = URL completa; SIN RUTA (null del servidor,
+         *   o clave vacía/no válida) => NO_ROUTE_URL: esta pantalla local
+         *   (none.html) que dice que el equipo no puede mostrar el contenido y
+         *   que se comunique con su supervisor. Así la app siempre recibe una URL.
+         * Va en el JSON a la app como "routeUrl".
+         * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
+         * (parámetro leagues); storeDeviceRoute borra las claves viejas
+         * smartpizarra.league / .leagues / .leagueOptions.
+         * MISMO bloque en loading, config, connection, fingerprint, mirror y none.
+         */
+        var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+        /** URL por defecto SIN ruta: la pantalla local none.html (assets de Kodular). */
+        var NO_ROUTE_URL = "http://localhost/none.html";
+        /** URL "sin ruta" de la versión anterior (en el servidor): se sustituye por NO_ROUTE_URL. */
+        var OLD_NO_ROUTE_RE = /^https?:\/\/(www\.)?smartpizarra\.cloud\/none\/?$/i;
+
+        /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
+        function cleanRouteUrl(value) {
+          var v = typeof value === "string" ? value.trim() : "";
+          if (OLD_NO_ROUTE_RE.test(v)) return ""; // antigua página del servidor => NO_ROUTE_URL
+          return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
+        }
+
+        /** @returns {string} URL de la ruta guardada (NO_ROUTE_URL si no hay o no es válida). */
+        function readDeviceRoute() {
+          try {
+            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) || NO_ROUTE_URL;
+          } catch (e) {
+            return NO_ROUTE_URL; // sin localStorage: sin ruta
+          }
+        }
+
+        /**
+         * Guarda la ruta de una respuesta de api/device.php o api/media.php.
+         * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
+         * ruta => NO_ROUTE_URL.
+         * @returns {boolean} true si cambió.
+         */
+        function storeDeviceRoute(res) {
+          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
+            return false;
+          }
+          var url = cleanRouteUrl(res.deviceRoute) || NO_ROUTE_URL;
+          try {
+            var ls = window.localStorage;
+            // Restos de cuando la liga se guardaba aparte (ahora va en la URL)
+            ls.removeItem("smartpizarra.league");
+            ls.removeItem("smartpizarra.leagues");
+            ls.removeItem("smartpizarra.leagueOptions");
+            if (ls.getItem(DEVICE_ROUTE_KEY) === url) return false;
+            ls.setItem(DEVICE_ROUTE_KEY, url);
+          } catch (e) {
+            return false;
+          }
+          return true;
+        }
+
+        /** Textos por idioma (claves de idioma iguales a I18N de loading.html). */
+        var I18N = {
+          es: {
+            pageTitle: "Contenido no disponible - Smart Pizarra",
+            title: "Este equipo no puede mostrar el contenido",
+            line1: "No tiene un contenido asignado en este momento.",
+            line2a: "Por favor, ",
+            line2b: "comuníquese con su supervisor",
+            line2c: ".",
+            alt: "This device cannot display the content because it has no content assigned. Please contact your supervisor.",
+          },
+          en: {
+            pageTitle: "Content not available - Smart Pizarra",
+            title: "This device cannot display the content",
+            line1: "It has no content assigned at the moment.",
+            line2a: "Please ",
+            line2b: "contact your supervisor",
+            line2c: ".",
+            alt: "Este equipo no puede mostrar el contenido porque no tiene un contenido asignado. Comuníquese con su supervisor.",
+          },
+        };
+        var DISPLAY_LANGUAGE = "es"; // si la clave aún no existe (no se guarda)
+
+        /* ==================================================================
+           2. SETTINGS (localStorage)
+           ================================================================== */
+
+        function readStorage(key) {
+          try {
+            return window.localStorage.getItem(key);
+          } catch (e) {
+            return null;
+          }
+        }
+
+        function writeStorage(key, value) {
+          try {
+            window.localStorage.setItem(key, value);
+          } catch (e) {
+            console.log("No se pudo guardar en localStorage:", e);
+          }
+        }
+
+        /** @returns {string|null} Texto sin espacios sobrantes, o null si falta. */
+        function readText(key) {
+          var raw = readStorage(key);
+          var text = raw === null ? "" : String(raw).trim();
+          return text !== "" ? text : null;
+        }
+
+        /** @returns {number|null} 0/90/180/270, o null. */
+        function readOrientation() {
+          var degrees = parseInt(readStorage(KEYS.orientation), 10);
+          if (isNaN(degrees)) return null;
+          degrees = ((degrees % 360) + 360) % 360;
+          return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
+        }
+
+        /** @returns {string|null} Idioma guardado (clave de I18N) o null. */
+        function readLanguageKey() {
+          var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
+          return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
+        }
+
+        /** Escala para la app (10..300 %) como factor, o null. */
+        function readAppScale() {
+          var p = parseInt(readStorage(KEYS.appScale), 10);
+          return p >= 10 && p <= 300 ? p / 100 : null;
+        }
+
+        /** Agrega a un mensaje los settings leídos AHORA (null en los que no existen). */
+        function withSettings(msg) {
+          msg.version = readText(KEYS.version);
+          msg.url = readText(KEYS.url);
+          msg.email = readText(KEYS.email);
+          msg.deviceId = readText(KEYS.deviceId);
+          msg.routeUrl = readDeviceRoute(); // ruta con la liga dentro (NO_ROUTE_URL = sin ruta)
+          msg.hasRoute = msg.routeUrl !== NO_ROUTE_URL;
+          msg.orientation = readOrientation();
+          msg.language = readLanguageKey();
+          msg.scale = readAppScale();
+          return msg;
+        }
+
+        /* ==================================================================
+           3. COMUNICACIÓN CON LA APP
+           ================================================================== */
+
+        /** Envía un texto a la app probando 4 métodos (igual que las demás páginas). */
+        function sendToAppInventor(message) {
+          try {
+            if (window.AppInventor && window.AppInventor.setWebViewString) {
+              window.AppInventor.setWebViewString(message); // Kodular / App Inventor
+            } else if (window.android && window.android.onReceiveValue) {
+              window.android.onReceiveValue(message);
+            } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
+              window.androidInterface.onReceiveValue(message);
+            } else {
+              window.postMessage(message, "*"); // navegador normal (pruebas)
+            }
+          } catch (e) {
+            console.log("Error enviando a AppInventor:", e);
+          }
+        }
+
+        /* ==================================================================
+           4. CONSULTA AL SERVIDOR (api/device.php, como fingerprint.html)
+           ================================================================== */
+
+        var check = {
+          timer: null,
+          busy: false,
+          last: null, // último resultado (para noneStatus)
+
+          /** Programa la siguiente consulta. */
+          schedule: function (ms) {
+            var self = this;
+            clearTimeout(this.timer);
+            this.timer = setTimeout(function () {
+              self.run();
+            }, ms);
+          },
+
+          /** POST form-urlencoded (sin verificación previa CORS en el WebView). */
+          request: function (apiUrl, id, secret) {
+            return new Promise(function (resolve) {
+              var done = false;
+              function finish(http, data) {
+                if (done) return;
+                done = true;
+                resolve({ http: http, data: data });
+              }
+              try {
+                var xhr = new XMLHttpRequest();
+                xhr.open("POST", apiUrl, true);
+                xhr.timeout = CHECK_TIMEOUT_MS;
+                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.onload = function () {
+                  var data = null;
+                  try {
+                    data = JSON.parse(xhr.responseText);
+                  } catch (e) {
+                    data = null;
+                  }
+                  finish(xhr.status, data);
+                };
+                xhr.onerror = xhr.ontimeout = xhr.onabort = function () {
+                  finish(0, null);
+                };
+                var version = readText(KEYS.version) || "";
+                xhr.send(
+                  "deviceId=" + encodeURIComponent(id) +
+                    "&secret=" + encodeURIComponent(secret) +
+                    "&version=" + encodeURIComponent(version)
+                );
+              } catch (e) {
+                finish(0, null);
+              }
+            });
+          },
+
+          /** Una consulta + el JSON a la app. Nunca dos a la vez. */
+          run: function () {
+            var self = this;
+            clearTimeout(this.timer);
+            if (this.busy) return;
+            // En segundo plano no se consulta (se reanuda al volver)
+            if (document.hidden) {
+              this.schedule(CHECK_MS);
+              return;
+            }
+            var id = readText(KEYS.deviceId);
+            var secret = readText(KEYS.deviceSecret);
+            var apiUrl = readText(KEYS.apiUrl);
+            if (!id || !secret || !apiUrl) {
+              this.schedule(CHECK_MS); // sin credenciales: nada que consultar ni enviar
+              return;
+            }
+            this.busy = true;
+            var before = readDeviceRoute();
+            this.request(apiUrl, id, secret).then(function (r) {
+              var d = r.data;
+              var ok = !!(d && d.ok === true);
+              var authStatus = "unknown";
+              if (r.http === 403 && d && d.error === "secret_mismatch") {
+                authStatus = "conflict"; // el ID está registrado con otro secreto
+                writeStorage(KEYS.authorized, "0");
+              } else if (ok) {
+                authStatus = d.authorized === true ? "authorized" : d.status === "revoked" ? "revoked" : "pending";
+                writeStorage(KEYS.authorized, d.authorized === true ? "1" : "0");
+                storeDeviceRoute(d); // solo autorizados traen deviceRoute
+              }
+              var answered = ok || authStatus === "conflict";
+              var msg = withSettings({
+                origin: "none",
+                action: "check",
+                status: answered ? "ok" : "error",
+                internetStatus: r.http ? "online" : "offline",
+                httpStatus: r.http,
+                authorized: answered ? authStatus === "authorized" : readStorage(KEYS.authorized) === "1",
+                authStatus: authStatus,
+                routeChanged: false,
+                error: answered ? "" : r.http ? "HTTP " + r.http : "sin respuesta",
+              });
+              msg.routeChanged = msg.routeUrl !== before;
+              self.last = msg;
+              sendToAppInventor(JSON.stringify(msg));
+              self.busy = false;
+              self.schedule(CHECK_MS);
+            });
+          },
+        };
+
+        /* ==================================================================
+           5. ORIENTACIÓN, TAMAÑO E IDIOMA
+           #stage = pantalla girada; letra base = 4 % del lado corto.
+           ================================================================== */
+
+        var stage = document.getElementById("stage");
+        var box = document.getElementById("box");
+        var lastLayout = "";
+        var lastLanguage = "";
+
+        function applyLayout() {
+          var orientation = readOrientation() || 0;
+          var width = window.innerWidth || document.documentElement.clientWidth;
+          var height = window.innerHeight || document.documentElement.clientHeight;
+          if (!width || !height) return; // WebView aún en 0x0
+          var state = orientation + "|" + width + "x" + height;
+          if (state === lastLayout) return;
+          lastLayout = state;
+          var w = width;
+          var h = height;
+          var transform = "none";
+          if (orientation === 90) {
+            w = height;
+            h = width;
+            transform = "translate(" + width + "px, 0px) rotate(90deg)";
+          } else if (orientation === 180) {
+            transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+          } else if (orientation === 270) {
+            w = height;
+            h = width;
+            transform = "translate(0px, " + height + "px) rotate(270deg)";
+          }
+          stage.style.width = w + "px";
+          stage.style.height = h + "px";
+          stage.style.transformOrigin = "0 0";
+          stage.style.transform = transform;
+          stage.style.fontSize = Math.max(10, Math.round(Math.min(w, h) * 0.04)) + "px";
+          drift(); // recolocar el bloque dentro del nuevo espacio
+        }
+
+        function applyLanguage() {
+          var lang = readLanguageKey() || DISPLAY_LANGUAGE;
+          if (lang === lastLanguage) return;
+          lastLanguage = lang;
+          var t = I18N[lang];
+          document.documentElement.lang = lang;
+          document.title = t.pageTitle;
+          document.getElementById("title").textContent = t.title;
+          document.getElementById("line1").textContent = t.line1;
+          document.getElementById("line2a").textContent = t.line2a;
+          document.getElementById("line2b").textContent = t.line2b;
+          document.getElementById("line2c").textContent = t.line2c;
+          document.getElementById("alt").textContent = t.alt;
+          drift(); // el bloque cambia de tamaño
+        }
+
+        /* ==================================================================
+           6. PROTECCIÓN DE LA PANTALLA (sin animaciones)
+           ================================================================== */
+
+        var x = 0;
+        var y = 0;
+        var theme = 0;
+
+        /** Mueve el bloque a una posición al azar dentro del espacio libre. */
+        function drift() {
+          var w = stage.clientWidth;
+          var h = stage.clientHeight;
+          if (!w || !h) return;
+          var short = Math.min(w, h);
+          var pad = parseFloat(stage.style.fontSize || "16") * 1.5; // padding de #stage (1.5em)
+          var freeX = Math.max(0, (w - 2 * pad - box.offsetWidth) / 2);
+          var freeY = Math.max(0, (h - 2 * pad - box.offsetHeight) / 2);
+          var limX = Math.min(freeX + pad * 0.5, short * MAX_SHIFT);
+          var limY = Math.min(freeY + pad * 0.5, short * MAX_SHIFT);
+          var nx = x;
+          var ny = y;
+          for (var i = 0; i < 6; i++) {
+            nx = Math.round((Math.random() * 2 - 1) * limX);
+            ny = Math.round((Math.random() * 2 - 1) * limY);
+            if (Math.abs(nx - x) + Math.abs(ny - y) >= short * MIN_STEP) break;
+          }
+          x = nx;
+          y = ny;
+          box.style.transform = "translate(" + x + "px," + y + "px)";
+        }
+
+        function nextTheme() {
+          theme = (theme + 1) % THEMES;
+          stage.className = "theme-" + theme;
+        }
+
+        /* ==================================================================
+           7. INICIO Y API PÚBLICA
+           ================================================================== */
+
+        window.noneCheck = function () {
+          check.run();
+        };
+
+        window.noneStatus = function () {
+          return JSON.stringify(check.last || withSettings({ origin: "none", action: "status" }));
+        };
+
+        // Para pruebas desde la consola
+        window.noneDrift = drift;
+        window.noneNextTheme = nextTheme;
+
+        function watch() {
+          applyLayout();
+          applyLanguage();
+        }
+
+        function init() {
+          // Paleta y posición iniciales al azar
+          theme = Math.floor(Math.random() * THEMES);
+          stage.className = "theme-" + theme;
+          watch();
+          setInterval(watch, WATCH_MS);
+          setInterval(drift, DRIFT_MS);
+          setInterval(nextTheme, THEME_MS);
+          window.addEventListener("resize", watch);
+          window.addEventListener("storage", watch);
+          document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) check.run(); // al volver: consulta enseguida
+          });
+          check.run(); // primera consulta (y primer JSON) al abrir
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>
