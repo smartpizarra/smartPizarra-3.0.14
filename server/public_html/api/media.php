@@ -1,4 +1,5 @@
 <?php
+// Versión del archivo: 1.0.0 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - API DE CONTENIDO (imágenes y videos) PARA mirror.html

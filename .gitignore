@@ -1,3 +1,4 @@
+# Versión del archivo: 1.0.0 (2026-11-12)
 # Configuración real del servidor (contraseñas de la base y del panel): nunca a git
 server/private/config.php
 

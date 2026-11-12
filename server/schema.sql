@@ -1,3 +1,4 @@
+-- Versión del archivo: 1.0.0 (2026-11-12)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos

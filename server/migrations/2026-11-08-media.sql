@@ -1,3 +1,4 @@
+-- Versión del archivo: 1.0.0 (2026-11-12)
 -- =====================================================================
 --  MIGRACIÓN 2026-11-08 (2): imágenes y videos de los usuarios (mirror.html)
 --  Solo si la base YA existía (si importas schema.sql desde cero, ya

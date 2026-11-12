@@ -1,3 +1,4 @@
+-- Versión del archivo: 1.0.0 (2026-11-12)
 -- =====================================================================
 --  MIGRACIÓN 2026-11-11: TIRAS (texto) y BANNERS (imagen) en mirror.html
 --  Solo si la base YA existía (si importas schema.sql desde cero, ya

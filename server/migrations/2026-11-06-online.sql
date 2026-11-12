@@ -1,3 +1,4 @@
+-- Versión del archivo: 1.0.0 (2026-11-12)
 -- =====================================================================
 --  MIGRACIÓN 2026-11-06: señal "online" de la app nativa Kodular
 --  Solo si la tabla sp_devices YA existía antes de esta fecha (si importas
