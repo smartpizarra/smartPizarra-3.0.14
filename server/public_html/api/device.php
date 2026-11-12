@@ -12,6 +12,9 @@
  *    secret    64 caracteres hex      (localStorage smartpizarra.deviceSecret)
  *    version   texto opcional         (versión de la app)
  *    event     opcional: "boot" (solo lo envía loading.html al arrancar)
+ *              o "mac" (loading.html: setMac() recibió una MAC nueva después
+ *              de la consulta de arranque; NO cuenta como arranque)
+ *    mac       opcional, solo con event=boot|mac: "E8:BB:3E:C8:FB:5A"
  *
  *  QUÉ HACE
  *    - Equipo nuevo: lo registra como "pending" (límite por IP y hora).
@@ -23,6 +26,11 @@
  *      el arranque en el historial (sp_boots, máx. boots_per_device_per_hour
  *      por equipo). Es lo ÚNICO que escribe en el historial: las consultas
  *      de config, connection y fingerprint no cuentan como arranques.
+ *    - mac (con event=boot|mac): se ASIGNA a este equipo. Una MAC solo está
+ *      en UN equipo: si la tenía otro (la misma TV restablecida de fábrica,
+ *      que generó un ID nuevo), se le quita y pasa a este (mac_from = ID
+ *      anterior). FF:FF:FF:FF:FF:FF (default "sin MAC") y las MAC falsas de
+ *      Android se ignoran. La respuesta añade "mac" (la que tiene el equipo).
  *    - Devuelve su estado. Solo quien tiene el secreto puede consultarlo:
  *      conocer el ID (que se ve en pantalla y en el QR) no basta.
  *
@@ -59,6 +67,11 @@ try {
     $version = $version === '' ? null : mb_substr($version, 0, 20);
     // "boot" = arranque de loading.html (fingerprint.html no lo envía)
     $isBoot = ($_POST['event'] ?? '') === 'boot';
+    // MAC del equipo: solo la envía loading.html (event=boot, o event=mac si
+    // la app se la pasó después del arranque). null = sin MAC válida.
+    $mac = ($isBoot || ($_POST['event'] ?? '') === 'mac')
+        ? DeviceRepository::cleanMac(mb_substr((string) ($_POST['mac'] ?? ''), 0, 40))
+        : null;
 
     if (!DeviceRepository::isValidId($id) || !DeviceRepository::isValidSecret($secret)) {
         Http::json(['ok' => false, 'error' => 'bad_request'], 400);
@@ -96,11 +109,24 @@ try {
         }
     }
 
+    if ($mac !== null) {
+        // Una MAC en un solo equipo: se le quita al que la tuviera (no rompe
+        // la consulta si falla: la autorización es lo importante)
+        try {
+            $previous = DeviceRepository::assignMac($id, $mac);
+            if ($previous !== null) {
+                error_log("smartpizarra api/device.php: MAC $mac reasignada de $previous a $id");
+            }
+            $device = DeviceRepository::find($id) ?? $device;
+        } catch (Throwable $e) {
+            error_log('smartpizarra api/device.php (mac): ' . $e->getMessage());
+        }
+    }
     // status/authorized: los que fijó el administrador en el panel
     $payload = array_merge(
         ['ok' => true, 'deviceId' => $id],
         DeviceRepository::authPayload($device),
-        ['registered' => $registered]
+        ['registered' => $registered, 'mac' => $device['mac'] ?? null]
     );
     // Ruta de su USUARIO (URL final con leagues = liga de ESTE equipo, que elige
     // el usuario en /cuenta/) o null, solo a equipos AUTORIZADOS. Si no está

@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   last_seen_at  DATETIME     NOT NULL,          -- última consulta de las páginas HTML (UTC)
   online_at     DATETIME     NULL,              -- última señal "online" de la app nativa Kodular (api/ping.php, UTC)
   status_at     DATETIME     NULL,              -- último cambio de estado desde el panel (UTC)
+  mac           VARCHAR(17)  NULL,              -- MAC "E8:BB:3E:C8:FB:5A" (la envía loading.html); UNA por equipo, nunca repetida
+  mac_at        DATETIME     NULL,              -- cuándo se le asignó esa MAC (UTC)
+  mac_from      VARCHAR(32)  NULL,              -- equipo que tenía antes esa MAC (p. ej. la misma TV antes de restablecerla)
   PRIMARY KEY (device_id),
+  UNIQUE KEY uq_device_mac (mac),               -- una MAC solo puede estar en un equipo (NULL se puede repetir)
   KEY idx_status (status),
   KEY idx_last_seen (last_seen_at),
   KEY idx_online (online_at),

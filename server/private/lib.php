@@ -246,6 +246,11 @@ final class Database
             return 'Falta la gestión de rutas (tabla sp_routes / columna sp_users.route_id): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-12-routes.sql.';
         }
+        // Dirección MAC de cada equipo (la envía loading.html)
+        if (!in_array('mac', $cols, true) || !in_array('mac_from', $cols, true)) {
+            return 'Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.';
+        }
         return null;
     }
 
@@ -314,6 +319,63 @@ final class DeviceRepository
     public static function isValidSecret(string $secret): bool
     {
         return (bool) preg_match('/^[0-9a-f]{64}$/', $secret);
+    }
+
+    /* ------------------- DIRECCIÓN MAC (2026-11-12) -------------------
+     * La lee la app (Kodular), la pasa a loading.html con setMac() y
+     * loading.html la envía a api/device.php (event=boot o event=mac).
+     * Una MAC está en UN SOLO equipo a la vez (índice UNIQUE sp_devices.mac):
+     * si la envía otro equipo (p. ej. la misma TV tras un restablecimiento
+     * de fábrica, que genera un ID nuevo), se le QUITA al anterior y se
+     * asigna al nuevo; mac_from guarda el ID anterior. */
+
+    /** MAC por defecto de loading.html ("sin MAC"): nunca se guarda. */
+    public const NO_MAC = 'FF:FF:FF:FF:FF:FF';
+    /** MACs que no identifican un equipo (sin dato / falsas de Android). */
+    private const FAKE_MACS = [self::NO_MAC, '02:00:00:00:00:00', '00:00:00:00:00:00'];
+
+    /**
+     * Normaliza una MAC ("e8-bb-3e-c8-fb-5a", "e8bb.3ec8.fb5a"...) a
+     * "E8:BB:3E:C8:FB:5A".
+     * @return string|null null si no es válida o es una MAC "sin dato".
+     */
+    public static function cleanMac(string $value): ?string
+    {
+        $hex = strtoupper((string) preg_replace('/[\s:.\-]/', '', $value));
+        if (!preg_match('/^[0-9A-F]{12}$/', $hex)) {
+            return null;
+        }
+        $mac = implode(':', str_split($hex, 2));
+        return in_array($mac, self::FAKE_MACS, true) ? null : $mac;
+    }
+
+    /**
+     * Asigna una MAC (ya normalizada con cleanMac) a un equipo, quitándosela
+     * a cualquier otro que la tuviera.
+     * @return string|null ID del equipo que la tenía antes (se le quitó), o null.
+     */
+    public static function assignMac(string $id, string $mac): ?string
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare('SELECT device_id FROM sp_devices WHERE mac = ? AND device_id <> ? FOR UPDATE');
+            $stmt->execute([$mac, $id]);
+            $previous = $stmt->fetchColumn();
+            $previous = $previous === false ? null : (string) $previous;
+            if ($previous !== null) {
+                $pdo->prepare('UPDATE sp_devices SET mac = NULL, mac_at = NULL WHERE device_id = ?')->execute([$previous]);
+            }
+            // Solo si cambia (la misma MAC en cada arranque no toca nada)
+            $pdo->prepare(
+                'UPDATE sp_devices SET mac = ?, mac_at = ?, mac_from = ? WHERE device_id = ? AND (mac IS NULL OR mac <> ?)'
+            )->execute([$mac, Database::now(), $previous, $id, $mac]);
+            $pdo->commit();
+            return $previous;
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
     }
 
     /**
@@ -511,9 +573,17 @@ final class DeviceRepository
             $args[] = $userId;
         }
         if ($search !== '') {
-            $where[] = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ?)';
+            $match = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ?';
             $like = '%' . addcslashes($search, '%_\\') . '%';
             array_push($args, $like, $like, $like, $like);
+            // Búsqueda por MAC: sin importar separadores (":", "-", ".") ni
+            // mayúsculas; vale un trozo ("FB:5A", "e8bb3e"...).
+            $hex = strtoupper((string) preg_replace('/[\s:.\-]/', '', $search));
+            if (strlen($hex) >= 2 && ctype_xdigit($hex)) {
+                $match .= " OR REPLACE(d.mac, ':', '') LIKE ?";
+                $args[] = '%' . $hex . '%';
+            }
+            $where[] = $match . ')';
         }
         // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
         $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,

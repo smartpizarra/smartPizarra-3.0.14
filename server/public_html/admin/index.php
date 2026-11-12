@@ -79,6 +79,12 @@
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
  *
+ *  - MAC DE CADA EQUIPO (2026-11-12): la envía loading.html y el servidor
+ *    la asigna a UN solo equipo (DeviceRepository::assignMac). La tarjeta
+ *    muestra la MAC, desde cuándo y, si la tenía otro equipo (la misma TV
+ *    antes de restablecerla), cuál. El buscador también busca por MAC
+ *    (sin importar ":", "-", "." ni mayúsculas; vale un trozo).
+ *
  *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
  *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
  *    equipos solo muestran imágenes/videos mientras la vigencia está
@@ -1169,6 +1175,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .media-body { flex: 1 1 260px; min-width: 0; }
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
+    .device-mac { font-family: ui-monospace, Consolas, monospace; } /* MAC del equipo */
     /* Liga de un equipo (tarjeta del equipo): etiqueta + selector en una fila */
     .league-form { align-items: center; flex-wrap: wrap; margin: 4px 0; }
     .league-form select { flex: 1 1 220px; min-width: 0; padding: 6px 8px; font: inherit; color: var(--text);
@@ -1313,7 +1320,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
   <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues'], true) ? ' hidden-tools' : '' ?>" method="get">
-    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa o email' ?>" aria-label="Buscar">
+    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa, email o MAC' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
       <option value="">Todos los usuarios</option>
@@ -1991,6 +1998,12 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               (asígnaselas en su ficha para poder elegir la liga aquí)</span><br>
           <?php endif; ?>
         <?php endif; ?>
+        <!-- MAC (la envía loading.html; una MAC solo está en un equipo) y, si la tenía otro equipo, cuál -->
+        MAC: <?= !empty($d['mac']) ? '<span class="device-mac">' . h($d['mac']) . '</span>'
+            . ' <span class="owner">· desde ' . dateTag($d['mac_at']) . '</span>'
+            . (!empty($d['mac_from']) ? ' <span class="owner">· antes en <a href="./?' . h(http_build_query(['filter' => 'all', 'q' => $d['mac_from']])) . '">'
+              . h($d['mac_from']) . '</a> (equipo restablecido)</span>' : '')
+          : '<em>sin MAC</em>' ?><br>
         <!-- Última conexión: cualquier consulta de las páginas de la TV (device.php / media.php) o señal de la app nativa (ping.php) -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>

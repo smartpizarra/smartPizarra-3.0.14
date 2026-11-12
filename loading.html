@@ -50,6 +50,12 @@
   historial del equipo (panel > Historial) y refresca su "última conexión".
   El JSON también lleva "deviceId" y "deviceSecret": la app NATIVA los usa
   para enviar cada cierto tiempo su señal "online" a api/ping.php.
+  MAC (2026-11-12): la consulta de arranque lleva también "mac" (la que
+  pasó la app con setMac; no se envía si es FF:FF:FF:FF:FF:FF). El
+  servidor la ASIGNA a este equipo y se la quita a cualquier otro: una MAC
+  solo está en un equipo (p. ej. la misma TV restablecida, con ID nuevo).
+  Si setMac recibe una MAC nueva DESPUÉS del arranque, se envía enseguida
+  con event=mac (no cuenta como arranque en el historial).
 
   CAMBIAR UN VALOR POR DEFECTO EN ESTE ARCHIVO
   Si se edita un default (ej. version "3.0.14" => "3.0.16"), al abrir esta
@@ -1695,7 +1701,10 @@
 
           /**
            * @param {string} apiUrl
-           * @param {{deviceId:string, secret:string, version:string}} data
+           * @param {{deviceId:string, secret:string, version:string, event?:string, mac?:string}} data
+           *        event: "boot" (por defecto, arranque => historial) o "mac"
+           *        (solo para enviar una MAC nueva; no cuenta como arranque).
+           *        mac: MAC normalizada o "" (no se envía).
            * @returns {Promise<object|null>} La respuesta del servidor ({ok:true,
            *          authorized, status, deviceRoute?...}); null = sin
            *          respuesta válida (no cambiar nada).
@@ -1732,7 +1741,11 @@
                     encodeURIComponent(data.version) +
                     // Arranque: el servidor lo anota en el historial del
                     // equipo y refresca su "última conexión" en el panel.
-                    "&event=boot",
+                    "&event=" +
+                    encodeURIComponent(data.event || "boot") +
+                    // MAC del equipo (setMac): el servidor se la asigna y se
+                    // la quita a cualquier otro equipo que la tuviera.
+                    (data.mac ? "&mac=" + encodeURIComponent(data.mac) : ""),
                 );
               } catch (e) {
                 resolve(null);
@@ -1822,15 +1835,22 @@
            * Consulta la autorización del equipo al arrancar (así se detecta
            * si se revocó) y guarda la bandera "smartpizarra.authorized" con
            * lo que diga el servidor. Sin respuesta se conserva la anterior.
+           * Envía también la MAC guardada (setMac; "" si es el default
+           * FF:FF:FF:FF:FF:FF): el servidor se la asigna a este equipo.
+           * @param {string} [event] "boot" (arranque, por defecto) o "mac"
+           *        (setMac recibió una MAC nueva después del arranque).
            * @private
            */
-          _checkAuthorization() {
+          _checkAuthorization(event) {
             const v = this.settings.values;
+            this.authStarted = true; // ya salió la consulta de arranque
             this.auth
               .check(v.apiUrl, {
                 deviceId: v.deviceId,
                 secret: v.deviceSecret,
                 version: v.version,
+                event: event || "boot",
+                mac: cleanMac(v.mac),
               })
               .then((res) => {
                 if (res === null) {
@@ -2036,6 +2056,53 @@
            updateSettings() y procesa las llamadas que llegaron antes */
         function start() {
           const screen = new LoadingScreen(CONFIG);
+          /**
+           * Función GLOBAL (la app la llama con RunJavaScript / EvaluateJavaScript):
+           *   setMac("e8:bb:3e:c8:fb:5a")
+           * Guarda la MAC en localStorage ("smartpizarra.mac") normalizada
+           * ("E8:BB:3E:C8:FB:5A"; también acepta "-", "." o sin separadores).
+           * Si llega vacía, inválida o la falsa de Android (02:00:00:00:00:00):
+           * se guarda DEFAULT_MAC ("FF:FF:FF:FF:FF:FF") solo si NO había una
+           * MAC real guardada; una MAC real nunca se pisa con el default.
+           * SERVIDOR: la MAC viaja en la consulta de arranque (event=boot). Si
+           * llega una MAC NUEVA después de esa consulta, se envía enseguida
+           * con event=mac (no cuenta como arranque). El servidor la asigna a
+           * este equipo y se la quita a cualquier otro (una MAC por equipo).
+           * Devuelve texto JSON: {"ok":true,"mac":"E8:BB:3E:C8:FB:5A","changed":true}
+           * (ok = false si el valor recibido no era una MAC válida).
+           * Reemplaza a la provisional del <head>.
+           * @param {string} value
+           * @returns {string}
+           */
+          window.setMac = function (value) {
+            const mac = cleanMac(value);
+            const before = screen.settings.values.mac;
+            if (mac) {
+              screen.settings.set("mac", mac);
+            } else if (!cleanMac(before)) {
+              screen.settings.set("mac", DEFAULT_MAC); // sin MAC real guardada
+            }
+            const changed = screen.settings.values.mac !== before;
+            if (mac && changed && screen.authStarted) {
+              screen._checkAuthorization("mac"); // MAC nueva tras el arranque
+            }
+            const result = JSON.stringify({
+              ok: mac !== "",
+              mac: screen.settings.values.mac,
+              changed: changed,
+            });
+            console.log("setMac:", result);
+            return result;
+          };
+
+          // Llamadas que llegaron antes de arrancar: se guardan ANTES de la
+          // consulta de arranque, así la MAC ya va en ella.
+          const pendingMac = window.__pendingMac || [];
+          window.__pendingMac = null;
+          pendingMac.forEach(function (value) {
+            window.setMac(value);
+          });
+
           screen.start();
 
           /**
@@ -2063,43 +2130,6 @@
           window.__pendingSettings = null;
           pending.forEach(function (jsonData) {
             window.updateSettings(jsonData);
-          });
-
-          /**
-           * Función GLOBAL (la app la llama con RunJavaScript / EvaluateJavaScript):
-           *   setMac("e8:bb:3e:c8:fb:5a")
-           * Guarda la MAC en localStorage ("smartpizarra.mac") normalizada
-           * ("E8:BB:3E:C8:FB:5A"; también acepta "-", "." o sin separadores).
-           * Si llega vacía, inválida o la falsa de Android (02:00:00:00:00:00):
-           * se guarda DEFAULT_MAC ("FF:FF:FF:FF:FF:FF") solo si NO había una
-           * MAC real guardada; una MAC real nunca se pisa con el default.
-           * Devuelve texto JSON: {"ok":true,"mac":"E8:BB:3E:C8:FB:5A","changed":true}
-           * (ok = false si el valor recibido no era una MAC válida).
-           * Reemplaza a la provisional del <head>.
-           * @param {string} value
-           * @returns {string}
-           */
-          window.setMac = function (value) {
-            const mac = cleanMac(value);
-            const before = screen.settings.values.mac;
-            if (mac) {
-              screen.settings.set("mac", mac);
-            } else if (!cleanMac(before)) {
-              screen.settings.set("mac", DEFAULT_MAC); // sin MAC real guardada
-            }
-            const result = JSON.stringify({
-              ok: mac !== "",
-              mac: screen.settings.values.mac,
-              changed: screen.settings.values.mac !== before,
-            });
-            console.log("setMac:", result);
-            return result;
-          };
-
-          const pendingMac = window.__pendingMac || [];
-          window.__pendingMac = null;
-          pendingMac.forEach(function (value) {
-            window.setMac(value);
           });
         }
 

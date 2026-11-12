@@ -238,6 +238,20 @@ Cómo funciona:
 - Cada ruta se **asigna a uno o varios usuarios** («Asignar a usuarios»). Cada usuario tiene **una sola** ruta: si se le asigna otra, cambia. **Todos sus equipos** la heredan, también los que se le asignen después; no hace falta ir equipo por equipo.
 - Los equipos autorizados reciben la URL final (`deviceRoute`) en cada consulta (`api/device.php` y `api/media.php`) y la guardan en `localStorage` (`smartpizarra.routeUrl`). **Sin ruta** (el servidor responde `null`, o la clave falta, está vacía o no es válida) la TV usa `http://localhost/none.html`: la pantalla **`none.html` de los assets de Kodular**, que dice que el equipo no puede mostrar el contenido y que se comunique con su supervisor, y que **consulta el servidor cada 30 s** y envía un JSON a la app tras cada consulta (`routeUrl`, `hasRoute`, `routeChanged`…): cuando se le asigne una ruta, la app recibe la URL nueva. `loading.html` la pone por defecto al arrancar, así la app siempre recibe una URL que abrir. Todas las páginas la envían a la app en su JSON como `"routeUrl"`. Si se edita la ruta, se quita al usuario o se borra, los equipos lo reciben en su siguiente consulta (~1 min con `mirror.html`).
 
+Para la **dirección MAC de cada equipo**:
+
+1. Ejecuta una vez `migrations/2026-11-12-device-mac.sql` (columnas `sp_devices.mac`, `mac_at`, `mac_from` e índice único). Si sale _Duplicate column name 'mac'_, ya estaba hecha.
+2. Sube `private/lib.php`, `api/device.php` y `admin/index.php`.
+3. Sube a los assets de Kodular `loading.html`.
+
+Cómo funciona:
+
+- La app (Kodular + extensión) lee la MAC y se la pasa a `loading.html` con `setMac("e8:bb:3e:c8:fb:5a")`; se guarda en `smartpizarra.mac` (sin dato: `FF:FF:FF:FF:FF:FF`).
+- `loading.html` la envía a `api/device.php` en la consulta de arranque (`event=boot`). Si `setMac` recibe una MAC nueva después del arranque, la envía enseguida con `event=mac` (no cuenta como arranque en el historial). `FF:FF:FF:FF:FF:FF` y las MAC falsas de Android (`02:00:00:00:00:00`) no se envían ni se guardan.
+- **Una MAC solo está en un equipo.** Si llega desde otro equipo (la misma TV restablecida de fábrica, que genera un ID nuevo), se le **quita al anterior y pasa al nuevo**. La tarjeta del nuevo muestra «antes en SP-…» con enlace al equipo anterior. El usuario, la ruta y la liga **no** se pasan solos: el nuevo equipo queda pendiente como cualquier alta.
+- Solo un equipo con su secreto correcto puede asignarse una MAC.
+- El **buscador del panel** también busca por MAC, sin importar `:`, `-`, `.` ni mayúsculas; vale un trozo (`fb5a`).
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas
