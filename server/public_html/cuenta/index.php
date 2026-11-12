@@ -9,6 +9,12 @@
  *  - Entra aquí con su email y esa contraseña; la primera vez (o tras un
  *    "Restablecer contraseña" del administrador) DEBE cambiarla.
  *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión).
+ *  - MAC DEL CASE (2026-11-12): cada equipo muestra la MAC impresa en su
+ *    case (la del PERFIL que registra el administrador; "sin registrar" si
+ *    no tiene) y la pestaña Equipos tiene un BUSCADOR (?s=equipos&q=) que
+ *    encuentra SUS equipos por esa MAC (completa o un trozo, sin importar
+ *    ":", "-" ni mayúsculas), por su nombre o por su ID
+ *    (DeviceRepository::search limitado a su usuario).
  *    Solo puede PONER/EDITAR EL NOMBRE (alias, columna label, el mismo
  *    que ve el administrador) de los equipos asignados a él (acción
  *    device_label, comprueba que el equipo sea suyo). Autorizar, revocar
@@ -505,6 +511,10 @@ try {
     unset($_SESSION['flash']);
     $mustChange = $user !== null && (int) $user['must_change_password'] === 1;
     $devices = $user !== null && !$mustChange ? DeviceRepository::search(null, '', (int) $user['id']) : [];
+    // Buscador de la pestaña Equipos (MAC del case, nombre o ID): SOLO entre sus equipos.
+    // $devices sigue completo (contadores y selectores de contenido/tiras).
+    $deviceQuery = mb_substr(trim(param($_GET, 'q')), 0, 40);
+    $shownDevices = $deviceQuery !== '' && $devices ? DeviceRepository::search(null, $deviceQuery, (int) $user['id']) : $devices;
     // Contenido para mirror.html
     $mediaList = $user !== null && !$mustChange ? MediaRepository::forUser((int) $user['id']) : [];
     $usedBytes = $user !== null && !$mustChange ? MediaRepository::usedBytes((int) $user['id']) : 0;
@@ -520,6 +530,8 @@ try {
     $user = null;
     $mustChange = false;
     $devices = [];
+    $deviceQuery = '';
+    $shownDevices = [];
     $mediaList = [];
     $usedBytes = 0;
     $overlays = [];
@@ -639,6 +651,10 @@ if ($validity['state'] !== 'active') {
       border: 1px solid var(--line); background: var(--bg); color: var(--text); }
     /* Nombre del equipo (pestaña Equipos) */
     .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+    /* Buscador de equipos por MAC del case y la MAC en la tarjeta */
+    .device-search { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+    .device-search input[type=search] { flex: 1 1 240px; min-width: 0; padding: 8px 10px; }
+    .case-mac { font-family: ui-monospace, Consolas, monospace; }
     .label-form input[type=text] { flex: 1 1 220px; min-width: 0; padding: 8px 10px; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     .badge.off { color: var(--muted); }
@@ -728,8 +744,23 @@ if ($validity['state'] !== 'active') {
     </div>
     <?php if (!$devices): ?>
       <div class="card empty block">Todavía no tienes equipos asignados.</div>
+    <?php else: ?>
+      <!-- Buscar uno de MIS equipos por la MAC que sale en su case (o por su nombre o ID) -->
+      <form method="get" class="device-search" role="search">
+        <input type="hidden" name="s" value="equipos">
+        <label for="dq" class="sr">Buscar equipo</label>
+        <input type="search" id="dq" name="q" value="<?= h($deviceQuery) ?>" maxlength="40"
+               placeholder="Buscar por MAC (p. ej. E8:BB:3E:C8:FB:5A), nombre o ID" spellcheck="false">
+        <button type="submit">Buscar</button>
+        <?php if ($deviceQuery !== ''): ?><a class="btn" href="?s=equipos">Ver todos</a><?php endif; ?>
+      </form>
+      <?php if ($deviceQuery !== ''): ?>
+        <p class="hint"><?= $shownDevices
+            ? count($shownDevices) . ' equipo(s) coinciden con «' . h($deviceQuery) . '».'
+            : 'Ninguno de tus equipos coincide con «' . h($deviceQuery) . '».' ?></p>
+      <?php endif; ?>
     <?php endif; ?>
-    <?php foreach ($devices as $d): $st = (string) $d['status']; $mOn = DeviceRepository::mediaEnabled($d); ?>
+    <?php foreach ($shownDevices as $d): $st = (string) $d['status']; $mOn = DeviceRepository::mediaEnabled($d); ?>
       <section class="card device">
         <div class="device-head">
           <span>
@@ -742,6 +773,10 @@ if ($validity['state'] !== 'active') {
           </span>
         </div>
         <div class="meta">
+          <!-- MAC impresa en el case (la registra el administrador en el perfil del equipo) -->
+          MAC: <?= !empty($d['profile_case_mac'])
+            ? '<span class="case-mac">' . h($d['profile_case_mac']) . '</span>'
+            : '<em>sin registrar</em> <span class="hint">(la registra el administrador)</span>' ?><br>
           Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
           Registrado el <?= dateTag($d['created_at']) ?>
           · Arranques: <?= (int) ($d['boots'] ?? 0) ?>

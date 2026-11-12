@@ -266,6 +266,7 @@ Cómo funciona:
 - **TV restablecida** (ID nuevo): busca su perfil por la MAC del case en *Perfiles* y asígnalo al equipo nuevo; con eso ya se puede autorizar.
 - El **buscador de equipos** encuentra un equipo también por la **MAC del case** (completa o un trozo, sin importar `:` o `-`), la **marca** o el **modelo** de su perfil. *Perfiles* tiene su propio buscador.
 - Borrar un equipo deja su perfil libre.
+- El **usuario**, en `/cuenta/` → *Equipos*, ve la **MAC del case** de cada uno de sus equipos (*sin registrar* si aún no tiene perfil) y puede **buscar sus equipos** por esa MAC (completa o un trozo, sin importar `:` o `-`), por su nombre o por su ID. Solo encuentra los suyos. Para esto basta con subir `public_html/cuenta/index.php`.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
