@@ -1247,9 +1247,12 @@ try {
     error_log('smartpizarra admin: ' . $e->getMessage());
     http_response_code(500);
     // Error de instalación: se explica; cualquier otro: mensaje genérico
+    // Al administrador con sesión se le muestra además el detalle técnico
+    // (para no depender del registro de hPanel); sin sesión, solo el genérico.
     $error = $setupError !== ''
         ? 'Problema de instalación: ' . $setupError
-        : 'Error del servidor. Revisa el registro de errores de PHP en hPanel.';
+        : 'Error del servidor. Revisa el registro de errores de PHP en hPanel.'
+          . (!empty($loggedIn) ? ' Detalle: ' . mb_substr(get_class($e) . ': ' . $e->getMessage(), 0, 300) : '');
     $devices = [];
     $counts = [];
     $flash = '';

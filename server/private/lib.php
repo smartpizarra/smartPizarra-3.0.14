@@ -496,13 +496,21 @@ final class DeviceRepository
             return false;
         }
         $now = Database::now();
-        // first_authorized_at: se anota la PRIMERA vez que se autoriza
-        $stmt = Database::pdo()->prepare(
-            'UPDATE sp_devices SET status = ?, status_at = ?,
-               first_authorized_at = IF(? = \'authorized\', COALESCE(first_authorized_at, ?), first_authorized_at)
-             WHERE device_id = ?'
-        );
-        $stmt->execute([$status, $now, $status, $now, $id]);
+        if ($status === 'authorized') {
+            // Autorizar: además se anota la PRIMERA autorización (first_authorized_at)
+            $stmt = Database::pdo()->prepare(
+                'UPDATE sp_devices SET status = \'authorized\', status_at = ?,
+                   first_authorized_at = COALESCE(first_authorized_at, ?)
+                 WHERE device_id = ?'
+            );
+            $stmt->execute([$now, $now, $id]);
+        } else {
+            // Revocar / pendiente: la consulta de siempre. (2026-11-12: la versión con
+            // IF(? = 'authorized', ...) es la sospechosa del error al revocar en Hostinger:
+            // sin parámetros dentro de IF, compatible con MySQL y MariaDB.)
+            $stmt = Database::pdo()->prepare('UPDATE sp_devices SET status = ?, status_at = ? WHERE device_id = ?');
+            $stmt->execute([$status, $now, $id]);
+        }
         return $stmt->rowCount() > 0;
     }
 
