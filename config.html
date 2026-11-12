@@ -44,7 +44,7 @@
     "smartpizarra.language"                es o en (GLOBAL: idioma de todas las pantallas;
                                            ver I18N, debe ser IGUAL a I18N de loading.html)
     "smartpizarra.routeUrl"     URL de la ruta de su usuario (panel > Rutas), con la
-                                liga del equipo dentro (leagues=...); "" = sin ruta. Se lee
+                                liga del equipo dentro (leagues=...); sin ruta = https://smartpizarra.cloud/none. Se lee
                                 para el JSON; si al consultar el servidor (Salir) llegó
                                 otra, se actualiza. (La liga ya no se guarda aparte.)
     "smartpizarra.version" / ".url" / ".email" / ".deviceId"
@@ -116,7 +116,7 @@
     scale           Escala para la app GUARDADA, como factor % / 100
                     (null si no existe).
     routeUrl        URL de la ruta de su usuario con la liga del equipo dentro
-                    (leagues=...); "" = sin ruta. Se lee de localStorage tras la
+                    (leagues=...); sin ruta = https://smartpizarra.cloud/none. Se lee de localStorage tras la
                     consulta al servidor, que la actualiza si cambió.
     Lo que se cambió sin pulsar "Guardar" se descarta.
 
@@ -672,7 +672,10 @@
          * equipos del usuario la heredan. api/device.php y api/media.php
          * envían la URL final (campo deviceRoute; leagues = códigos de la liga
          * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
-         *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
+         *   "smartpizarra.routeUrl" = URL completa; SIN RUTA (null del servidor,
+         *   o clave vacía/no válida) => NO_ROUTE_URL (2026-11-12): una página del
+         *   servidor que dice que el equipo no puede mostrar el contenido y que
+         *   se comunique con su supervisor. Así la app siempre recibe una URL.
          * Va en el JSON a la app como "routeUrl".
          * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
          * (parámetro leagues); storeDeviceRoute borra las claves viejas
@@ -680,6 +683,8 @@
          * MISMO bloque en loading, config, connection, fingerprint y mirror.
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+        /** URL por defecto SIN ruta (server/public_html/none/index.html). */
+        var NO_ROUTE_URL = "https://smartpizarra.cloud/none";
 
         /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
         function cleanRouteUrl(value) {
@@ -687,26 +692,26 @@
           return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
         }
 
-        /** @returns {string} URL de la ruta guardada ("" = sin ruta o no válida). */
+        /** @returns {string} URL de la ruta guardada (NO_ROUTE_URL si no hay o no es válida). */
         function readDeviceRoute() {
           try {
-            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY));
+            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) || NO_ROUTE_URL;
           } catch (e) {
-            return ""; // sin localStorage: sin ruta
+            return NO_ROUTE_URL; // sin localStorage: sin ruta
           }
         }
 
         /**
          * Guarda la ruta de una respuesta de api/device.php o api/media.php.
          * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
-         * ruta => "".
+         * ruta => NO_ROUTE_URL.
          * @returns {boolean} true si cambió.
          */
         function storeDeviceRoute(res) {
           if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
             return false;
           }
-          var url = cleanRouteUrl(res.deviceRoute);
+          var url = cleanRouteUrl(res.deviceRoute) || NO_ROUTE_URL;
           try {
             var ls = window.localStorage;
             // Restos de cuando la liga se guardaba aparte (ahora va en la URL)
@@ -1552,8 +1557,8 @@
          *   language          => idioma global guardado (null si no existe).
          *   scale             => escala para la app guardada
          *                        (como factor 0.8, 1...; null si no existe).
-         *   routeUrl          => ruta de su usuario con la liga del equipo dentro ("" = sin
-         *                        ruta). Se asigna en el panel; aquí no se cambia.
+         *   routeUrl          => ruta de su usuario con la liga del equipo dentro (sin
+         *                        ruta = https://smartpizarra.cloud/none). Se asigna en el panel; aquí no se cambia.
          * Si internet aún no se verificó, espera el resultado (máx. EXIT_WAIT_MS)
          * para que "internetStatus" sea real. La app debe cerrar esta pantalla al recibirlo.
          */
@@ -2203,14 +2208,14 @@
 
         /** @returns {string} JSON con la configuración en pantalla:
             {"orientation":90,"language":"en","scale":1,
-             "routeUrl":"https://..."}  (ruta con la liga del equipo dentro, "" = sin ruta)
+             "routeUrl":"https://..."}  (ruta con la liga del equipo dentro, sin ruta = https://smartpizarra.cloud/none)
             (scale = escala para la app como factor; null en lo que no existe) */
         window.getConfig = function () {
           return JSON.stringify({
             orientation: current.orientation,
             language: current.language,
             scale: toZoom(current.scale),
-            routeUrl: readDeviceRoute(), // ruta de su usuario ("" = sin ruta)
+            routeUrl: readDeviceRoute(), // ruta de su usuario (sin ruta = https://smartpizarra.cloud/none)
           });
         };
 

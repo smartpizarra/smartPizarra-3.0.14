@@ -31,7 +31,9 @@
                                                                    NO es el tamaño de una pantalla)
     smartpizarra.version / url / email / deviceId
     smartpizarra.routeUrl (ruta de su usuario, Gestión de Rutas del panel, con la LIGA del equipo
-      dentro (leagues=...); "" = sin ruta; JSON "routeUrl"). La liga ya no se guarda aparte.
+      dentro (leagues=...); JSON "routeUrl"). SIN RUTA => "https://smartpizarra.cloud/none" (página
+      del servidor: el equipo no puede mostrar el contenido, comuníquese con su supervisor).
+      La liga ya no se guarda aparte.
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
     smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
     smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
@@ -53,8 +55,9 @@
   páginas. Los defaults que NO se editaron conservan el valor guardado
   (lo elegido en config.html o con updateSettings). Los defaults usados
   se anotan en "smartpizarra.defaults". deviceId nunca se reemplaza.
-  La RUTA (routeUrl) tampoco: su default "" solo se pone si la clave NO
-  existe (onlyIfMissing); el valor lo actualiza el servidor. La liga del
+  La RUTA (routeUrl) tampoco: su default (https://smartpizarra.cloud/none)
+  solo se pone si la clave NO existe o no es válida (onlyIfMissing); el
+  valor lo actualiza el servidor. La liga del
   equipo ya no se guarda: va dentro de la URL de la ruta (leagues=...).
 
   Si otra página los modifica, esta los vuelve a leer al recibir el
@@ -559,7 +562,10 @@
          * equipos del usuario la heredan. api/device.php y api/media.php
          * envían la URL final (campo deviceRoute; leagues = códigos de la liga
          * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
-         *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
+         *   "smartpizarra.routeUrl" = URL completa; SIN RUTA (null del servidor,
+         *   o clave vacía/no válida) => NO_ROUTE_URL (2026-11-12): una página del
+         *   servidor que dice que el equipo no puede mostrar el contenido y que
+         *   se comunique con su supervisor. Así la app siempre recibe una URL.
          * Va en el JSON a la app como "routeUrl".
          * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
          * (parámetro leagues); storeDeviceRoute borra las claves viejas
@@ -567,6 +573,8 @@
          * MISMO bloque en loading, config, connection, fingerprint y mirror.
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+        /** URL por defecto SIN ruta (server/public_html/none/index.html). */
+        var NO_ROUTE_URL = "none";
 
         /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
         function cleanRouteUrl(value) {
@@ -574,26 +582,33 @@
           return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
         }
 
-        /** @returns {string} URL de la ruta guardada ("" = sin ruta o no válida). */
+        /** @returns {string} URL de la ruta guardada (NO_ROUTE_URL si no hay o no es válida). */
         function readDeviceRoute() {
           try {
-            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY));
+            return (
+              cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) ||
+              NO_ROUTE_URL
+            );
           } catch (e) {
-            return ""; // sin localStorage: sin ruta
+            return NO_ROUTE_URL; // sin localStorage: sin ruta
           }
         }
 
         /**
          * Guarda la ruta de una respuesta de api/device.php o api/media.php.
          * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
-         * ruta => "".
+         * ruta => NO_ROUTE_URL.
          * @returns {boolean} true si cambió.
          */
         function storeDeviceRoute(res) {
-          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
+          if (
+            !res ||
+            typeof res !== "object" ||
+            !Object.prototype.hasOwnProperty.call(res, "deviceRoute")
+          ) {
             return false;
           }
-          var url = cleanRouteUrl(res.deviceRoute);
+          var url = cleanRouteUrl(res.deviceRoute) || NO_ROUTE_URL;
           try {
             var ls = window.localStorage;
             // Restos de cuando la liga se guardaba aparte (ahora va en la URL)
@@ -759,13 +774,17 @@
                   : null;
               },
             },
-            /** URL de la ruta de su usuario ("" = sin ruta). La pone el servidor; aquí solo se crea si falta. */
+            /**
+             * URL de la ruta de su usuario. La pone el servidor; aquí solo se
+             * crea con NO_ROUTE_URL si falta, está vacía o no es válida (nunca
+             * pisa una URL válida guardada).
+             */
             routeUrl: {
               key: DEVICE_ROUTE_KEY,
-              defaultValue: "",
-              onlyIfMissing: true, // nunca pisa lo que guardó el servidor
+              defaultValue: NO_ROUTE_URL,
+              onlyIfMissing: true,
               parse: function (raw) {
-                return raw === null ? null : cleanRouteUrl(raw);
+                return raw === null ? null : cleanRouteUrl(raw) || null;
               },
             },
           }),
@@ -952,8 +971,10 @@
               const def = this.schema[name];
               const raw = this._read(def.key);
               if (def.onlyIfMissing) {
-                // Solo crear el default si no existe; si existe, se respeta
-                if (raw === null) this._write(def.key, def.defaultValue);
+                // Solo crear el default si no existe (o no es válido: parse => null);
+                // un valor válido se respeta
+                if (raw === null || def.parse(raw) === null)
+                  this._write(def.key, def.defaultValue);
                 const parsed = def.parse(raw === null ? def.defaultValue : raw);
                 this.values[name] = parsed === null ? def.defaultValue : parsed;
                 return; // no entra en el registro de defaults
@@ -1760,7 +1781,10 @@
                 this.settings.set("authorized", authorized ? "1" : "0");
                 // Ruta de su usuario (Gestión de Rutas del panel; solo si está autorizado)
                 if (storeDeviceRoute(res)) {
-                  console.log("Ruta del equipo actualizada:", readDeviceRoute());
+                  console.log(
+                    "Ruta del equipo actualizada:",
+                    readDeviceRoute(),
+                  );
                 }
                 console.log("Autorización:", authorized);
               });
@@ -1790,7 +1814,7 @@
               // "online" a api/ping.php. Solo viaja a la app (WebViewString,
               // dentro del equipo); nunca se muestra en pantalla.
               deviceSecret: v.deviceSecret,
-              // Ruta de su usuario (URL completa, leagues = liga del equipo); "" = sin ruta
+              // Ruta de su usuario (URL completa, leagues = liga del equipo); sin ruta = https://smartpizarra.cloud/none
               routeUrl: readDeviceRoute(),
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas

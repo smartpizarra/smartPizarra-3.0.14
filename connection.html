@@ -563,7 +563,10 @@
          * equipos del usuario la heredan. api/device.php y api/media.php
          * envían la URL final (campo deviceRoute; leagues = códigos de la liga
          * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
-         *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
+         *   "smartpizarra.routeUrl" = URL completa; SIN RUTA (null del servidor,
+         *   o clave vacía/no válida) => NO_ROUTE_URL (2026-11-12): una página del
+         *   servidor que dice que el equipo no puede mostrar el contenido y que
+         *   se comunique con su supervisor. Así la app siempre recibe una URL.
          * Va en el JSON a la app como "routeUrl".
          * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
          * (parámetro leagues); storeDeviceRoute borra las claves viejas
@@ -571,6 +574,8 @@
          * MISMO bloque en loading, config, connection, fingerprint y mirror.
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+        /** URL por defecto SIN ruta (server/public_html/none/index.html). */
+        var NO_ROUTE_URL = "https://smartpizarra.cloud/none";
 
         /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
         function cleanRouteUrl(value) {
@@ -578,26 +583,26 @@
           return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
         }
 
-        /** @returns {string} URL de la ruta guardada ("" = sin ruta o no válida). */
+        /** @returns {string} URL de la ruta guardada (NO_ROUTE_URL si no hay o no es válida). */
         function readDeviceRoute() {
           try {
-            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY));
+            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) || NO_ROUTE_URL;
           } catch (e) {
-            return ""; // sin localStorage: sin ruta
+            return NO_ROUTE_URL; // sin localStorage: sin ruta
           }
         }
 
         /**
          * Guarda la ruta de una respuesta de api/device.php o api/media.php.
          * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
-         * ruta => "".
+         * ruta => NO_ROUTE_URL.
          * @returns {boolean} true si cambió.
          */
         function storeDeviceRoute(res) {
           if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
             return false;
           }
-          var url = cleanRouteUrl(res.deviceRoute);
+          var url = cleanRouteUrl(res.deviceRoute) || NO_ROUTE_URL;
           try {
             var ls = window.localStorage;
             // Restos de cuando la liga se guardaba aparte (ahora va en la URL)
@@ -746,7 +751,7 @@
           msg.url = readText(KEYS.url);
           msg.email = readText(KEYS.email);
           msg.deviceId = readText(KEYS.deviceId);
-          msg.routeUrl = readDeviceRoute(); // ruta de su usuario con la liga del equipo dentro ("" = sin ruta)
+          msg.routeUrl = readDeviceRoute(); // ruta de su usuario con la liga del equipo dentro (sin ruta = https://smartpizarra.cloud/none)
           msg.orientation = readOrientation(); // global
           msg.language = readLanguage(); // global
           msg.scale = appScale === null ? null : appScale / 100; // escala para la app (factor)
