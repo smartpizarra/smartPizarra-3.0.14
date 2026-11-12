@@ -79,6 +79,15 @@
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
  *
+ *  - BUZÓN DE MENSAJES (botón "Mensajes", ?view=messages, 2026-11-12): una
+ *    conversación por usuario (MessageRepository). Lista de conversaciones
+ *    (la más reciente arriba, con los mensajes sin leer) y, al abrir una
+ *    (?view=messages&mu=ID), la conversación y el formulario para
+ *    responder; abrirla marca como leídos los mensajes del usuario.
+ *    "Nuevo mensaje" escribe a un usuario o a TODOS. El botón de la
+ *    cabecera muestra cuántos mensajes de usuarios hay sin leer.
+ *    Acciones msg_send y msg_delete (borra la conversación).
+ *
  *  - BUSCADOR DE EQUIPOS AL ASIGNAR (2026-11-12): las listas de casillas de
  *    equipos de Anuncios y Tiras tienen una caja que filtra mientras se
  *    escribe (alias, alias del admin, ID, empresa, MAC o MAC del case;
@@ -742,6 +751,36 @@ try {
                 default:
                     redirectWith('Acción desconocida.', 'view=leagues');
             }
+        } elseif (str_starts_with($action, 'msg_')) {
+            /* ---- BUZÓN DE MENSAJES (vista ?view=messages) ---- */
+            $to = param($_POST, 'userId');
+            switch ($action) {
+                case 'msg_send':
+                    $body = MessageRepository::cleanBody(param($_POST, 'body'));
+                    if ($body === null) {
+                        redirectWith('Escribe el mensaje (máximo ' . MessageRepository::MAX_BODY . ' caracteres).',
+                            ctype_digit($to) ? 'view=messages&mu=' . (int) $to : 'view=messages');
+                    }
+                    if ($to === 'all') {
+                        $n = MessageRepository::sendToAll($body);
+                        redirectWith("Mensaje enviado a {$n} usuario(s).", 'view=messages');
+                    }
+                    $target = ctype_digit($to) ? UserRepository::find((int) $to) : null;
+                    if ($target === null) {
+                        redirectWith('Elige un usuario.', 'view=messages');
+                    }
+                    MessageRepository::send((int) $target['id'], 'admin', $body);
+                    redirectWith("Mensaje enviado a «{$target['company']}».", 'view=messages&mu=' . (int) $target['id']);
+                case 'msg_delete':
+                    $target = ctype_digit($to) ? UserRepository::find((int) $to) : null;
+                    if ($target === null) {
+                        redirectWith('Ese usuario ya no existe.', 'view=messages');
+                    }
+                    $n = MessageRepository::deleteThread((int) $target['id']);
+                    redirectWith("Conversación con «{$target['company']}» borrada ({$n} mensaje(s)).", 'view=messages');
+                default:
+                    redirectWith('Acción desconocida.', 'view=messages');
+            }
         } elseif (str_starts_with($action, 'profile_')) {
             /* ---- PERFILES DE EQUIPO (vista ?view=profiles y tarjeta del equipo) ---- */
             $back = param($_POST, 'back') !== '' ? param($_POST, 'back') : 'view=profiles';
@@ -1085,7 +1124,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -1152,6 +1191,21 @@ try {
     $allDevices = $loggedIn && ($view === 'ads' || $view === 'overlays') ? DeviceRepository::search(null, '', null) : [];
     // Tiras y banners (?view=overlays): las del administrador y, aparte, las de los usuarios
     $overlaysAll = $loggedIn && $view === 'overlays' ? OverlayRepository::all(null, true) : [];
+    // Buzón de mensajes: conversación abierta (?mu=ID; al abrirla se marcan
+    // como leídos los mensajes del usuario) y no leídos para el botón
+    $msgUser = null;
+    $thread = [];
+    $conversations = [];
+    if ($loggedIn && $view === 'messages') {
+        $mu = param($_GET, 'mu');
+        $msgUser = ctype_digit($mu) ? ($usersById[(int) $mu] ?? null) : null;
+        if ($msgUser !== null) {
+            MessageRepository::markRead((int) $msgUser['id'], 'admin');
+            $thread = MessageRepository::thread((int) $msgUser['id']);
+        }
+        $conversations = MessageRepository::conversations();
+    }
+    $unreadAdmin = $loggedIn ? MessageRepository::unreadForAdmin() : 0;
     // Perfiles de equipo: la vista ?view=profiles (con su búsqueda ?pq= y
     // ?device= para crear uno ya asignado) y los perfiles LIBRES para el
     // selector de la tarjeta de cada equipo
@@ -1229,6 +1283,15 @@ try {
     $leagueTypes = [];
     $leagues = [];
     $userLeagueIds = [];
+    $pq = '';
+    $profiles = [];
+    $profileDevice = '';
+    $profileDevices = [];
+    $freeProfiles = [];
+    $msgUser = null;
+    $thread = [];
+    $conversations = [];
+    $unreadAdmin = 0;
 }
 
 $statusText = ['pending' => 'Pendiente', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
@@ -1280,6 +1343,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       border: 1px dashed var(--line); color: var(--muted); }
     .admin-notes { margin-top: 6px; padding: 6px 10px; border-left: 3px solid var(--warn, #b45309);
       background: var(--bg); overflow-wrap: anywhere; }
+    /* Buzón: lista de conversaciones */
+    a.conv { display: block; color: inherit; text-decoration: none; margin-bottom: 8px; }
+    a.conv:hover { border-color: var(--accent); }
+    a.conv.conv-new { border-left: 4px solid var(--accent); }
+    .conv-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+    .conv-head .owner { margin-left: auto; }
+    .conv-last { display: block; margin-top: 4px; overflow-wrap: anywhere; }
     /* Perfiles de equipo */
     .need-profile { color: var(--bad, #c0392b); }
     input[type=date] { padding: 9px 10px; font: inherit; color: var(--text); background: var(--bg);
@@ -1415,6 +1485,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'routes' ? 'on' : '' ?>" href="?view=routes">Rutas</a>
       <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues">Ligas</a>
       <a class="btn <?= $view === 'profiles' ? 'on' : '' ?>" href="?view=profiles">Perfiles</a>
+      <!-- Buzón: número de mensajes de usuarios sin leer -->
+      <a class="btn <?= $view === 'messages' ? 'on' : '' ?>" href="?view=messages">Mensajes<?= $unreadAdmin ? '<span class="unread">' . (int) $unreadAdmin . '</span>' : '' ?></a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
   </header>
@@ -1431,7 +1503,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php endif; ?>
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles'], true) ? ' hidden-tools' : '' ?>" method="get">
+  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages'], true) ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, alias del admin, empresa, email, MAC o MAC del case' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
@@ -1784,6 +1856,60 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         </section>
       <?php endforeach; ?>
     <?php endforeach; ?>
+
+  <?php elseif ($view === 'messages' && !$historyDevice): ?>
+    <!-- ================= BUZÓN DE MENSAJES =================
+         Una conversación por usuario. Abrir una marca como leídos sus mensajes. -->
+    <h2 class="ov-list-title">Mensajes</h2>
+    <?php if ($msgUser !== null): $mid = (int) $msgUser['id']; ?>
+      <section class="card">
+        <div class="user-head">
+          <span class="media-name"><?= h($msgUser['company']) ?> <span class="owner">(<?= h($msgUser['email']) ?>)</span></span>
+          <a class="btn" href="?view=messages">&larr; Todas las conversaciones</a>
+        </div>
+        <?= messageThread($thread, 'admin', (string) $msgUser['company']) ?>
+        <form method="post" class="msg-form" autocomplete="off"><?= csrfField() ?>
+          <input type="hidden" name="action" value="msg_send"><input type="hidden" name="userId" value="<?= $mid ?>">
+          <?= messageField('msg-body', 'Escribe a ' . $msgUser['company'] . '…') ?>
+          <div class="row">
+            <button class="primary" type="submit">Enviar</button>
+            <a class="btn" href="?view=users&amp;user=<?= $mid ?>">Ficha del usuario</a>
+          </div>
+        </form>
+        <?php if ($thread): ?>
+          <form method="post" class="actions" data-confirm="¿Borrar TODA la conversación con «<?= h($msgUser['company']) ?>»? No se puede deshacer."><?= csrfField() ?>
+            <input type="hidden" name="action" value="msg_delete"><input type="hidden" name="userId" value="<?= $mid ?>">
+            <button type="submit">Borrar conversación</button></form>
+        <?php endif; ?>
+      </section>
+    <?php else: ?>
+      <details class="card new-user" <?= !$conversations ? 'open' : '' ?>>
+        <summary><strong>+ Nuevo mensaje</strong></summary>
+        <form method="post" class="msg-form" autocomplete="off"><?= csrfField() ?>
+          <input type="hidden" name="action" value="msg_send">
+          <label for="msg-to">Para</label>
+          <select id="msg-to" name="userId" required>
+            <option value="">Elegir usuario…</option>
+            <option value="all">Todos los usuarios (<?= count($users) ?>)</option>
+            <?php foreach ($users as $u): ?>
+              <option value="<?= (int) $u['id'] ?>"><?= h(userText($u)) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <?= messageField('msg-new') ?>
+          <div class="row"><button class="primary" type="submit">Enviar</button>
+            <span class="owner">"Todos los usuarios" deja el mensaje en la conversación de cada uno.</span></div>
+        </form>
+      </details>
+      <?php if (!$conversations): ?><div class="card empty">Todavía no hay conversaciones.</div><?php endif; ?>
+      <?php foreach ($conversations as $c): ?>
+        <a class="card conv <?= $c['unread'] ? 'conv-new' : '' ?>" href="?view=messages&amp;mu=<?= (int) $c['id'] ?>">
+          <span class="conv-head"><strong><?= h($c['company']) ?></strong>
+            <?= $c['unread'] ? '<span class="unread">' . (int) $c['unread'] . '</span>' : '' ?>
+            <span class="owner"><?= dateTag((string) $c['last_at']) ?></span></span>
+          <span class="owner conv-last"><?= $c['last_sender'] === 'admin' ? 'Tú: ' : '' ?><?= h(mb_strimwidth(str_replace("\n", ' ', (string) $c['last_body']), 0, 120, '…')) ?></span>
+        </a>
+      <?php endforeach; ?>
+    <?php endif; ?>
 
   <?php elseif ($view === 'profiles' && !$historyDevice):
       // Campos de un perfil (crear o editar)
@@ -2314,6 +2440,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <!-- Fechas locales, "hace X", En línea/Desconectado y confirmaciones -->
   <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
   <script nonce="<?= h($nonce) ?>"><?= deviceFilterScript() ?></script>
+  <script nonce="<?= h($nonce) ?>"><?= messageScript() ?></script>
   <script nonce="<?= h($nonce) ?>">
   /* Rutas: URL final en vivo (mismo orden y codificación que RouteRepository::buildUrl) */
   (function () {

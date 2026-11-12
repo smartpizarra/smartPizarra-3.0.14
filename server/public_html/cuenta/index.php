@@ -9,6 +9,11 @@
  *  - Entra aquí con su email y esa contraseña; la primera vez (o tras un
  *    "Restablecer contraseña" del administrador) DEBE cambiarla.
  *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión).
+ *  - MENSAJES (pestaña ?s=mensajes, 2026-11-12): su conversación con el
+ *    administrador (MessageRepository). Abrir la pestaña marca como leídos
+ *    los mensajes del administrador; la pestaña e Inicio avisan de los no
+ *    leídos. Acción msg_send (máx. MessageRepository::USER_PER_HOUR
+ *    mensajes por hora).
  *  - MAC DEL CASE (2026-11-12): cada equipo muestra la MAC impresa en su
  *    case (la del PERFIL que registra el administrador; "sin registrar" si
  *    no tiene) y la pestaña Equipos tiene un BUSCADOR (?s=equipos&q=) que
@@ -344,6 +349,21 @@ try {
             $league = $leagueId === null ? null : LeagueRepository::find($leagueId);
             redirectWith(($league === null ? "$name queda sin liga." : "$name usará la liga «{$league['name']}».")
                 . ' La TV lo recibe en su próxima consulta (≈ 1 min si está mostrando contenido).', 's=equipos');
+        } elseif ($action === 'msg_send') {
+            /* ---- MENSAJE al administrador (pestaña Mensajes) ---- */
+            if ((int) $user['must_change_password'] === 1) {
+                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+            }
+            $body = MessageRepository::cleanBody(param($_POST, 'body'));
+            if ($body === null) {
+                redirectWith('Escribe el mensaje (máximo ' . MessageRepository::MAX_BODY . ' caracteres).', 's=mensajes');
+            }
+            // Límite por hora (anti-abuso)
+            if (!RateLimiter::hit('msg:' . (int) $user['id'], MessageRepository::USER_PER_HOUR, 3600)) {
+                redirectWith('Has enviado muchos mensajes en poco tiempo. Espera un rato e inténtalo de nuevo.', 's=mensajes');
+            }
+            MessageRepository::send((int) $user['id'], 'user', $body);
+            redirectWith('Mensaje enviado al administrador.', 's=mensajes');
         } elseif ($action === 'device_label') {
             /* ---- Nombre (alias) de uno de SUS equipos ---- */
             if ((int) $user['must_change_password'] === 1) {
@@ -544,13 +564,27 @@ $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizad
  * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | tiras | cuenta.
  * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
  */
-$sections = ['inicio' => 'Inicio', 'equipos' => 'Dispositivos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'cuenta' => 'Mi cuenta'];
+$sections = ['inicio' => 'Inicio', 'equipos' => 'Dispositivos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'mensajes' => 'Mensajes', 'cuenta' => 'Mi cuenta'];
 $section = param($_GET, 's');
 if (!isset($sections[$section])) {
     $section = 'inicio';
 }
 if ($mustChange) {
     $section = 'cuenta';
+}
+// Buzón: al abrir Mensajes se marcan como leídos los del administrador
+$msgThread = [];
+$unreadMsgs = 0;
+if ($user !== null && !$mustChange) {
+    try {
+        if ($section === 'mensajes') {
+            MessageRepository::markRead((int) $user['id'], 'user');
+            $msgThread = MessageRepository::thread((int) $user['id']);
+        }
+        $unreadMsgs = MessageRepository::unreadForUser((int) $user['id']);
+    } catch (Throwable $e) {
+        error_log('smartpizarra cuenta (mensajes): ' . $e->getMessage());
+    }
 }
 // Resumen para Inicio
 $authorizedCount = 0;
@@ -653,6 +687,7 @@ if ($validity['state'] !== 'active') {
     /* Nombre del equipo (pestaña Equipos) */
     .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     /* Buscador de equipos por MAC del case y la MAC en la tarjeta */
+    .msg-notice { display: block; text-decoration: none; color: inherit; border-left: 4px solid var(--accent); }
     .device-search { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
     .device-search input[type=search] { flex: 1 1 240px; min-width: 0; padding: 8px 10px; }
     .case-mac { font-family: ui-monospace, Consolas, monospace; }
@@ -695,7 +730,7 @@ if ($validity['state'] !== 'active') {
     <nav class="tabs" aria-label="Secciones">
       <?php foreach ($sections as $key => $text): ?>
         <a class="<?= $section === $key ? 'on' : '' ?>" href="?s=<?= h($key) ?>" <?= $section === $key ? 'aria-current="page"' : '' ?>>
-          <?= h($text) ?><?php if ($key === 'equipos'): ?><span class="count"><?= count($devices) ?></span><?php elseif ($key === 'contenido'): ?><span class="count"><?= count($mediaList) ?></span><?php elseif ($key === 'tiras'): ?><span class="count"><?= count($overlays) ?></span><?php endif; ?>
+          <?= h($text) ?><?php if ($key === 'equipos'): ?><span class="count"><?= count($devices) ?></span><?php elseif ($key === 'contenido'): ?><span class="count"><?= count($mediaList) ?></span><?php elseif ($key === 'tiras'): ?><span class="count"><?= count($overlays) ?></span><?php elseif ($key === 'mensajes' && $unreadMsgs): ?><span class="unread"><?= (int) $unreadMsgs ?></span><?php endif; ?>
         </a>
       <?php endforeach; ?>
     </nav>
@@ -705,6 +740,10 @@ if ($validity['state'] !== 'active') {
 
   <?php if ($section === 'inicio'): ?>
     <!-- ======================= INICIO: resumen ======================= -->
+    <?php if ($unreadMsgs): ?>
+      <!-- Aviso de mensajes nuevos del administrador -->
+      <a class="card block msg-notice" href="?s=mensajes">Tienes <strong><?= (int) $unreadMsgs ?></strong> mensaje(s) nuevo(s) del administrador. Ver mensajes &rarr;</a>
+    <?php endif; ?>
     <div class="stats">
       <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Dispositivos</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl">Autorizados</div></a>
@@ -973,6 +1012,22 @@ if ($validity['state'] !== 'active') {
       </section>
     <?php endforeach; ?>
 
+  <?php elseif ($section === 'mensajes'): ?>
+    <!-- ======================= MENSAJES con el administrador ======================= -->
+    <div class="section-head">
+      <h2>Mensajes</h2>
+      <span class="hint">Tu conversación con el administrador.</span>
+    </div>
+    <section class="card block">
+      <?= messageThread($msgThread, 'user', 'Administrador') ?>
+      <form method="post" class="msg-form" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="msg_send">
+        <?= messageField('msg-body', 'Escribe al administrador…') ?>
+        <div class="row"><button class="primary" type="submit">Enviar</button>
+          <span class="hint">Máximo <?= MessageRepository::MAX_BODY ?> caracteres.</span></div>
+      </form>
+    </section>
+
   <?php else: ?>
     <!-- ======================= MI CUENTA ======================= -->
     <div class="two">
@@ -1018,6 +1073,7 @@ if ($validity['state'] !== 'active') {
   <script nonce="<?= h($nonce) ?>"><?= timeScript($onlineTimeout) ?></script>
   <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
   <script nonce="<?= h($nonce) ?>"><?= deviceFilterScript() ?></script>
+  <script nonce="<?= h($nonce) ?>"><?= messageScript() ?></script>
   <script nonce="<?= h($nonce) ?>">
   (function () {
     "use strict";

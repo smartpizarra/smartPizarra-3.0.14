@@ -265,10 +265,64 @@ function baseStyles(): string
     .online.on { color: var(--ok); } .online.off { color: var(--bad); } .online.never { color: var(--muted); }
     .empty { color: var(--muted); text-align: center; padding: 24px; }
     /* Buscador de las listas de dispositivos al asignar (deviceFilterBox / deviceFilterScript) */
+    /* Buzón de mensajes (messageThread / messageForm) */
+    .thread { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; padding: 4px 2px; }
+    .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); }
+    .msg.mine { align-self: flex-end; background: var(--accent); border-color: var(--accent); color: #fff; }
+    .msg.theirs { align-self: flex-start; }
+    .msg .msg-body { white-space: normal; overflow-wrap: anywhere; }
+    .msg .msg-meta { font-size: .75rem; opacity: .8; margin-top: 4px; }
+    .msg.mine .msg-meta { text-align: right; }
+    .msg-form textarea { width: 100%; padding: 10px 12px; font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+    .msg-form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 6px; }
+    .unread { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--bad);
+      color: #fff; font-size: .75rem; font-weight: 700; text-align: center; margin-left: 4px; }
     .device-filter-title { display: block; font-weight: 600; font-size: .9rem; margin-top: 8px; }
     .device-filter { display: block; width: 100%; margin: 4px 0 6px; }
     .device-hidden { display: none !important; }
 CSS;
+}
+
+/**
+ * Conversación del BUZÓN (burbujas): las de $me a la derecha, con
+ * "Leído" / "Enviado"; las del otro a la izquierda. Texto escapado y con
+ * sus saltos de línea. El contenedor .thread se desplaza solo al final
+ * (messageScript).
+ * @param array<int,array<string,mixed>> $messages MessageRepository::thread().
+ * @param string $me    'admin' o 'user' (quién mira).
+ * @param string $other Nombre del otro ("Administrador" / la empresa).
+ */
+function messageThread(array $messages, string $me, string $other): string
+{
+    if (!$messages) {
+        return '<p class="empty">Todavía no hay mensajes.</p>';
+    }
+    $html = '<div class="thread" data-thread>';
+    foreach ($messages as $m) {
+        $mine = $m['sender'] === $me;
+        $html .= '<div class="msg ' . ($mine ? 'mine' : 'theirs') . '"><div class="msg-body">' . nl2br(h((string) $m['body'])) . '</div>'
+            . '<div class="msg-meta">' . ($mine ? 'Tú' : h($other)) . ' · ' . dateTag((string) $m['created_at'])
+            . ($mine ? ' · ' . (!empty($m['read_at']) ? 'Leído' : 'Enviado') : '') . '</div></div>';
+    }
+    return $html . '</div>';
+}
+
+/** Campo de texto del mensaje (máx. MessageRepository::MAX_BODY) + botón Enviar. */
+function messageField(string $id, string $placeholder = 'Escribe tu mensaje…'): string
+{
+    return '<label for="' . h($id) . '" class="sr">Mensaje</label>'
+        . '<textarea id="' . h($id) . '" name="body" rows="3" maxlength="' . MessageRepository::MAX_BODY . '" required placeholder="' . h($placeholder) . '"></textarea>';
+}
+
+/** JS del buzón: la conversación se abre mostrando el último mensaje. */
+function messageScript(): string
+{
+    return <<<'JS'
+  (function () {
+    document.querySelectorAll("[data-thread]").forEach(function (t) { t.scrollTop = t.scrollHeight; });
+  })();
+JS;
 }
 
 /**

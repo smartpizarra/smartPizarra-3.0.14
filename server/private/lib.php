@@ -251,6 +251,11 @@ final class Database
             return 'Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.';
         }
+        // Buzón de mensajes administrador <-> usuario
+        if (!in_array('sp_messages', $tables, true)) {
+            return 'Falta el buzón de mensajes (tabla sp_messages): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-12-messages.sql.';
+        }
         // Alias y notas del administrador por equipo
         if (!in_array('admin_alias', $cols, true) || !in_array('admin_notes', $cols, true)) {
             return 'Faltan el alias y las notas del administrador (columnas sp_devices.admin_alias / admin_notes): '
@@ -2674,6 +2679,123 @@ final class ProfileRepository
     public static function text(array $p): string
     {
         return $p['brand'] . ' ' . $p['model'] . ' · case ' . $p['case_mac'];
+    }
+}
+
+/**
+ * BUZÓN DE MENSAJES administrador <-> usuario (tabla sp_messages), 2026-11-12.
+ *
+ * Una CONVERSACIÓN por usuario (sp_messages.user_id). Cada mensaje lo
+ * escribe el administrador (sender = 'admin') o el usuario ('user').
+ * read_at = cuándo lo leyó el DESTINATARIO (NULL = sin leer): se marca al
+ * abrir la conversación (markRead). El administrador puede escribir a un
+ * usuario o a TODOS a la vez (sendToAll: un mensaje en cada conversación).
+ * Borrar el usuario borra su conversación (FK ON DELETE CASCADE).
+ */
+final class MessageRepository
+{
+    /** Máximo de caracteres por mensaje. */
+    public const MAX_BODY = 2000;
+    /** Mensajes que muestra una conversación (los más recientes). */
+    public const THREAD_LIMIT = 200;
+    /** Límite de mensajes que puede enviar un USUARIO por hora (anti-abuso). */
+    public const USER_PER_HOUR = 30;
+
+    /**
+     * Limpia el texto: UTF-8, saltos de línea normalizados, sin otros
+     * caracteres de control, sin espacios al principio/fin.
+     * @return string|null null si queda vacío o pasa de MAX_BODY.
+     */
+    public static function cleanBody(string $raw): ?string
+    {
+        if (!mb_check_encoding($raw, 'UTF-8')) {
+            $raw = mb_convert_encoding($raw, 'UTF-8', 'Windows-1252');
+        }
+        $raw = str_replace(["\r\n", "\r"], "\n", $raw);
+        $body = trim((string) preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/u', ' ', $raw));
+        if ($body === '' || mb_strlen($body) > self::MAX_BODY) {
+            return null;
+        }
+        return $body;
+    }
+
+    /** Envía un mensaje en la conversación de un usuario. @return int id del mensaje. */
+    public static function send(int $userId, string $sender, string $body): int
+    {
+        $sender = $sender === 'admin' ? 'admin' : 'user';
+        $pdo = Database::pdo();
+        $pdo->prepare('INSERT INTO sp_messages (user_id, sender, body, created_at) VALUES (?, ?, ?, ?)')
+            ->execute([$userId, $sender, $body, Database::now()]);
+        return (int) $pdo->lastInsertId();
+    }
+
+    /** El administrador escribe a TODOS los usuarios. @return int Usuarios a los que llegó. */
+    public static function sendToAll(string $body): int
+    {
+        $stmt = Database::pdo()->prepare(
+            'INSERT INTO sp_messages (user_id, sender, body, created_at) SELECT id, \'admin\', ?, ? FROM sp_users'
+        );
+        $stmt->execute([$body, Database::now()]);
+        return $stmt->rowCount();
+    }
+
+    /** @return array<int,array<string,mixed>> Conversación de un usuario (de la más antigua a la más reciente). */
+    public static function thread(int $userId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT * FROM (SELECT * FROM sp_messages WHERE user_id = ? ORDER BY id DESC LIMIT ' . self::THREAD_LIMIT . ') t ORDER BY id'
+        );
+        $stmt->execute([$userId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Marca como leídos los mensajes que RECIBIÓ $reader en esa conversación
+     * ('admin' lee los del usuario; 'user' lee los del administrador).
+     */
+    public static function markRead(int $userId, string $reader): void
+    {
+        $from = $reader === 'admin' ? 'user' : 'admin';
+        Database::pdo()->prepare('UPDATE sp_messages SET read_at = ? WHERE user_id = ? AND sender = ? AND read_at IS NULL')
+            ->execute([Database::now(), $userId, $from]);
+    }
+
+    /** @return int Mensajes del administrador que el usuario no ha leído. */
+    public static function unreadForUser(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_messages WHERE user_id = ? AND sender = \'admin\' AND read_at IS NULL');
+        $stmt->execute([$userId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** @return int Mensajes de usuarios que el administrador no ha leído (todas las conversaciones). */
+    public static function unreadForAdmin(): int
+    {
+        return (int) Database::pdo()->query('SELECT COUNT(*) FROM sp_messages WHERE sender = \'user\' AND read_at IS NULL')->fetchColumn();
+    }
+
+    /**
+     * Conversaciones con al menos un mensaje, la más reciente primero, con
+     * el último mensaje y cuántos del usuario están sin leer.
+     * @return array<int,array<string,mixed>>
+     */
+    public static function conversations(): array
+    {
+        return Database::pdo()->query(
+            'SELECT u.id, u.company, u.email, m.body AS last_body, m.sender AS last_sender, m.created_at AS last_at,
+               (SELECT COUNT(*) FROM sp_messages x WHERE x.user_id = u.id AND x.sender = \'user\' AND x.read_at IS NULL) AS unread
+             FROM sp_users u
+             JOIN sp_messages m ON m.id = (SELECT MAX(y.id) FROM sp_messages y WHERE y.user_id = u.id)
+             ORDER BY m.id DESC'
+        )->fetchAll();
+    }
+
+    /** Borra toda la conversación de un usuario. @return int Mensajes borrados. */
+    public static function deleteThread(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare('DELETE FROM sp_messages WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        return $stmt->rowCount();
     }
 }
 

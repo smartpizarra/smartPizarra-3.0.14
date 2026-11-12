@@ -288,6 +288,26 @@ Cómo funciona:
   - Administrador (*Anuncios* y *Tiras*): por alias, alias del administrador, ID, empresa, MAC que envía la TV o MAC del case.
   - La MAC se encuentra completa o por un trozo, sin importar `:` o `-`. Las casillas marcadas que quedan ocultas por el filtro **siguen marcadas**. Pulsar Enter en la caja no envía el formulario.
 
+Para el **buzón de mensajes** (administrador ↔ usuario):
+
+1. Ejecuta una vez `migrations/2026-11-12-messages.sql` (tabla `sp_messages`; repetirla no hace nada).
+2. Sube `private/lib.php`, `private/web.php`, `admin/index.php` y `cuenta/index.php`.
+
+Cómo funciona:
+
+- Hay **una conversación por usuario**. El administrador la ve en el botón **Mensajes** del panel y el usuario en la pestaña **Mensajes** de `/cuenta/`.
+- **Administrador:**
+  - Ve la lista de conversaciones, con la más reciente arriba y los mensajes sin leer marcados.
+  - Al abrir una conversación puede responder, ir a la ficha del usuario o borrarla.
+  - *+ Nuevo mensaje* escribe a un usuario o a **todos los usuarios**; con «todos», el mensaje queda en la conversación de cada uno.
+  - El botón *Mensajes* muestra cuántos mensajes de usuarios hay sin leer.
+- **Usuario:**
+  - Escribe y lee desde su pestaña *Mensajes*, que muestra un número cuando tiene mensajes nuevos. *Inicio* también lo avisa.
+  - Solo puede escribir en **su** conversación, con un máximo de 30 mensajes por hora.
+- **Lectura:** al abrir la conversación, los mensajes recibidos se marcan como leídos. Quien envía ve *Enviado* o *Leído* en cada mensaje suyo.
+- Los mensajes admiten varias líneas, con un máximo de 2000 caracteres.
+- Borrar un usuario borra también su conversación.
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas
