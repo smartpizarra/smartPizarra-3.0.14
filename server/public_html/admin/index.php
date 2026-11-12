@@ -1715,8 +1715,9 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <?php elseif ($view === 'ads' && !$historyDevice): ?>
     <!-- ================= ANUNCIOS DEL ADMINISTRADOR =================
-         Imagen o video que mirror.html intercala después de cada N archivos
-         del usuario (o muestra solo si el equipo no tiene contenido propio).
+         Imagen o video que mirror.html intercala EN ROTACIÓN, de uno en uno en
+         el orden de esta lista (flechas), con sus N archivos del usuario antes
+         de cada uno (o muestra solos si el equipo no tiene contenido propio).
          Lo ven los equipos AUTORIZADOS del destino elegido, aunque el
          usuario no tenga vigencia ni el contenido habilitado. -->
     <details class="card new-user" <?= !$ads ? 'open' : '' ?>>
@@ -1733,7 +1734,12 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </form>
     </details>
 
-    <?php if (!$ads): ?><div class="card empty">Todavía no hay anuncios.</div><?php endif; ?>
+    <?php if (!$ads): ?><div class="card empty">Todavía no hay anuncios.</div><?php else: ?>
+      <!-- Rotación en orden (mirror.html): los anuncios salen de uno en uno en ESTE orden -->
+      <p class="owner">Las pantallas muestran los anuncios <strong>de uno en uno en este orden</strong>; antes de cada uno pasan sus «cada N» archivos del usuario
+        (p. ej. A cada 2 y B cada 3: 2 archivos, A, 3 archivos, B, y vuelta a empezar). Usa las flechas para cambiar el orden: las pantallas lo aplican en su próxima consulta (≈ 1 min).
+        Los pausados, finalizados o que no van a un equipo no ocupan su turno.</p>
+    <?php endif; ?>
     <?php
       $adStateText = ['active' => 'En curso', 'paused' => 'Pausado', 'scheduled' => 'Programado', 'ended' => 'Finalizado'];
       $adStateBadge = ['active' => 'authorized', 'paused' => 'off', 'scheduled' => 'pending', 'ended' => 'revoked'];
