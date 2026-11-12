@@ -1846,15 +1846,13 @@ final class OverlayRepository
 
 /**
  * LIGAS del administrador (tablas sp_league_types, sp_leagues, sp_user_leagues).
- *  - Tipo de liga: code (lo que guarda la TV en smartpizarra.league,
- *    p. ej. "mlb") + name.
+ *  - Tipo de liga: code (p. ej. "mlb") + name.
  *  - Liga = nombre + tipo + contenido (lista de códigos "LIDOM,MLB,KO").
  *  - El administrador asigna 0..N ligas a cada usuario; el USUARIO elige
  *    para cada uno de sus equipos "Sin liga" o UNA de ellas
- *    (sp_devices.league_id). Sus equipos autorizados la reciben en
- *    api/device.php y api/media.php (devicePayload) y la guardan en
- *    smartpizarra.league (código del tipo) y smartpizarra.leagues
- *    (códigos); sin liga => "" en los dos.
+ *    (sp_devices.league_id). Desde 2026-11-12 la TV ya NO recibe la liga
+ *    aparte: sus códigos van DENTRO de la URL de la ruta del usuario
+ *    (RouteRepository::urlForDevice, parámetro leagues; sin liga => "").
  */
 final class LeagueRepository
 {
@@ -2136,9 +2134,8 @@ final class LeagueRepository
     }
 
     /**
-     * Lo que recibe la TV (campo "deviceLeague" de api/device.php y
-     * api/media.php): la liga del equipo o null = "Sin liga" (la TV deja
-     * smartpizarra.league y smartpizarra.leagues en "").
+     * Liga del equipo para armar su URL (RouteRepository::urlForDevice usa
+     * "values" en el parámetro leagues) o null = "Sin liga".
      * @return array{code:string,label:string,name:string,values:string}|null
      *         code = código del tipo (smartpizarra.league), values = códigos (smartpizarra.leagues).
      */

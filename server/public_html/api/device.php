@@ -31,14 +31,11 @@
  *         "authorized":false,"registered":true|false}
  *        El estado solo lo cambia el administrador (por equipo o con
  *        "Revocar todos" los equipos de un usuario).
- *        Si está AUTORIZADO añade "deviceLeague": la liga que el usuario
- *        eligió para este equipo en /cuenta/:
- *          {"code":"mlb","label":"MLB","name":"Caribe","values":"LIDOM,MLB,KO"}
- *        o null = "Sin liga". Las páginas guardan code en smartpizarra.league
- *        y values en smartpizarra.leagues ("" sin liga).
- *        Y "deviceRoute" (2026-11-12): la URL de la RUTA de su usuario
- *        (panel > Rutas) con leagues = códigos de la liga del equipo, o null
- *        = sin ruta. Las páginas la guardan en smartpizarra.routeUrl ("" sin ruta).
+ *        Si está AUTORIZADO añade "deviceRoute" (2026-11-12): la URL de la
+ *        RUTA de su usuario (panel > Rutas) con leagues = códigos de la liga
+ *        que el usuario eligió para ESTE equipo en /cuenta/ ("" sin liga), o
+ *        null = sin ruta. Las páginas la guardan en smartpizarra.routeUrl
+ *        ("" sin ruta). La liga ya NO se envía aparte (va dentro de la URL).
  *    400 {"ok":false,"error":"bad_request"}      datos con formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el ID ya existe con otro secreto
  *    405 {"ok":false,"error":"method"}           no es POST
@@ -105,12 +102,10 @@ try {
         DeviceRepository::authPayload($device),
         ['registered' => $registered]
     );
-    // Liga del equipo (la elige su usuario en /cuenta/), solo a equipos AUTORIZADOS:
-    // {code,label,name,values} o null = "Sin liga" (la TV guarda ""). Si no
-    // está autorizado no se envía (la TV conserva lo que tenía).
+    // Ruta de su USUARIO (URL final con leagues = liga de ESTE equipo, que elige
+    // el usuario en /cuenta/) o null, solo a equipos AUTORIZADOS. Si no está
+    // autorizado no se envía (la TV conserva lo que tenía).
     if ($payload['authorized']) {
-        $payload['deviceLeague'] = LeagueRepository::devicePayload($device);
-        // Ruta de su USUARIO (URL final con leagues = liga de este equipo) o null
         $payload['deviceRoute'] = RouteRepository::urlForDevice($device);
     }
     Http::json($payload);

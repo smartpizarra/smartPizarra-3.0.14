@@ -197,7 +197,7 @@ Cómo funciona:
 - Un **tipo de liga** tiene un código (`mlb`) y un nombre (`MLB`). Una **liga** tiene nombre, tipo y contenido: la lista de códigos (`LIDOM, MLB, KO`).
 - El administrador asigna ligas a cada usuario en su ficha (puede tener varias).
 - El **usuario**, en `/cuenta/` → *Equipos*, pone a cada uno de sus equipos **"Sin liga" o UNA** de esas ligas. Es el único sitio donde se cambia la liga de una TV: la TV ya no tiene ligas fijas, `config.html` no tiene selector y `updateSettings` rechaza `league`.
-- La TV la recibe en `api/media.php` (`mirror.html`, cada ~60 s) y en `api/device.php` (al arrancar, al salir de `config.html` y en las consultas de `fingerprint.html`/`connection.html`). La guarda en su `localStorage`: `smartpizarra.league` es el código del tipo y `smartpizarra.leagues` los códigos. Sin liga, los dos valen `""`, que es también el valor por defecto.
+- Desde el 2026-11-12 la TV **ya no recibe ni guarda la liga aparte**: sus códigos van **dentro de la URL de la ruta** del usuario (`leagues=...`, ver *Gestión de Rutas*). Al recibir la ruta, la TV borra las claves viejas `smartpizarra.league`, `smartpizarra.leagues` y `smartpizarra.leagueOptions`, y los JSON a la app ya no llevan `league`/`leagues` (usa `routeUrl`).
 - Si el administrador le quita esa liga al usuario, o cambia el equipo de usuario, el equipo queda sin liga.
 
 Para las **tiras y banners** (pestaña *Tiras* del panel y pestaña *Tiras y banners* de `/cuenta/`):

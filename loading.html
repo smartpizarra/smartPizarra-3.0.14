@@ -29,8 +29,9 @@
     smartpizarra.scale                   10 a 300 (%)         100 (escala para la app: solo
                                                                    se guarda, la edita config.html;
                                                                    NO es el tamaño de una pantalla)
-    smartpizarra.version / url / email / deviceId / league / leagues (liga del equipo, "" = sin liga)
-    smartpizarra.routeUrl (ruta de su usuario, Gestión de Rutas del panel; "" = sin ruta; JSON "routeUrl")
+    smartpizarra.version / url / email / deviceId
+    smartpizarra.routeUrl (ruta de su usuario, Gestión de Rutas del panel, con la LIGA del equipo
+      dentro (leagues=...); "" = sin ruta; JSON "routeUrl"). La liga ya no se guarda aparte.
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
     smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
     smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
@@ -52,8 +53,9 @@
   páginas. Los defaults que NO se editaron conservan el valor guardado
   (lo elegido en config.html o con updateSettings). Los defaults usados
   se anotan en "smartpizarra.defaults". deviceId nunca se reemplaza.
-  La LIGA (league / leagues) tampoco: su default "" solo se pone si la
-  clave NO existe (onlyIfMissing); el valor lo actualiza el servidor.
+  La RUTA (routeUrl) tampoco: su default "" solo se pone si la clave NO
+  existe (onlyIfMissing); el valor lo actualiza el servidor. La liga del
+  equipo ya no se guarda: va dentro de la URL de la ruta (leagues=...).
 
   Si otra página los modifica, esta los vuelve a leer al recibir el
   evento "storage", al volver a mostrarse o al cambiar el tamaño.
@@ -551,79 +553,6 @@
         }
 
         /*
-         * LIGA DEL EQUIPO (2026-11-11). La asigna el USUARIO en
-         * smartpizarra.cloud/cuenta/ ("Sin liga" o UNA de las ligas que le
-         * dio el administrador); en la TV NO se elige ni se cambia.
-         * api/device.php y api/media.php la envían (campo deviceLeague) y
-         * se guarda en localStorage:
-         *   "smartpizarra.league"  = código del tipo (p. ej. "mlb"); "" = sin liga
-         *   "smartpizarra.leagues" = códigos ("LIDOM,MLB,KO");       "" = sin liga
-         * MISMO bloque en loading, config, connection, fingerprint y mirror.
-         */
-        var DEVICE_LEAGUE_KEY = "smartpizarra.league";
-        var DEVICE_LEAGUES_KEY = "smartpizarra.leagues";
-
-        /** @returns {string} Código de tipo válido (minúsculas) o "". */
-        function cleanLeagueType(value) {
-          var v = typeof value === "string" ? value.trim().toLowerCase() : "";
-          return /^[a-z0-9_-]{1,20}$/.test(v) ? v : "";
-        }
-
-        /** @returns {string} Códigos válidos "A,B,C" (mayúsculas, sin espacios) o "". */
-        function cleanLeagueCodes(value) {
-          var v = typeof value === "string" ? value.toUpperCase().replace(/\s+/g, "") : "";
-          return /^[A-Z0-9_]+(,[A-Z0-9_]+)*$/.test(v) ? v : "";
-        }
-
-        /**
-         * Liga guardada del equipo (lo que va en los JSON). Sin liga o con
-         * datos no válidos => "" en los dos.
-         * @returns {{league:string, leagues:string}}
-         */
-        function readDeviceLeague() {
-          var league = "";
-          var leagues = "";
-          try {
-            league = cleanLeagueType(window.localStorage.getItem(DEVICE_LEAGUE_KEY));
-            leagues = cleanLeagueCodes(window.localStorage.getItem(DEVICE_LEAGUES_KEY));
-          } catch (e) {
-            /* sin localStorage: sin liga */
-          }
-          if (!league || !leagues) return { league: "", leagues: "" };
-          return { league: league, leagues: leagues };
-        }
-
-        /**
-         * Guarda la liga de una respuesta de api/device.php o api/media.php.
-         * Solo si trae el campo deviceLeague (equipos autorizados); null =
-         * "Sin liga" => "" en las dos claves.
-         * @returns {boolean} true si cambió.
-         */
-        function storeDeviceLeague(res) {
-          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceLeague")) {
-            return false;
-          }
-          var d = res.deviceLeague;
-          var league = d && typeof d === "object" ? cleanLeagueType(d.code) : "";
-          var leagues = d && typeof d === "object" ? cleanLeagueCodes(d.values) : "";
-          if (!league || !leagues) {
-            league = "";
-            leagues = "";
-          }
-          try {
-            var ls = window.localStorage;
-            // Restos de la versión anterior (varias ligas por equipo)
-            ls.removeItem("smartpizarra.leagueOptions");
-            if (ls.getItem(DEVICE_LEAGUE_KEY) === league && ls.getItem(DEVICE_LEAGUES_KEY) === leagues) return false;
-            ls.setItem(DEVICE_LEAGUE_KEY, league);
-            ls.setItem(DEVICE_LEAGUES_KEY, leagues);
-          } catch (e) {
-            return false;
-          }
-          return true;
-        }
-
-        /*
          * RUTA DEL EQUIPO (2026-11-12). El ADMINISTRADOR crea rutas en el
          * panel (Gestión de Rutas: URL base + agent, pageIndex, timer,
          * showParams, otherQ, pageSize) y las asigna a USUARIOS; todos los
@@ -632,6 +561,9 @@
          * de ESTE equipo) o null = sin ruta, y se guarda en localStorage:
          *   "smartpizarra.routeUrl" = URL completa; "" = sin ruta.
          * Va en el JSON a la app como "routeUrl".
+         * LA LIGA YA NO SE GUARDA EN LA TV (2026-11-12): va DENTRO de esta URL
+         * (parámetro leagues); storeDeviceRoute borra las claves viejas
+         * smartpizarra.league / .leagues / .leagueOptions.
          * MISMO bloque en loading, config, connection, fingerprint y mirror.
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
@@ -664,6 +596,10 @@
           var url = cleanRouteUrl(res.deviceRoute);
           try {
             var ls = window.localStorage;
+            // Restos de cuando la liga se guardaba aparte (ahora va en la URL)
+            ls.removeItem("smartpizarra.league");
+            ls.removeItem("smartpizarra.leagues");
+            ls.removeItem("smartpizarra.leagueOptions");
             if (ls.getItem(DEVICE_ROUTE_KEY) === url) return false;
             ls.setItem(DEVICE_ROUTE_KEY, url);
           } catch (e) {
@@ -823,36 +759,11 @@
                   : null;
               },
             },
-            /**
-             * Liga del equipo: código de su tipo (p. ej. "mlb"). La asigna el
-             * USUARIO en smartpizarra.cloud/cuenta/ y llega del servidor
-             * (storeDeviceLeague); "" = sin liga (valor por defecto). En la TV
-             * ya no hay ligas fijas ni se elige (no es editable por updateSettings).
-             */
-            league: {
-              key: DEVICE_LEAGUE_KEY,
-              defaultValue: "",
-              // El default solo se escribe si la clave NO existe: nunca pisa
-              // lo guardado (ni al cambiar este default ni si es inválido)
-              onlyIfMissing: true,
-              parse: function (raw) {
-                return raw === null ? null : cleanLeagueType(raw);
-              },
-            },
-            /** Códigos de la liga del equipo ("LIDOM,MLB,KO"); "" = sin liga. Llegan con la liga. */
-            leagues: {
-              key: DEVICE_LEAGUES_KEY,
-              defaultValue: "",
-              onlyIfMissing: true, // igual que league
-              parse: function (raw) {
-                return raw === null ? null : cleanLeagueCodes(raw);
-              },
-            },
             /** URL de la ruta de su usuario ("" = sin ruta). La pone el servidor; aquí solo se crea si falta. */
             routeUrl: {
               key: DEVICE_ROUTE_KEY,
               defaultValue: "",
-              onlyIfMissing: true, // igual que la liga
+              onlyIfMissing: true, // nunca pisa lo que guardó el servidor
               parse: function (raw) {
                 return raw === null ? null : cleanRouteUrl(raw);
               },
@@ -861,8 +772,8 @@
 
           /**
            * Settings que puede modificar updateSettings() (deviceId,
-           * deviceSecret, apiUrl, authorized y la LIGA NO: los fija esta
-           * página o el servidor; la liga la asigna el usuario en /cuenta/).
+           * deviceSecret, apiUrl, authorized y la RUTA NO: los fija esta
+           * página o el servidor; "league" ya no existe en la TV).
            * Incluye la orientación global y "<pantalla>.scale" de cada PAGES.
            */
           editableSettings: [
@@ -1031,7 +942,7 @@
            * se haya cambiado con config.html o updateSettings).
            * Sin registro previo (primera vez) no se pisa nada: solo se anota.
            * Los defaults que son función (deviceId) nunca se reemplazan.
-           * Los settings con onlyIfMissing (la liga) solo se crean si la clave
+           * Los settings con onlyIfMissing (la ruta) solo se crean si la clave
            * NO existe; lo guardado no se toca (lo actualiza el servidor).
            */
           init() {
@@ -1705,7 +1616,7 @@
            * @param {string} apiUrl
            * @param {{deviceId:string, secret:string, version:string}} data
            * @returns {Promise<object|null>} La respuesta del servidor ({ok:true,
-           *          authorized, status, deviceLeague?...}); null = sin
+           *          authorized, status, deviceRoute?...}); null = sin
            *          respuesta válida (no cambiar nada).
            */
           check(apiUrl, data) {
@@ -1847,10 +1758,6 @@
                 }
                 const authorized = res.authorized === true;
                 this.settings.set("authorized", authorized ? "1" : "0");
-                // Liga del equipo (la asigna el usuario en /cuenta/; solo llega si está autorizado)
-                if (storeDeviceLeague(res)) {
-                  console.log("Liga del equipo actualizada:", readDeviceLeague());
-                }
                 // Ruta de su usuario (Gestión de Rutas del panel; solo si está autorizado)
                 if (storeDeviceRoute(res)) {
                   console.log("Ruta del equipo actualizada:", readDeviceRoute());
@@ -1883,9 +1790,6 @@
               // "online" a api/ping.php. Solo viaja a la app (WebViewString,
               // dentro del equipo); nunca se muestra en pantalla.
               deviceSecret: v.deviceSecret,
-              // Liga del equipo (la asigna el usuario en /cuenta/): tipo y códigos; "" = sin liga
-              league: readDeviceLeague().league,
-              leagues: readDeviceLeague().leagues,
               // Ruta de su usuario (URL completa, leagues = liga del equipo); "" = sin ruta
               routeUrl: readDeviceRoute(),
               orientation: v.orientation, // global: todas las pantallas
@@ -1909,7 +1813,7 @@
           /**
            * Modifica settings desde un JSON (texto u objeto), los guarda en
            * localStorage y actualiza la pantalla al momento.
-           * @param {string|object} jsonData Ej. '{"version":"3.0.14","orientation":90}' ("league" ya no se acepta: la asigna el usuario en /cuenta/)
+           * @param {string|object} jsonData Ej. '{"version":"3.0.14","orientation":90}' ("league" ya no se acepta: la liga va dentro de la URL de la ruta)
            * @returns {{ok:boolean, applied:string[], rejected:string[], error?:string}}
            */
           updateSettings(jsonData) {

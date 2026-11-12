@@ -54,11 +54,10 @@
  *                 "motion":"static|scroll","speed":"slow|normal|fast"},
  *                {"id":6,"place":"bottom",…,"kind":"image","mime":"image/png","size":N,"sha256":"…"}])
  *         200 {"ok":true,...,"revision":"...","unchanged":true}   si rev coincide (sin items ni ads)
- *         Autorizado: también "deviceLeague" (siempre, aunque sea "unchanged"):
- *              {"code","label","name","values"} o null ("Sin liga") — la liga del
- *              equipo, igual que api/device.php; mirror.html la guarda en localStorage.
- *              Y "deviceRoute": URL de la ruta de su usuario (con leagues = liga del
- *              equipo) o null, igual que api/device.php (smartpizarra.routeUrl).
+ *         Autorizado: también "deviceRoute" (siempre, aunque sea "unchanged"):
+ *              URL de la ruta de su usuario con leagues = liga de este equipo, o
+ *              null, igual que api/device.php (smartpizarra.routeUrl). La liga ya no
+ *              se envía aparte (va dentro de la URL).
  *         200 {"ok":true,"status":"pending|revoked","authorized":false,"mediaEnabled":…,"revision":"","items":[]}
  *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"<huella de ads>","items":[],"ads":[...]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
@@ -196,12 +195,10 @@ try {
         'secondsLeft' => $contentActive ? max(0, (int) strtotime($until . ' UTC') - time()) : 0,
         'revision' => $revision,
     ];
-    // Liga del equipo (la elige su usuario en /cuenta/), igual que
-    // api/device.php: mirror.html la guarda en smartpizarra.league /
-    // smartpizarra.leagues en cada consulta (≈ 1 min). Solo autorizados.
+    // Ruta de su usuario (URL final con leagues = liga de este equipo) o null,
+    // igual que api/device.php: mirror.html la guarda en smartpizarra.routeUrl
+    // en cada consulta (≈ 1 min). Solo autorizados.
     if ($auth['authorized']) {
-        $out['deviceLeague'] = LeagueRepository::devicePayload($device);
-        // Ruta de su usuario (URL final) o null = sin ruta
         $out['deviceRoute'] = RouteRepository::urlForDevice($device);
     }
     if ($revision !== '' && hash_equals($revision, (string) ($_POST['rev'] ?? ''))) {
