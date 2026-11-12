@@ -260,12 +260,20 @@
          * El permiso de CONTENIDO del equipo (imágenes/videos de mirror.html),
          * que da o quita el administrador aparte de la autorización. Llega en
          * las respuestas de api/device.php y api/media.php ("mediaEnabled":
-         * true/false) y se guarda en "smartpizarra.mediaEnabled" ("1" / "0").
-         * TODAS las páginas lo envían en su JSON a la app como "mediaEnabled"
-         * (true / false; false si todavía no se sabe).
+         * true/false) y se guarda en "smartpizarra.mediaEnabled" ("true" /
+         * "false"; loading.html lo crea con "false" si no existe). TODAS las
+         * páginas lo actualizan con cada respuesta y lo envían en su JSON a la
+         * app como "mediaEnabled" (true / false; false si no se sabe).
          * MISMO bloque en loading, config, connection, fingerprint, mirror y none.
          * ---------------------------------------------------------------- */
         var MEDIA_ENABLED_KEY = "smartpizarra.mediaEnabled";
+        // Formato anterior "1"/"0" => "true"/"false" (al abrir cualquier página)
+        (function () {
+          try {
+            var old = window.localStorage.getItem(MEDIA_ENABLED_KEY);
+            if (old === "1" || old === "0") window.localStorage.setItem(MEDIA_ENABLED_KEY, old === "1" ? "true" : "false");
+          } catch (e) {}
+        })();
 
         /**
          * Guarda el permiso de contenido de una respuesta del servidor (solo si
@@ -274,7 +282,7 @@
          */
         function storeMediaEnabled(res) {
           if (!res || typeof res !== "object" || typeof res.mediaEnabled !== "boolean") return false;
-          var v = res.mediaEnabled ? "1" : "0";
+          var v = res.mediaEnabled ? "true" : "false";
           try {
             if (window.localStorage.getItem(MEDIA_ENABLED_KEY) === v) return false;
             window.localStorage.setItem(MEDIA_ENABLED_KEY, v);
@@ -287,7 +295,8 @@
         /** @returns {boolean} Permiso de contenido guardado (false si no se sabe). */
         function readMediaEnabled() {
           try {
-            return window.localStorage.getItem(MEDIA_ENABLED_KEY) === "1";
+            var v = window.localStorage.getItem(MEDIA_ENABLED_KEY);
+            return v === "true" || v === "1"; // "1" = formato anterior
           } catch (e) {
             return false;
           }

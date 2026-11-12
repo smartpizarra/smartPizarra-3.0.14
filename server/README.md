@@ -308,7 +308,7 @@ Cómo funciona:
 - Los mensajes admiten varias líneas, con un máximo de 2000 caracteres.
 - Borrar un usuario borra también su conversación.
 
-**Contenido habilitado en el JSON de todas las páginas** (2026-11-12): `api/device.php` devuelve también `"mediaEnabled": true|false`, el permiso de contenido que da el administrador en la tarjeta del equipo (`api/media.php` ya lo devolvía). Las 6 páginas de Kodular (`loading`, `config`, `connection`, `fingerprint`, `mirror` y `none`) lo guardan en `smartpizarra.mediaEnabled` (`"1"`/`"0"`) cada vez que el servidor responde y lo envían **siempre** en su JSON a la app como `"mediaEnabled": true|false` (`false` mientras no se sepa). Sube `api/device.php` y las 6 páginas a los assets de Kodular.
+**Contenido habilitado en el JSON de todas las páginas** (2026-11-12): `api/device.php` devuelve también `"mediaEnabled": true|false`, el permiso de contenido que da el administrador en la tarjeta del equipo (`api/media.php` ya lo devolvía). Las 6 páginas de Kodular (`loading`, `config`, `connection`, `fingerprint`, `mirror` y `none`) lo guardan en `smartpizarra.mediaEnabled` (`"true"`/`"false"`; `loading.html` lo crea con `"false"` si no existe o no es válido) cada vez que el servidor responde y lo envían **siempre** en su JSON a la app como `"mediaEnabled": true|false` (`false` mientras no se sepa). Sube `api/device.php` y las 6 páginas a los assets de Kodular.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
