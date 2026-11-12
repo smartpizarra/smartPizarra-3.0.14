@@ -39,6 +39,7 @@
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
     smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
     smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
+    smartpizarra.mediaEnabled            "1" | "0"            (lo fija el servidor: permiso de contenido; JSON "mediaEnabled")
 
   AUTORIZACIÓN EN smartpizarra.cloud (ver server/README.md)
   Al arrancar consulta api/device.php con deviceId + deviceSecret (si el
@@ -610,6 +611,44 @@
             );
           } catch (e) {
             return NO_ROUTE_URL; // sin localStorage: sin ruta
+          }
+        }
+
+        /* ------------------------------------------------------------------
+         * CONTENIDO HABILITADO (2026-11-12)
+         * El permiso de CONTENIDO del equipo (imágenes/videos de mirror.html),
+         * que da o quita el administrador aparte de la autorización. Llega en
+         * las respuestas de api/device.php y api/media.php ("mediaEnabled":
+         * true/false) y se guarda en "smartpizarra.mediaEnabled" ("1" / "0").
+         * TODAS las páginas lo envían en su JSON a la app como "mediaEnabled"
+         * (true / false; false si todavía no se sabe).
+         * MISMO bloque en loading, config, connection, fingerprint, mirror y none.
+         * ---------------------------------------------------------------- */
+        var MEDIA_ENABLED_KEY = "smartpizarra.mediaEnabled";
+
+        /**
+         * Guarda el permiso de contenido de una respuesta del servidor (solo si
+         * la respuesta lo trae).
+         * @returns {boolean} true si cambió.
+         */
+        function storeMediaEnabled(res) {
+          if (!res || typeof res !== "object" || typeof res.mediaEnabled !== "boolean") return false;
+          var v = res.mediaEnabled ? "1" : "0";
+          try {
+            if (window.localStorage.getItem(MEDIA_ENABLED_KEY) === v) return false;
+            window.localStorage.setItem(MEDIA_ENABLED_KEY, v);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        /** @returns {boolean} Permiso de contenido guardado (false si no se sabe). */
+        function readMediaEnabled() {
+          try {
+            return window.localStorage.getItem(MEDIA_ENABLED_KEY) === "1";
+          } catch (e) {
+            return false;
           }
         }
 
@@ -1860,6 +1899,7 @@
                 const authorized = res.authorized === true;
                 this.settings.set("authorized", authorized ? "1" : "0");
                 // Ruta de su usuario (Gestión de Rutas del panel; solo si está autorizado)
+                storeMediaEnabled(res); // contenido habilitado (lo envía api/device.php)
                 if (storeDeviceRoute(res)) {
                   console.log(
                     "Ruta del equipo actualizada:",
@@ -1896,6 +1936,7 @@
               deviceSecret: v.deviceSecret,
               // Ruta de su usuario (URL completa, leagues = liga del equipo); sin ruta = http://localhost/none.html
               routeUrl: readDeviceRoute(),
+              mediaEnabled: readMediaEnabled(), // contenido habilitado (lo da el administrador)
               mac: v.mac, // MAC del equipo (setMac); sin dato = FF:FF:FF:FF:FF:FF
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas

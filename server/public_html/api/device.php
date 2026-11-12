@@ -42,7 +42,10 @@
  *        Si está AUTORIZADO añade "deviceRoute" (2026-11-12): la URL de la
  *        RUTA de su usuario (panel > Rutas) con leagues = códigos de la liga
  *        que el usuario eligió para ESTE equipo en /cuenta/ ("" sin liga), o
- *        null = sin ruta. Las páginas la guardan en smartpizarra.routeUrl
+ *        null = sin ruta. Todas las respuestas 200 llevan además
+ *        "mediaEnabled": true|false (permiso de contenido; las páginas lo
+ *        guardan en smartpizarra.mediaEnabled y lo envían en su JSON).
+ *        Las páginas la guardan en smartpizarra.routeUrl
  *        ("" sin ruta). La liga ya NO se envía aparte (va dentro de la URL).
  *    400 {"ok":false,"error":"bad_request"}      datos con formato inválido
  *    403 {"ok":false,"error":"secret_mismatch"}  el ID ya existe con otro secreto
@@ -126,7 +129,9 @@ try {
     $payload = array_merge(
         ['ok' => true, 'deviceId' => $id],
         DeviceRepository::authPayload($device),
-        ['registered' => $registered, 'mac' => $device['mac'] ?? null]
+        ['registered' => $registered, 'mac' => $device['mac'] ?? null,
+         // Permiso de CONTENIDO (lo da el administrador): todas las páginas lo envían a la app
+         'mediaEnabled' => DeviceRepository::mediaEnabled($device)]
     );
     // Ruta de su USUARIO (URL final con leagues = liga de ESTE equipo, que elige
     // el usuario en /cuenta/) o null, solo a equipos AUTORIZADOS. Si no está

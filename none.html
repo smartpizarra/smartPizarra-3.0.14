@@ -255,6 +255,44 @@
           }
         }
 
+        /* ------------------------------------------------------------------
+         * CONTENIDO HABILITADO (2026-11-12)
+         * El permiso de CONTENIDO del equipo (imágenes/videos de mirror.html),
+         * que da o quita el administrador aparte de la autorización. Llega en
+         * las respuestas de api/device.php y api/media.php ("mediaEnabled":
+         * true/false) y se guarda en "smartpizarra.mediaEnabled" ("1" / "0").
+         * TODAS las páginas lo envían en su JSON a la app como "mediaEnabled"
+         * (true / false; false si todavía no se sabe).
+         * MISMO bloque en loading, config, connection, fingerprint, mirror y none.
+         * ---------------------------------------------------------------- */
+        var MEDIA_ENABLED_KEY = "smartpizarra.mediaEnabled";
+
+        /**
+         * Guarda el permiso de contenido de una respuesta del servidor (solo si
+         * la respuesta lo trae).
+         * @returns {boolean} true si cambió.
+         */
+        function storeMediaEnabled(res) {
+          if (!res || typeof res !== "object" || typeof res.mediaEnabled !== "boolean") return false;
+          var v = res.mediaEnabled ? "1" : "0";
+          try {
+            if (window.localStorage.getItem(MEDIA_ENABLED_KEY) === v) return false;
+            window.localStorage.setItem(MEDIA_ENABLED_KEY, v);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        /** @returns {boolean} Permiso de contenido guardado (false si no se sabe). */
+        function readMediaEnabled() {
+          try {
+            return window.localStorage.getItem(MEDIA_ENABLED_KEY) === "1";
+          } catch (e) {
+            return false;
+          }
+        }
+
         /**
          * Guarda la ruta de una respuesta de api/device.php o api/media.php.
          * Solo si trae el campo deviceRoute (equipos autorizados); null = sin
@@ -357,6 +395,7 @@
           msg.email = readText(KEYS.email);
           msg.deviceId = readText(KEYS.deviceId);
           msg.routeUrl = readDeviceRoute(); // ruta con la liga dentro (NO_ROUTE_URL = sin ruta)
+          if (typeof msg.mediaEnabled !== "boolean") msg.mediaEnabled = readMediaEnabled(); // contenido habilitado
           msg.hasRoute = msg.routeUrl !== NO_ROUTE_URL;
           msg.orientation = readOrientation();
           msg.language = readLanguageKey();
@@ -471,6 +510,7 @@
                 authStatus = d.authorized === true ? "authorized" : d.status === "revoked" ? "revoked" : "pending";
                 writeStorage(KEYS.authorized, d.authorized === true ? "1" : "0");
                 storeDeviceRoute(d); // solo autorizados traen deviceRoute
+                storeMediaEnabled(d); // contenido habilitado
               }
               var answered = ok || authStatus === "conflict";
               var msg = withSettings({
