@@ -207,8 +207,14 @@ Para las **tiras y banners** (pestaña *Tiras* del panel y pestaña *Tiras y ban
 3. Sube el `mirror.html` nuevo a los assets de Kodular (el anterior ignora las franjas).
 4. Opcional, en `config.php`: `'overlay_max_mb' => 5` (tamaño máximo de la imagen de un banner) y `'overlays_per_user' => 20` (máximo por usuario). Si faltan, se usan esos valores.
 
+Para el **ajuste de la imagen del banner** (proporcional o estirada a todo el ancho):
+
+1. Ejecuta una vez `migrations/2026-11-11-overlays-fit.sql` (columna `sp_overlays.image_fit`). Si sale _Duplicate column name 'image_fit'_, ya estaba hecha.
+2. Sube `private/lib.php`, `private/web.php` y el `mirror.html` nuevo a los assets de Kodular.
+
 Cómo funciona:
 
+- Un **banner** puede ser **proporcional** (no se deforma; si la imagen no es lo bastante ancha queda centrada) o **estirado a todo el ancho** (llena el ancho de la pantalla aunque se deforme en horizontal). Se elige al subirlo o al editarlo, en los dos paneles.
 - Una **tira** es una franja con un mensaje (colores de fondo y de letra), **fija** o **desplazándose** (velocidad lenta, normal o rápida). Un **banner** es una franja con una imagen (JPG, PNG, WEBP o GIF; mejor ancha, p. ej. 1920×160).
 - Va **arriba o abajo** de la pantalla de `mirror.html`, con tamaño pequeña, mediana o grande. El contenido se ajusta al espacio que queda (la franja no lo tapa). Solo se ve mientras hay contenido o anuncios en pantalla, no sobre los avisos.
 - Se **crea sin equipos** ("Sin asignar": no se ve en ninguna pantalla) y después se **asigna** con «Asignar a equipos» en cada una, eligiendo a la vez su **tiempo de visibilidad**: permanente o con fechas (desde/hasta). Editarla (texto, colores, posición…) no cambia su asignación ni sus fechas.

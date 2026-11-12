@@ -232,6 +232,15 @@ final class Database
             return 'Faltan tablas (' . implode(', ', $overlaysMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-overlays.sql.';
         }
+        // Ajuste de la imagen del banner (proporcional / estirada a todo el ancho)
+        $ovCols = [];
+        foreach ($pdo->query('SHOW COLUMNS FROM sp_overlays') as $row) {
+            $ovCols[] = (string) $row['Field'];
+        }
+        if (!in_array('image_fit', $ovCols, true)) {
+            return 'Falta la columna image_fit (ajuste del banner): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-11-overlays-fit.sql.';
+        }
         return null;
     }
 
@@ -1439,6 +1448,9 @@ final class AdRepository
  *  - image = BANNER: imagen (JPG/PNG/WEBP/GIF) que el equipo descarga UNA
  *            vez y guarda en su Cache Storage, como el contenido.
  * Tamaño de la franja: s / m / l (alto relativo a la pantalla).
+ * Ajuste del BANNER (image_fit): contain = proporcional (si la franja llega
+ * a su alto máximo la imagen queda centrada) | stretch = estirada en
+ * horizontal hasta llenar todo el ancho.
  * Dueño:
  *  - USUARIO (user_id): destino "todos mis equipos" (scope all, también
  *    los futuros) o equipos concretos suyos (scope devices). Solo llega a
@@ -1468,6 +1480,8 @@ final class OverlayRepository
     public const SIZES = ['s', 'm', 'l'];
     public const MOTIONS = ['static', 'scroll'];
     public const SPEEDS = ['slow', 'normal', 'fast'];
+    /** Ajuste de la imagen del banner: proporcional | estirada a todo el ancho. */
+    public const FITS = ['contain', 'stretch'];
     /** Destinos: none = sin asignar (al crear); el usuario solo usa none / all / devices. */
     public const SCOPES = ['none', 'all', 'users', 'devices'];
     /** Máximo de caracteres del mensaje de una tira. */
@@ -1547,12 +1561,13 @@ final class OverlayRepository
             $now = Database::now();
             $pdo->prepare(
                 'INSERT INTO sp_overlays (user_id, name, kind, message, bg_color, fg_color, motion, speed, band_size,
-                   place, mime, original_name, stored_name, size_bytes, sha256, scope, active, starts_at, ends_at,
-                   created_at, updated_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                   place, image_fit, mime, original_name, stored_name, size_bytes, sha256, scope, active, starts_at,
+                   ends_at, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             )->execute(array_merge(
                 [$data['user'], $data['name'], $data['kind'], $data['kind'] === 'text' ? $data['message'] : null,
-                 $data['bg'], $data['fg'], $data['motion'], $data['speed'], $data['size'], $data['place']],
+                 $data['bg'], $data['fg'], $data['motion'], $data['speed'], $data['size'], $data['place'],
+                 self::pick((string) ($data['fit'] ?? 'contain'), self::FITS)],
                 $file,
                 [$data['scope'], $data['active'] ? 1 : 0, $data['starts'], $data['ends'], $now, $now]
             ));
@@ -1580,10 +1595,11 @@ final class OverlayRepository
     {
         Database::pdo()->prepare(
             'UPDATE sp_overlays SET name = ?, message = IF(kind = \'text\', ?, NULL), bg_color = ?, fg_color = ?,
-               motion = ?, speed = ?, band_size = ?, place = ?, active = ?, updated_at = ? WHERE id = ?'
+               motion = ?, speed = ?, band_size = ?, place = ?, image_fit = ?, active = ?, updated_at = ? WHERE id = ?'
         )->execute([
             $data['name'], $data['message'], $data['bg'], $data['fg'], $data['motion'], $data['speed'],
-            $data['size'], $data['place'], $data['active'] ? 1 : 0, Database::now(), $id,
+            $data['size'], $data['place'], self::pick((string) ($data['fit'] ?? 'contain'), self::FITS),
+            $data['active'] ? 1 : 0, Database::now(), $id,
         ]);
     }
 
@@ -1802,7 +1818,9 @@ final class OverlayRepository
             if ($o['kind'] === 'text') {
                 $item += ['text' => (string) $o['message'], 'fg' => $o['fg_color'], 'motion' => $o['motion'], 'speed' => $o['speed']];
             } else {
-                $item += ['mime' => $o['mime'], 'size' => (int) $o['size_bytes'], 'sha256' => $o['sha256']];
+                // fit: contain (proporcional) | stretch (estirada a todo el ancho)
+                $item += ['mime' => $o['mime'], 'size' => (int) $o['size_bytes'], 'sha256' => $o['sha256'],
+                    'fit' => $o['image_fit'] ?? 'contain'];
             }
             $out[] = $item;
         }

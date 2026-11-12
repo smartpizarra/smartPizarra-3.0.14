@@ -330,6 +330,7 @@ const OVERLAY_LABELS = [
     'size' => ['s' => 'Pequeña', 'm' => 'Mediana', 'l' => 'Grande'],
     'motion' => ['static' => 'Fija', 'scroll' => 'Desplazándose'],
     'speed' => ['slow' => 'Lenta', 'normal' => 'Normal', 'fast' => 'Rápida'],
+    'fit' => ['contain' => 'Proporcional (sin deformar)', 'stretch' => 'Estirar a todo el ancho'],
 ];
 
 /** Grupo de botones de radio de una opción de OVERLAY_LABELS. */
@@ -367,8 +368,13 @@ function overlayFields(?array $o, string $p): string
         $html .= '<div data-ov-only="image"><label for="' . $p . 'file">Imagen del banner</label>'
             . '<input type="file" id="' . $p . 'file" name="file" accept="' . implode(',', OverlayRepository::IMAGE_TYPES) . '">'
             . '<span class="hint">JPG, PNG, WEBP o GIF de hasta ' . h(formatBytes(OverlayRepository::maxBytes()))
-            . '. Mejor una imagen ANCHA (p. ej. 1920×160): se ajusta al alto de la franja sin deformarse.</span></div>';
+            . '. Mejor una imagen ANCHA (p. ej. 1920×160).</span></div>';
     }
+    // Banner: ajuste de la imagen (al crear y al editar)
+    $html .= '<fieldset class="targets" data-ov-only="image"><legend>Ajuste de la imagen</legend>'
+        . overlayRadios('fit', 'fit', (string) ($o['image_fit'] ?? 'contain'))
+        . '<br><span class="hint">Proporcional: no se deforma, pero si la imagen no es lo bastante ancha queda centrada. '
+        . 'Estirar: llena todo el ancho de la pantalla (se deforma en horizontal).</span></fieldset>';
     // Tira: mensaje
     $html .= '<div data-ov-only="text"><label for="' . $p . 'message">Mensaje</label>'
         . '<input type="text" id="' . $p . 'message" name="message" maxlength="' . OverlayRepository::MAX_MESSAGE . '" value="'
@@ -415,6 +421,8 @@ function overlayStyleData(?array $o, string $fallbackName = ''): array|string
         'speed' => OverlayRepository::pick(param($_POST, 'speed'), ['normal', 'slow', 'fast']),
         'size' => OverlayRepository::pick(param($_POST, 'size'), ['m', 's', 'l']),
         'place' => OverlayRepository::pick(param($_POST, 'place'), ['bottom', 'top']),
+        // Banner: proporcional o estirado a todo el ancho
+        'fit' => OverlayRepository::pick(param($_POST, 'fit'), OverlayRepository::FITS),
     ];
 }
 
@@ -471,7 +479,8 @@ function overlaySummary(array $o): string
     if ($o['kind'] === 'text') {
         $text .= ' · ' . $L['motion'][$o['motion']] . ($o['motion'] === 'scroll' ? ' (' . mb_strtolower($L['speed'][$o['speed']]) . ')' : '');
     } else {
-        $text .= ' · ' . formatBytes((int) $o['size_bytes']);
+        $text .= (($o['image_fit'] ?? 'contain') === 'stretch' ? ' · Estirado a todo el ancho' : ' · Proporcional')
+            . ' · ' . formatBytes((int) $o['size_bytes']);
     }
     return $text;
 }
@@ -487,7 +496,7 @@ function overlayPreview(array $o, string $imgUrl): string
         . ' data-bg="' . h((string) $o['bg_color']) . '" data-fg="' . h((string) $o['fg_color']) . '">'
         . ($o['kind'] === 'text'
             ? '<span class="ov-text">' . h((string) $o['message']) . '</span>'
-            : '<img src="' . h($imgUrl) . '" alt="" loading="lazy">')
+            : '<img src="' . h($imgUrl) . '" alt="" loading="lazy"' . (($o['image_fit'] ?? 'contain') === 'stretch' ? ' class="ov-stretch"' : '') . '>')
         . '</div>';
 }
 
@@ -510,6 +519,7 @@ function overlayStyles(): string
       background: #000; color: #fff; white-space: nowrap; font-weight: 600; }
     .ov-screen .ov-band { font-size: clamp(9px, 2.6vw, 13px); }
     .ov-band img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .ov-band img.ov-stretch { object-fit: fill; } /* banner estirado a todo el ancho */
     .ov-band img[hidden], .ov-band .ov-text[hidden] { display: none; }
     .ov-band .ov-text { padding: 0 6px; overflow: hidden; text-overflow: ellipsis; }
     .ov-band.ov-scroll { justify-content: flex-start; }
@@ -563,7 +573,10 @@ function overlayScript(): string
         var msg = form.querySelector("[data-ov-message]");
         text.textContent = msg && msg.value.trim() ? msg.value.trim() : "Tu mensaje aquí";
         text.hidden = kind !== "text";
-        if (img) img.hidden = kind !== "image";
+        if (img) {
+          img.hidden = kind !== "image";
+          img.className = val("fit", "contain") === "stretch" ? "ov-stretch" : "";
+        }
       }
       function showImage(src) {
         if (!img) {

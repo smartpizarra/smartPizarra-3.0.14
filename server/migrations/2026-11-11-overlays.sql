@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS sp_overlays (
   motion        VARCHAR(6)   NOT NULL DEFAULT 'static',  -- static (fija) | scroll (desplazándose)
   speed         VARCHAR(6)   NOT NULL DEFAULT 'normal',  -- slow | normal | fast (solo scroll)
   band_size     CHAR(1)      NOT NULL DEFAULT 'm',       -- alto de la franja: s | m | l
+  image_fit     VARCHAR(8)   NOT NULL DEFAULT 'contain', -- banner: contain (proporcional, centrada) | stretch (estirada a todo el ancho)
   place         VARCHAR(6)   NOT NULL DEFAULT 'bottom',  -- top (arriba) | bottom (abajo)
   mime          VARCHAR(40)  NULL DEFAULT NULL,        -- imagen del banner (kind = image)
   original_name VARCHAR(190) NULL DEFAULT NULL,
