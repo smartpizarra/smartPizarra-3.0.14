@@ -251,6 +251,11 @@ final class Database
             return 'Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.';
         }
+        // Perfiles de equipo (marca, modelo, MAC del case, instalación)
+        if (!in_array('sp_device_profiles', $tables, true) || !in_array('first_authorized_at', $cols, true)) {
+            return 'Faltan los perfiles de equipo (tabla sp_device_profiles / columna first_authorized_at): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-profiles.sql.';
+        }
         return null;
     }
 
@@ -480,11 +485,32 @@ final class DeviceRepository
         if (!in_array($status, self::STATUSES, true)) {
             return false;
         }
+        $now = Database::now();
+        // first_authorized_at: se anota la PRIMERA vez que se autoriza
         $stmt = Database::pdo()->prepare(
-            'UPDATE sp_devices SET status = ?, status_at = ? WHERE device_id = ?'
+            'UPDATE sp_devices SET status = ?, status_at = ?,
+               first_authorized_at = IF(? = \'authorized\', COALESCE(first_authorized_at, ?), first_authorized_at)
+             WHERE device_id = ?'
         );
-        $stmt->execute([$status, Database::now(), $id]);
+        $stmt->execute([$status, $now, $status, $now, $id]);
         return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * ¿Necesita PERFIL para autorizarse? Sí si NUNCA se autorizó y no tiene
+     * perfil asignado (ver ProfileRepository). Los ya autorizados alguna vez
+     * se pueden volver a autorizar sin perfil.
+     * @param array<string,mixed> $device Fila de sp_devices (con profile_id si viene de search()).
+     */
+    public static function needsProfile(array $device): bool
+    {
+        if (!empty($device['first_authorized_at'])) {
+            return false;
+        }
+        if (array_key_exists('profile_id', $device)) {
+            return empty($device['profile_id']);
+        }
+        return ProfileRepository::forDevice((string) $device['device_id']) === null;
     }
 
     /**
@@ -511,12 +537,30 @@ final class DeviceRepository
      */
     public static function authorizeAllForUser(int $userId): int
     {
+        // Solo los que ya se autorizaron alguna vez o tienen PERFIL (la
+        // primera autorización exige perfil); los demás se quedan como están.
+        $now = Database::now();
         $stmt = Database::pdo()->prepare(
-            'UPDATE sp_devices SET status = \'authorized\', status_at = ?
-             WHERE user_id = ? AND status <> \'authorized\''
+            'UPDATE sp_devices d SET d.status = \'authorized\', d.status_at = ?,
+               d.first_authorized_at = COALESCE(d.first_authorized_at, ?)
+             WHERE d.user_id = ? AND d.status <> \'authorized\'
+               AND (d.first_authorized_at IS NOT NULL
+                    OR EXISTS (SELECT 1 FROM sp_device_profiles p WHERE p.device_id = d.device_id))'
         );
-        $stmt->execute([Database::now(), $userId]);
+        $stmt->execute([$now, $now, $userId]);
         return $stmt->rowCount();
+    }
+
+    /** @return int Equipos de un usuario sin autorizar que NO se pueden autorizar porque les falta perfil. */
+    public static function countNeedingProfile(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT COUNT(*) FROM sp_devices d
+             WHERE d.user_id = ? AND d.status <> \'authorized\' AND d.first_authorized_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM sp_device_profiles p WHERE p.device_id = d.device_id)'
+        );
+        $stmt->execute([$userId]);
+        return (int) $stmt->fetchColumn();
     }
 
     /**
@@ -573,23 +617,29 @@ final class DeviceRepository
             $args[] = $userId;
         }
         if ($search !== '') {
-            $match = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ?';
+            // También la MARCA y el MODELO de su perfil
+            $match = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ? OR p.brand LIKE ? OR p.model LIKE ?';
             $like = '%' . addcslashes($search, '%_\\') . '%';
-            array_push($args, $like, $like, $like, $like);
-            // Búsqueda por MAC: sin importar separadores (":", "-", ".") ni
-            // mayúsculas; vale un trozo ("FB:5A", "e8bb3e"...).
+            array_push($args, $like, $like, $like, $like, $like, $like);
+            // Búsqueda por MAC (la que envía la TV y la del CASE de su perfil):
+            // sin importar separadores (":", "-", ".") ni mayúsculas; vale un
+            // trozo ("FB:5A", "e8bb3e"...).
             $hex = strtoupper((string) preg_replace('/[\s:.\-]/', '', $search));
             if (strlen($hex) >= 2 && ctype_xdigit($hex)) {
-                $match .= " OR REPLACE(d.mac, ':', '') LIKE ?";
-                $args[] = '%' . $hex . '%';
+                $match .= " OR REPLACE(d.mac, ':', '') LIKE ? OR REPLACE(p.case_mac, ':', '') LIKE ?";
+                array_push($args, '%' . $hex . '%', '%' . $hex . '%');
             }
             $where[] = $match . ')';
         }
         // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
+        // profile_*: PERFIL del equipo (marca, modelo, MAC del case, instalación) o NULL
         $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,
+                  p.id AS profile_id, p.brand AS profile_brand, p.model AS profile_model,
+                  p.case_mac AS profile_case_mac, p.installed_on AS profile_installed_on,
                   (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
                   (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
-                FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id'
+                FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id
+                LEFT JOIN sp_device_profiles p ON p.device_id = d.device_id'
             . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
             . ' ORDER BY (d.status = \'pending\') DESC, d.last_seen_at DESC LIMIT 500';
         $stmt = Database::pdo()->prepare($sql);
@@ -2418,6 +2468,179 @@ final class RouteRepository
         }
         $league = LeagueRepository::devicePayload($device);
         return self::buildUrl($r, $league === null ? '' : (string) $league['values']);
+    }
+}
+
+/**
+ * PERFILES DE EQUIPO (tabla sp_device_profiles), 2026-11-12.
+ *
+ * Ficha de la CAJA FÍSICA que crea el administrador (botón "Perfiles"):
+ * marca, modelo, MAC impresa en el case y fecha de instalación (todos
+ * obligatorios). Cada perfil se asigna a UN equipo (sp_device_profiles.
+ * device_id, único) y cada equipo tiene como mucho uno. Para AUTORIZAR un
+ * equipo por PRIMERA vez (sp_devices.first_authorized_at NULL) debe tener
+ * perfil (DeviceRepository::needsProfile). Si la TV se restablece y vuelve
+ * con un ID nuevo, se busca su perfil por la MAC del case y se reasigna al
+ * equipo nuevo. El buscador de equipos busca también por estos datos.
+ * La MAC del case NO tiene por qué ser igual a la que envía la TV
+ * (sp_devices.mac: cable o wifi): se guardan aparte.
+ */
+final class ProfileRepository
+{
+    /**
+     * Valida y normaliza los datos del formulario.
+     * @param array<string,mixed> $in brand, model, case_mac, installed_on (AAAA-MM-DD).
+     * @return array{brand:string,model:string,case_mac:string,installed_on:string}|string Datos o texto del error.
+     */
+    public static function clean(array $in): array|string
+    {
+        $text = static function (mixed $v): string {
+            $v = (string) $v;
+            if (!mb_check_encoding($v, 'UTF-8')) {
+                $v = mb_convert_encoding($v, 'UTF-8', 'Windows-1252');
+            }
+            return mb_substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $v)), 0, 60);
+        };
+        $brand = $text($in['brand'] ?? '');
+        $model = $text($in['model'] ?? '');
+        if ($brand === '' || $model === '') {
+            return 'La marca y el modelo son obligatorios.';
+        }
+        $mac = DeviceRepository::cleanMac(mb_substr((string) ($in['case_mac'] ?? ''), 0, 40));
+        if ($mac === null) {
+            return 'Escribe la MAC del case completa (12 dígitos hexadecimales, p. ej. E8:BB:3E:C8:FB:5A).';
+        }
+        $date = (string) ($in['installed_on'] ?? '');
+        $d = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if ($d === false || $d->format('Y-m-d') !== $date || (int) $d->format('Y') < 2000) {
+            return 'Escribe la fecha de instalación.';
+        }
+        if ($d > new DateTimeImmutable('tomorrow')) {
+            return 'La fecha de instalación no puede ser futura.';
+        }
+        return ['brand' => $brand, 'model' => $model, 'case_mac' => $mac, 'installed_on' => $date];
+    }
+
+    /**
+     * Perfiles con su equipo (y el usuario del equipo). $search filtra por
+     * marca, modelo, ID/alias del equipo o MAC del case (sin separadores, trozos).
+     * @return array<int,array<string,mixed>>
+     */
+    public static function all(string $search = ''): array
+    {
+        $where = '';
+        $args = [];
+        if ($search !== '') {
+            $like = '%' . addcslashes($search, '%_\\') . '%';
+            $where = ' WHERE (p.brand LIKE ? OR p.model LIKE ? OR p.device_id LIKE ? OR d.label LIKE ?';
+            array_push($args, $like, $like, $like, $like);
+            $hex = strtoupper((string) preg_replace('/[\s:.\-]/', '', $search));
+            if (strlen($hex) >= 2 && ctype_xdigit($hex)) {
+                $where .= " OR REPLACE(p.case_mac, ':', '') LIKE ?";
+                $args[] = '%' . $hex . '%';
+            }
+            $where .= ')';
+        }
+        $stmt = Database::pdo()->prepare(
+            'SELECT p.*, d.label AS device_label, d.status AS device_status, d.mac AS device_mac, u.company AS user_company
+             FROM sp_device_profiles p
+             LEFT JOIN sp_devices d ON d.device_id = p.device_id
+             LEFT JOIN sp_users u ON u.id = d.user_id' . $where
+            . ' ORDER BY (p.device_id IS NULL) DESC, p.installed_on DESC, p.id DESC LIMIT 500'
+        );
+        $stmt->execute($args);
+        return $stmt->fetchAll();
+    }
+
+    /** @return array<string,mixed>|null */
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_device_profiles WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /** @return array<string,mixed>|null Perfil asignado a un equipo. */
+    public static function forDevice(string $deviceId): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_device_profiles WHERE device_id = ?');
+        $stmt->execute([$deviceId]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /** @return array<int,array<string,mixed>> Perfiles SIN equipo (para asignar desde la tarjeta del equipo). */
+    public static function free(): array
+    {
+        return Database::pdo()->query(
+            'SELECT * FROM sp_device_profiles WHERE device_id IS NULL ORDER BY brand, model, case_mac'
+        )->fetchAll();
+    }
+
+    /** @return bool true si otro perfil (distinto de $exceptId) ya usa esa MAC del case. */
+    public static function macTaken(string $caseMac, int $exceptId = 0): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_device_profiles WHERE case_mac = ? AND id <> ?');
+        $stmt->execute([$caseMac, $exceptId]);
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /** @param array{brand:string,model:string,case_mac:string,installed_on:string} $d Datos de clean(). */
+    public static function create(array $d): int
+    {
+        $now = Database::now();
+        $pdo = Database::pdo();
+        $pdo->prepare(
+            'INSERT INTO sp_device_profiles (brand, model, case_mac, installed_on, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+        )->execute([$d['brand'], $d['model'], $d['case_mac'], $d['installed_on'], $now, $now]);
+        return (int) $pdo->lastInsertId();
+    }
+
+    /** @param array{brand:string,model:string,case_mac:string,installed_on:string} $d Datos de clean(). */
+    public static function update(int $id, array $d): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_device_profiles SET brand = ?, model = ?, case_mac = ?, installed_on = ?, updated_at = ? WHERE id = ?'
+        )->execute([$d['brand'], $d['model'], $d['case_mac'], $d['installed_on'], Database::now(), $id]);
+    }
+
+    /**
+     * Asigna el perfil a un equipo (null = dejarlo libre). Si el equipo ya
+     * tenía otro perfil, ese queda libre; si este perfil estaba en otro
+     * equipo, pasa al nuevo (p. ej. la TV restablecida con ID nuevo).
+     * @return bool false si el equipo no existe.
+     */
+    public static function assign(int $id, ?string $deviceId): bool
+    {
+        if ($deviceId !== null && DeviceRepository::find($deviceId) === null) {
+            return false;
+        }
+        $pdo = Database::pdo();
+        $now = Database::now();
+        $pdo->beginTransaction();
+        try {
+            if ($deviceId !== null) {
+                $pdo->prepare('UPDATE sp_device_profiles SET device_id = NULL, updated_at = ? WHERE device_id = ? AND id <> ?')
+                    ->execute([$now, $deviceId, $id]);
+            }
+            $pdo->prepare('UPDATE sp_device_profiles SET device_id = ?, updated_at = ? WHERE id = ?')
+                ->execute([$deviceId, $now, $id]);
+            $pdo->commit();
+            return true;
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    public static function delete(int $id): void
+    {
+        Database::pdo()->prepare('DELETE FROM sp_device_profiles WHERE id = ?')->execute([$id]);
+    }
+
+    /** @return string "Marca Modelo · case E8:BB:..." para mensajes y selectores. */
+    public static function text(array $p): string
+    {
+        return $p['brand'] . ' ' . $p['model'] . ' · case ' . $p['case_mac'];
     }
 }
 

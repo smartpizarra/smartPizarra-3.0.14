@@ -79,6 +79,16 @@
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
  *
+ *  - PERFILES DE EQUIPO (botón "Perfiles", ?view=profiles, 2026-11-12):
+ *    ficha de la caja física = marca, modelo, MAC impresa en el CASE y
+ *    fecha de instalación (todos obligatorios; ProfileRepository). Se crea
+ *    (con o sin equipo) y se asigna a UN equipo (desde la vista o desde la
+ *    tarjeta del equipo; la tarjeta propone el perfil cuya MAC del case
+ *    coincide con la MAC que envía la TV). AUTORIZAR un equipo por PRIMERA
+ *    vez exige perfil (botón desactivado y el servidor lo rechaza;
+ *    "Autorizar todos" se salta esos equipos). El buscador de equipos
+ *    encuentra el equipo por la MAC del case, la marca o el modelo.
+ *
  *  - MAC DE CADA EQUIPO (2026-11-12): la envía loading.html y el servidor
  *    la asigna a UN solo equipo (DeviceRepository::assignMac). La tarjeta
  *    muestra la MAC, desde cuándo y, si la tenía otro equipo (la misma TV
@@ -714,6 +724,55 @@ try {
                 default:
                     redirectWith('Acción desconocida.', 'view=leagues');
             }
+        } elseif (str_starts_with($action, 'profile_')) {
+            /* ---- PERFILES DE EQUIPO (vista ?view=profiles y tarjeta del equipo) ---- */
+            $back = param($_POST, 'back') !== '' ? param($_POST, 'back') : 'view=profiles';
+            $profileId = (int) param($_POST, 'profileId');
+            $profile = $action === 'profile_create' ? null : ProfileRepository::find($profileId);
+            if ($action !== 'profile_create' && $profile === null) {
+                redirectWith('Ese perfil ya no existe.', $back);
+            }
+            // Equipo elegido ("" = sin equipo)
+            $devRaw = strtoupper(trim(param($_POST, 'deviceId')));
+            $devId = DeviceRepository::isValidId($devRaw) ? $devRaw : null;
+            if ($devRaw !== '' && $devId === null) {
+                redirectWith('ID de dispositivo inválido.', $back);
+            }
+            switch ($action) {
+                case 'profile_create':
+                case 'profile_update':
+                    $data = ProfileRepository::clean($_POST);
+                    if (is_string($data)) {
+                        redirectWith($data, $back);
+                    }
+                    if (ProfileRepository::macTaken($data['case_mac'], $profileId)) {
+                        redirectWith("Ya hay un perfil con la MAC del case {$data['case_mac']}: búscala y asígnala en lugar de crear otro.", $back);
+                    }
+                    if ($action === 'profile_update') {
+                        ProfileRepository::update($profileId, $data);
+                        redirectWith('Perfil «' . ProfileRepository::text($data) . '» guardado.', $back);
+                    }
+                    $newId = ProfileRepository::create($data);
+                    if ($devId !== null && !ProfileRepository::assign($newId, $devId)) {
+                        redirectWith('Perfil creado, pero el equipo ' . $devId . ' no existe: queda sin equipo.', $back);
+                    }
+                    redirectWith('Perfil «' . ProfileRepository::text($data) . '» creado'
+                        . ($devId !== null ? " y asignado a $devId. Ya se puede autorizar." : ' sin equipo: asígnalo cuando quieras.'), $back);
+                case 'profile_assign':
+                    if (!ProfileRepository::assign($profileId, $devId)) {
+                        redirectWith("El equipo $devRaw no existe.", $back);
+                    }
+                    $txt = ProfileRepository::text($profile);
+                    redirectWith($devId === null ? "Perfil «{$txt}» sin equipo."
+                        : "Perfil «{$txt}» asignado a $devId"
+                          . (!empty($profile['device_id']) && $profile['device_id'] !== $devId ? " (antes en {$profile['device_id']})." : '.'), $back);
+                case 'profile_delete':
+                    ProfileRepository::delete($profileId);
+                    redirectWith('Perfil «' . ProfileRepository::text($profile) . '» eliminado'
+                        . (!empty($profile['device_id']) ? "; {$profile['device_id']} queda sin perfil." : '.'), $back);
+                default:
+                    redirectWith('Acción desconocida.', $back);
+            }
         } elseif (str_starts_with($action, 'route_')) {
             /* ---- GESTIÓN DE RUTAS (vista ?view=routes) ---- */
             $routeId = (int) param($_POST, 'routeId');
@@ -908,9 +967,12 @@ try {
                         . 'Lo detectarán en su próxima consulta.', $back);
                 case 'user_authorize_all':
                     // Todos los equipos del usuario a "authorized" (los ya autorizados no cuentan)
+                    // (los que se autorizarían por PRIMERA vez sin perfil se saltan)
                     $n = DeviceRepository::authorizeAllForUser($uid);
+                    $skipped = DeviceRepository::countNeedingProfile($uid);
                     redirectWith("Autorizados {$n} equipo(s) de «{$user['company']}». "
-                        . 'Lo detectarán en su próxima consulta.', $back);
+                        . 'Lo detectarán en su próxima consulta.'
+                        . ($skipped ? " {$skipped} equipo(s) sin perfil no se autorizaron: asígnales uno primero." : ''), $back);
                 case 'user_leagues':
                     // Ligas del usuario (casillas de su ficha); llegan a sus TV autorizadas
                     $ids = array_values(array_filter(array_map('intval', (array) ($_POST['leagues'] ?? [])), static fn($v) => $v > 0));
@@ -933,6 +995,11 @@ try {
             }
             switch ($action) {
                 case 'authorize':
+                    // La PRIMERA autorización exige que el equipo tenga PERFIL
+                    $device = DeviceRepository::find($id);
+                    if ($device !== null && DeviceRepository::needsProfile($device)) {
+                        redirectWith("$id no se puede autorizar por primera vez sin perfil: asígnale uno (marca, modelo, MAC del case y fecha de instalación).", $back);
+                    }
                     DeviceRepository::setStatus($id, 'authorized');
                     redirectWith("$id autorizado. El equipo lo detectará en unos segundos.", $back);
                 case 'revoke':
@@ -996,7 +1063,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -1063,6 +1130,16 @@ try {
     $allDevices = $loggedIn && ($view === 'ads' || $view === 'overlays') ? DeviceRepository::search(null, '', null) : [];
     // Tiras y banners (?view=overlays): las del administrador y, aparte, las de los usuarios
     $overlaysAll = $loggedIn && $view === 'overlays' ? OverlayRepository::all(null, true) : [];
+    // Perfiles de equipo: la vista ?view=profiles (con su búsqueda ?pq= y
+    // ?device= para crear uno ya asignado) y los perfiles LIBRES para el
+    // selector de la tarjeta de cada equipo
+    $pq = mb_substr(trim(param($_GET, 'pq')), 0, 40);
+    $profiles = $loggedIn && $view === 'profiles' ? ProfileRepository::all($pq) : [];
+    $profileDevice = strtoupper(trim(param($_GET, 'device')));
+    $profileDevice = DeviceRepository::isValidId($profileDevice) ? $profileDevice : '';
+    $profileDevices = $loggedIn && $view === 'profiles' ? DeviceRepository::search(null, '', null) : [];
+    usort($profileDevices, static fn($a, $b) => strcmp((string) $a['device_id'], (string) $b['device_id']));
+    $freeProfiles = $loggedIn && $view === 'list' ? ProfileRepository::free() : [];
     // Rutas (?view=routes) y nombre de la ruta de cada usuario (ficha)
     $routes = $loggedIn && ($view === 'routes' || $userCard) ? RouteRepository::all() : [];
     $routeNames = array_column($routes, 'name', 'id');
@@ -1176,6 +1253,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
     .device-mac { font-family: ui-monospace, Consolas, monospace; } /* MAC del equipo */
+    /* Perfiles de equipo */
+    .need-profile { color: var(--bad, #c0392b); }
+    input[type=date] { padding: 9px 10px; font: inherit; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 8px; width: 100%; color-scheme: light; }
+    @media (prefers-color-scheme: dark) { input[type=date] { color-scheme: dark; } }
+    .profile-search { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .profile-search input { flex: 1 1 220px; min-width: 0; }
     /* Liga de un equipo (tarjeta del equipo): etiqueta + selector en una fila */
     .league-form { align-items: center; flex-wrap: wrap; margin: 4px 0; }
     .league-form select { flex: 1 1 220px; min-width: 0; padding: 6px 8px; font: inherit; color: var(--text);
@@ -1303,6 +1387,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'overlays' ? 'on' : '' ?>" href="?view=overlays">Tiras</a>
       <a class="btn <?= $view === 'routes' ? 'on' : '' ?>" href="?view=routes">Rutas</a>
       <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues">Ligas</a>
+      <a class="btn <?= $view === 'profiles' ? 'on' : '' ?>" href="?view=profiles">Perfiles</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
   </header>
@@ -1319,8 +1404,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php endif; ?>
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues'], true) ? ' hidden-tools' : '' ?>" method="get">
-    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa, email o MAC' ?>" aria-label="Buscar">
+  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles'], true) ? ' hidden-tools' : '' ?>" method="get">
+    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa, email, MAC o MAC del case' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
       <option value="">Todos los usuarios</option>
@@ -1673,6 +1758,97 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <?php endforeach; ?>
     <?php endforeach; ?>
 
+  <?php elseif ($view === 'profiles' && !$historyDevice):
+      // Campos de un perfil (crear o editar)
+      $profileFields = static function (?array $pr, string $px): string {
+          $v = $pr ?? ['brand' => '', 'model' => '', 'case_mac' => '', 'installed_on' => gmdate('Y-m-d')];
+          return '<div class="user-grid">'
+              . '<div><label for="' . $px . 'brand">Marca</label><input type="text" id="' . $px . 'brand" name="brand" maxlength="60" required value="' . h((string) $v['brand']) . '" placeholder="p. ej. Hisilicon"></div>'
+              . '<div><label for="' . $px . 'model">Modelo</label><input type="text" id="' . $px . 'model" name="model" maxlength="60" required value="' . h((string) $v['model']) . '" placeholder="p. ej. TVBOX Hi3798"></div>'
+              . '<div><label for="' . $px . 'mac">MAC que sale en el case</label><input type="text" id="' . $px . 'mac" name="case_mac" maxlength="17" required value="' . h((string) $v['case_mac']) . '" placeholder="E8:BB:3E:C8:FB:5A" autocapitalize="characters" spellcheck="false"></div>'
+              . '<div><label for="' . $px . 'date">Fecha de instalación</label><input type="date" id="' . $px . 'date" name="installed_on" required value="' . h((string) $v['installed_on']) . '"></div>'
+              . '</div>';
+      };
+      // Selector de equipo ("" = sin equipo)
+      $deviceSelect = static function (string $px, ?string $current) use ($profileDevices): string {
+          $o = '<label for="' . $px . 'dev">Equipo</label><select id="' . $px . 'dev" name="deviceId"><option value="">Sin equipo</option>';
+          foreach ($profileDevices as $pd) {
+              $o .= '<option value="' . h($pd['device_id']) . '"' . ($current === $pd['device_id'] ? ' selected' : '') . '>'
+                  . h($pd['device_id'] . ($pd['label'] ? ' · ' . $pd['label'] : '') . ($pd['user_company'] ? ' · ' . $pd['user_company'] : '')
+                    . (!empty($pd['profile_id']) ? ' (ya tiene perfil: se cambiará)' : '')) . '</option>';
+          }
+          return $o . '</select>';
+      };
+  ?>
+    <!-- ================= PERFILES DE EQUIPO =================
+         Ficha de la caja física: marca, modelo, MAC del case y fecha de
+         instalación. Un perfil por equipo; la PRIMERA autorización la exige. -->
+    <h2 class="ov-list-title">Perfiles de equipo</h2>
+    <details class="card new-user" <?= !$profiles || $profileDevice !== '' ? 'open' : '' ?>>
+      <summary><strong>+ Nuevo perfil</strong></summary>
+      <form method="post" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="profile_create">
+        <input type="hidden" name="back" value="<?= h($profileDevice !== '' ? http_build_query(['filter' => 'all', 'q' => $profileDevice]) : 'view=profiles') ?>">
+        <?= $profileFields(null, 'pnew-') ?>
+        <?= $deviceSelect('pnew-', $profileDevice !== '' ? $profileDevice : null) ?>
+        <p><button class="primary" type="submit">Crear perfil</button>
+          <span class="owner">Todos los campos son obligatorios. Para autorizar un equipo por primera vez, debe tener perfil.</span></p>
+      </form>
+    </details>
+    <!-- Búsqueda de perfiles: marca, modelo, equipo o MAC del case (sin importar ":" o "-") -->
+    <form class="profile-search" method="get">
+      <input type="hidden" name="view" value="profiles">
+      <input type="search" name="pq" value="<?= h($pq) ?>" placeholder="Buscar por MAC del case, marca, modelo o equipo" aria-label="Buscar perfil">
+      <button type="submit">Buscar</button>
+      <?php if ($pq !== ''): ?><a class="btn" href="?view=profiles">Ver todos</a><?php endif; ?>
+    </form>
+    <?php if (!$profiles): ?><div class="card empty"><?= $pq !== '' ? 'Ningún perfil coincide con «' . h($pq) . '».' : 'Todavía no hay perfiles.' ?></div><?php endif; ?>
+    <?php foreach ($profiles as $pr): $prid = (int) $pr['id']; $pback = http_build_query(['view' => 'profiles', 'pq' => $pq]); ?>
+      <section class="card device">
+        <div class="user-head">
+          <span class="media-name"><?= h($pr['brand'] . ' ' . $pr['model']) ?></span>
+          <span class="badge <?= $pr['device_id'] ? 'authorized' : 'off' ?>"><?= $pr['device_id'] ? 'Asignado' : 'Sin equipo' ?></span>
+        </div>
+        <div class="meta">
+          MAC del case: <span class="device-mac"><?= h($pr['case_mac']) ?></span>
+          · Instalado el <?= h(date('d/m/Y', strtotime((string) $pr['installed_on']))) ?><br>
+          <?php if ($pr['device_id']): ?>
+            Equipo: <a href="./?<?= h(http_build_query(['filter' => 'all', 'q' => $pr['device_id']])) ?>"><?= h($pr['device_id']) ?></a>
+            <?= $pr['device_label'] ? '· ' . h($pr['device_label']) : '' ?>
+            <?= $pr['user_company'] ? '· <span class="owner">' . h($pr['user_company']) . '</span>' : '' ?>
+            <?= $pr['device_mac'] ? '· MAC que envía la TV <span class="device-mac">' . h($pr['device_mac']) . '</span>' : '' ?>
+          <?php else: ?>
+            <em>Sin equipo asignado.</em>
+          <?php endif; ?>
+        </div>
+        <div class="actions">
+          <form method="post" data-confirm="¿Eliminar el perfil «<?= h(ProfileRepository::text($pr)) ?>»?<?= $pr['device_id'] ? ' ' . h($pr['device_id']) . ' quedará sin perfil.' : '' ?>"><?= csrfField() ?>
+            <input type="hidden" name="action" value="profile_delete"><input type="hidden" name="profileId" value="<?= $prid ?>">
+            <input type="hidden" name="back" value="<?= h($pback) ?>">
+            <button type="submit">Eliminar</button></form>
+        </div>
+        <details class="edit" <?= $pr['device_id'] ? '' : 'open' ?>>
+          <summary>Asignar a un equipo</summary>
+          <form method="post"><?= csrfField() ?>
+            <input type="hidden" name="action" value="profile_assign"><input type="hidden" name="profileId" value="<?= $prid ?>">
+            <input type="hidden" name="back" value="<?= h($pback) ?>">
+            <?= $deviceSelect('p' . $prid . '-', $pr['device_id']) ?>
+            <span class="owner">Un equipo tiene un solo perfil. Si la TV se restableció y volvió con otro ID, asígnale aquí el equipo nuevo.</span><br>
+            <button class="primary" type="submit">Guardar equipo</button>
+          </form>
+        </details>
+        <details class="edit">
+          <summary>Editar datos</summary>
+          <form method="post" autocomplete="off"><?= csrfField() ?>
+            <input type="hidden" name="action" value="profile_update"><input type="hidden" name="profileId" value="<?= $prid ?>">
+            <input type="hidden" name="back" value="<?= h($pback) ?>">
+            <?= $profileFields($pr, 'p' . $prid . '-e') ?>
+            <button class="primary" type="submit">Guardar cambios</button>
+          </form>
+        </details>
+      </section>
+    <?php endforeach; ?>
+
   <?php elseif ($view === 'routes' && !$historyDevice): ?>
     <!-- ================= GESTIÓN DE RUTAS =================
          URL de contenido construida por partes; se asigna a usuarios y la
@@ -1998,6 +2174,35 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               (asígnaselas en su ficha para poder elegir la liga aquí)</span><br>
           <?php endif; ?>
         <?php endif; ?>
+        <!-- PERFIL (caja física): marca, modelo, MAC del case, instalación; sin perfil => selector de perfiles libres -->
+        <?php if (!empty($d['profile_id'])): ?>
+          Perfil: <strong><?= h($d['profile_brand'] . ' ' . $d['profile_model']) ?></strong>
+          · MAC del case <span class="device-mac"><?= h($d['profile_case_mac']) ?></span>
+          · instalado el <?= h(date('d/m/Y', strtotime((string) $d['profile_installed_on']))) ?>
+          · <a href="./?<?= h(http_build_query(['view' => 'profiles', 'pq' => $d['profile_case_mac']])) ?>">editar</a><br>
+        <?php else:
+            // Propuesta: el perfil libre cuya MAC del case es la MAC que envía la TV
+            $suggested = null;
+            foreach ($freeProfiles as $fp) {
+                if (!empty($d['mac']) && $fp['case_mac'] === $d['mac']) { $suggested = (int) $fp['id']; break; }
+            }
+        ?>
+          <span class="<?= DeviceRepository::needsProfile($d) ? 'need-profile' : '' ?>">Perfil: <em>sin perfil</em><?= DeviceRepository::needsProfile($d) ? ' (obligatorio para autorizarlo por primera vez)' : '' ?></span>
+          <form method="post" class="user-form league-form"><?= csrfField() ?>
+            <input type="hidden" name="action" value="profile_assign">
+            <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
+            <?php if ($freeProfiles): ?>
+              <select name="profileId" aria-label="Perfil del equipo" required>
+                <option value="">Elegir un perfil libre…</option>
+                <?php foreach ($freeProfiles as $fp): ?>
+                  <option value="<?= (int) $fp['id'] ?>" <?= $suggested === (int) $fp['id'] ? 'selected' : '' ?>><?= h(ProfileRepository::text($fp)) ?><?= $suggested === (int) $fp['id'] ? ' (coincide con su MAC)' : '' ?></option>
+                <?php endforeach; ?>
+              </select>
+              <button type="submit">Asignar perfil</button>
+            <?php endif; ?>
+            <a class="btn" href="./?<?= h(http_build_query(['view' => 'profiles', 'device' => $id])) ?>">Crear perfil</a>
+          </form>
+        <?php endif; ?>
         <!-- MAC (la envía loading.html; una MAC solo está en un equipo) y, si la tenía otro equipo, cuál -->
         MAC: <?= !empty($d['mac']) ? '<span class="device-mac">' . h($d['mac']) . '</span>'
             . ' <span class="owner">· desde ' . dateTag($d['mac_at']) . '</span>'
@@ -2014,10 +2219,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <?= $d['last_ip'] ? ' · IP ' . h($d['last_ip']) : '' ?>
       </div>
       <div class="actions">
-        <?php if ($st !== 'authorized'): ?>
+        <?php if ($st !== 'authorized'): $noProfile = DeviceRepository::needsProfile($d); ?>
+          <!-- La PRIMERA autorización exige perfil (el servidor también lo comprueba) -->
           <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="authorize">
             <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
-            <button class="ok" type="submit">Autorizar</button></form>
+            <button class="ok" type="submit" <?= $noProfile ? 'disabled title="Asígnale un perfil primero"' : '' ?>><?= $noProfile ? 'Autorizar (falta perfil)' : 'Autorizar' ?></button></form>
         <?php endif; ?>
         <?php if ($st === 'authorized'): ?>
           <form method="post" data-confirm="¿Revocar la autorización de <?= h($id) ?>?"><?= csrfField() ?><input type="hidden" name="action" value="revoke">

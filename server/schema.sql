@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   mac           VARCHAR(17)  NULL,              -- MAC "E8:BB:3E:C8:FB:5A" (la envía loading.html); UNA por equipo, nunca repetida
   mac_at        DATETIME     NULL,              -- cuándo se le asignó esa MAC (UTC)
   mac_from      VARCHAR(32)  NULL,              -- equipo que tenía antes esa MAC (p. ej. la misma TV antes de restablecerla)
+  first_authorized_at DATETIME NULL,            -- PRIMERA autorización (UTC); NULL = nunca autorizado => para autorizarlo necesita PERFIL
   PRIMARY KEY (device_id),
   UNIQUE KEY uq_device_mac (mac),               -- una MAC solo puede estar en un equipo (NULL se puede repetir)
   KEY idx_status (status),
@@ -271,3 +272,21 @@ CREATE TABLE IF NOT EXISTS sp_routes (
 ALTER TABLE sp_users
   ADD KEY idx_user_route (route_id),
   ADD CONSTRAINT fk_user_route FOREIGN KEY (route_id) REFERENCES sp_routes (id) ON DELETE SET NULL;
+
+-- PERFILES DE EQUIPO (caja física: marca, modelo, MAC del case, fecha de
+-- instalación). Ver migrations/2026-11-12-device-profiles.sql.
+CREATE TABLE IF NOT EXISTS sp_device_profiles (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  brand        VARCHAR(60)  NOT NULL,                 -- marca (p. ej. "Hisilicon")
+  model        VARCHAR(60)  NOT NULL,                 -- modelo (p. ej. "TVBOX Hi3798")
+  case_mac     VARCHAR(17)  NOT NULL,                 -- MAC impresa en el case "E8:BB:3E:C8:FB:5A" (única)
+  installed_on DATE         NOT NULL,                 -- fecha de instalación
+  device_id    VARCHAR(32)  NULL,                     -- equipo al que está asignado (uno a la vez); NULL = libre
+  created_at   DATETIME     NOT NULL,                 -- UTC
+  updated_at   DATETIME     NOT NULL,                 -- UTC
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_profile_case_mac (case_mac),          -- una caja física = un perfil
+  UNIQUE KEY uq_profile_device (device_id),           -- un equipo tiene como mucho un perfil
+  CONSTRAINT fk_profile_device FOREIGN KEY (device_id) REFERENCES sp_devices (device_id)
+    ON DELETE SET NULL ON UPDATE CASCADE              -- borrar el equipo deja el perfil libre
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
