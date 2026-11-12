@@ -34,6 +34,8 @@
       dentro (leagues=...); JSON "routeUrl"). SIN RUTA => "http://localhost/none.html" (pantalla
       local none.html: el equipo no puede mostrar el contenido, comuníquese con su supervisor).
       La liga ya no se guarda aparte.
+    smartpizarra.mac                     AA:BB:CC:DD:EE:FF    FF:FF:FF:FF:FF:FF (solo si falta; la pasa
+                                                                   la app con setMac("e8:bb:..."); JSON "mac")
     smartpizarra.deviceSecret            64 hex               generado (no se muestra ni cambia)
     smartpizarra.apiUrl                  URL                  https://smartpizarra.cloud/api/device.php
     smartpizarra.authorized              "1" | "0"            "0" (lo fija el servidor)
@@ -93,6 +95,12 @@
         (window.__pendingSettings = window.__pendingSettings || []).push(
           jsonData,
         );
+        return '{"ok":true,"queued":true}';
+      };
+      // setMac() provisional: igual que updateSettings, guarda la MAC que
+      // llegue antes de que la página arranque y se procesa al ARRANCAR.
+      window.setMac = function (value) {
+        (window.__pendingMac = window.__pendingMac || []).push(value);
         return '{"ok":true,"queued":true}';
       };
     </script>
@@ -628,6 +636,38 @@
           return true;
         }
 
+        /* ------------------------------------------------------------------
+         * DIRECCIÓN MAC DEL EQUIPO (2026-11-12)
+         * HTML no puede leer la MAC: la lee la app (Kodular + extensión) y la
+         * pasa con setMac("e8:bb:3e:c8:fb:5a") (ver window.setMac al final).
+         * Se guarda en "smartpizarra.mac" normalizada en MAYÚSCULAS con ":"
+         * ("E8:BB:3E:C8:FB:5A"). Sin dato => DEFAULT_MAC ("FF:FF:FF:FF:FF:FF").
+         * Va en el JSON a la app como "mac".
+         * ---------------------------------------------------------------- */
+        var MAC_KEY = "smartpizarra.mac";
+        /** MAC por defecto: el equipo todavía no tiene (o la app no pudo leer) su MAC. */
+        var DEFAULT_MAC = "FF:FF:FF:FF:FF:FF";
+        /**
+         * MACs que Android devuelve cuando NO deja leer la real (o vacías):
+         * se tratan como "sin dato".
+         */
+        var FAKE_MACS = ["02:00:00:00:00:00", "00:00:00:00:00:00"];
+
+        /**
+         * Normaliza una MAC: acepta "e8:bb:3e:c8:fb:5a", "E8-BB-3E-C8-FB-5A",
+         * "e8bb.3ec8.fb5a" o "e8bb3ec8fb5a" => "E8:BB:3E:C8:FB:5A".
+         * @returns {string} MAC normalizada, o "" si no es válida o es falsa.
+         */
+        function cleanMac(value) {
+          var hex =
+            value === null || value === undefined
+              ? ""
+              : String(value).trim().replace(/[:\-.\s]/g, "").toUpperCase();
+          if (!/^[0-9A-F]{12}$/.test(hex)) return "";
+          var mac = hex.match(/../g).join(":");
+          return FAKE_MACS.indexOf(mac) === -1 ? mac : "";
+        }
+
         /**
          * Textos por idioma (GLOBAL: "smartpizarra.language"). Las claves de
          * idioma deben ser IGUALES a I18N de config.html, que es donde el
@@ -790,6 +830,21 @@
               onlyIfMissing: true,
               parse: function (raw) {
                 return raw === null ? null : cleanRouteUrl(raw) || null;
+              },
+            },
+            /**
+             * MAC del equipo: la pasa la app con setMac(). Aquí solo se crea
+             * con DEFAULT_MAC si falta o no es válida (nunca pisa una MAC
+             * guardada). DEFAULT_MAC también es válida.
+             */
+            mac: {
+              key: MAC_KEY,
+              defaultValue: DEFAULT_MAC,
+              onlyIfMissing: true,
+              parse: function (raw) {
+                if (raw === null) return null;
+                var v = String(raw).trim().toUpperCase();
+                return v === DEFAULT_MAC ? v : cleanMac(v) || null;
               },
             },
           }),
@@ -1821,6 +1876,7 @@
               deviceSecret: v.deviceSecret,
               // Ruta de su usuario (URL completa, leagues = liga del equipo); sin ruta = http://localhost/none.html
               routeUrl: readDeviceRoute(),
+              mac: v.mac, // MAC del equipo (setMac); sin dato = FF:FF:FF:FF:FF:FF
               orientation: v.orientation, // global: todas las pantallas
               language: v.language, // global: todas las pantallas
               scale: v.appScale / 100, // escala para la app (factor), la edita config.html
@@ -2007,6 +2063,43 @@
           window.__pendingSettings = null;
           pending.forEach(function (jsonData) {
             window.updateSettings(jsonData);
+          });
+
+          /**
+           * Función GLOBAL (la app la llama con RunJavaScript / EvaluateJavaScript):
+           *   setMac("e8:bb:3e:c8:fb:5a")
+           * Guarda la MAC en localStorage ("smartpizarra.mac") normalizada
+           * ("E8:BB:3E:C8:FB:5A"; también acepta "-", "." o sin separadores).
+           * Si llega vacía, inválida o la falsa de Android (02:00:00:00:00:00):
+           * se guarda DEFAULT_MAC ("FF:FF:FF:FF:FF:FF") solo si NO había una
+           * MAC real guardada; una MAC real nunca se pisa con el default.
+           * Devuelve texto JSON: {"ok":true,"mac":"E8:BB:3E:C8:FB:5A","changed":true}
+           * (ok = false si el valor recibido no era una MAC válida).
+           * Reemplaza a la provisional del <head>.
+           * @param {string} value
+           * @returns {string}
+           */
+          window.setMac = function (value) {
+            const mac = cleanMac(value);
+            const before = screen.settings.values.mac;
+            if (mac) {
+              screen.settings.set("mac", mac);
+            } else if (!cleanMac(before)) {
+              screen.settings.set("mac", DEFAULT_MAC); // sin MAC real guardada
+            }
+            const result = JSON.stringify({
+              ok: mac !== "",
+              mac: screen.settings.values.mac,
+              changed: screen.settings.values.mac !== before,
+            });
+            console.log("setMac:", result);
+            return result;
+          };
+
+          const pendingMac = window.__pendingMac || [];
+          window.__pendingMac = null;
+          pendingMac.forEach(function (value) {
+            window.setMac(value);
           });
         }
 
