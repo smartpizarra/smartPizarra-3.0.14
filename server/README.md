@@ -196,7 +196,8 @@ Cómo funciona:
 
 - Un **tipo de liga** tiene un código (`mlb`) y un nombre (`MLB`). Una **liga** tiene nombre, tipo y contenido: la lista de códigos (`LIDOM, MLB, KO`).
 - El administrador asigna ligas a cada usuario en su ficha (puede tener varias).
-- El **usuario**, en `/cuenta/` → *Equipos*, pone a cada uno de sus equipos **"Sin liga" o UNA** de esas ligas. Es el único sitio donde se cambia la liga de una TV: la TV ya no tiene ligas fijas, `config.html` no tiene selector y `updateSettings` rechaza `league`.
+- El **usuario**, en `/cuenta/` → *Equipos*, pone a cada uno de sus equipos **"Sin liga" o UNA** de esas ligas. La TV ya no tiene ligas fijas, `config.html` no tiene selector y `updateSettings` rechaza `league`.
+- El **administrador** también puede elegir la liga de **cualquier equipo** desde su tarjeta en el panel (selector *Liga*, se guarda al cambiarlo), **siempre que el usuario dueño del equipo ya tenga una ruta y ligas asignadas**. Solo puede elegir entre las ligas de **ese usuario** (o "Sin liga"); la tarjeta muestra también la URL final que recibe el equipo. Si el usuario no tiene ruta o ligas, la tarjeta solo muestra la liga y el motivo.
 - Desde el 2026-11-12 la TV **ya no recibe ni guarda la liga aparte**: sus códigos van **dentro de la URL de la ruta** del usuario (`leagues=...`, ver *Gestión de Rutas*). Al recibir la ruta, la TV borra las claves viejas `smartpizarra.league`, `smartpizarra.leagues` y `smartpizarra.leagueOptions`, y los JSON a la app ya no llevan `league`/`leagues` (usa `routeUrl`).
 - Si el administrador le quita esa liga al usuario, o cambia el equipo de usuario, el equipo queda sin liga.
 
@@ -233,7 +234,7 @@ Para la **Gestión de Rutas** (botón *Rutas* del panel):
 Cómo funciona:
 
 - Una **ruta** es una URL que se construye **por partes**, sin escribirla completa: URL base (p. ej. `https://sport.grupoazar.do/PizarrasV2`) + `agent` (texto), `pageIndex` (número), `timer` (número), `showParams` (texto), `otherQ` (Y/N) y `pageSize` (número). El formulario muestra la URL final mientras se escribe.
-- El parámetro **`leagues`** no se escribe: se rellena en **cada equipo** con los códigos de su liga (la que eligió el usuario en `/cuenta/` → *Equipos*), p. ej. `leagues=LIDOM,MLB,LMP`. Sin liga queda `leagues=` vacío.
+- El parámetro **`leagues`** no se escribe: se rellena en **cada equipo** con los códigos de su liga (la que eligió el usuario en `/cuenta/` → *Equipos* o el administrador en la tarjeta del equipo), p. ej. `leagues=LIDOM,MLB,LMP`. Sin liga queda `leagues=` vacío.
 - Cada ruta se **asigna a uno o varios usuarios** («Asignar a usuarios»). Cada usuario tiene **una sola** ruta: si se le asigna otra, cambia. **Todos sus equipos** la heredan, también los que se le asignen después; no hace falta ir equipo por equipo.
 - Los equipos autorizados reciben la URL final (`deviceRoute`) en cada consulta (`api/device.php` y `api/media.php`) y la guardan en `localStorage` (`smartpizarra.routeUrl`). **Sin ruta** (el servidor responde `null`, o la clave falta, está vacía o no es válida) la TV usa `http://localhost/none.html`: la pantalla **`none.html` de los assets de Kodular**, que dice que el equipo no puede mostrar el contenido y que se comunique con su supervisor, y que **consulta el servidor cada 30 s** y envía un JSON a la app tras cada consulta (`routeUrl`, `hasRoute`, `routeChanged`…): cuando se le asigne una ruta, la app recibe la URL nueva. `loading.html` la pone por defecto al arrancar, así la app siempre recibe una URL que abrir. Todas las páginas la envían a la app en su JSON como `"routeUrl"`. Si se edita la ruta, se quita al usuario o se borra, los equipos lo reciben en su siguiente consulta (~1 min con `mirror.html`).
 

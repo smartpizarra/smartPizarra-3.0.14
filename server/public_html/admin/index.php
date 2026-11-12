@@ -72,6 +72,12 @@
  *    el USUARIO, en /cuenta/, pone a cada uno de sus equipos "Sin liga" o
  *    UNA de ellas; la TV la recibe (LeagueRepository::devicePayload) y la
  *    guarda (sin liga => ""). La TV ya no tiene ligas fijas ni selector.
+ *    LIGA DE UN EQUIPO DESDE EL ADMIN (acción device_league, 2026-11-12):
+ *    en la tarjeta de cada equipo, si su usuario YA tiene una ruta y
+ *    ligas asignadas, el administrador también puede elegir "Sin liga" o
+ *    UNA de las ligas de ESE usuario (las mismas que ve el usuario en
+ *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
+ *    muestra además la URL final que recibe el equipo.
  *
  *  - VIGENCIA del contenido por usuario (vista Usuarios y ficha del
  *    usuario): días que el administrador SUMA o RESTA (o quita). Sus
@@ -945,6 +951,26 @@ try {
                     $raw = param($_POST, 'userId');
                     $ok = DeviceRepository::setUser($id, $raw === '' ? null : (int) $raw);
                     redirectWith($ok ? "Usuario de $id cambiado." : 'Ese usuario no existe.', $back);
+                case 'device_league':
+                    // Liga del equipo: "Sin liga" o UNA de las ligas del USUARIO dueño
+                    // del equipo, solo si ese usuario ya tiene ruta y ligas asignadas.
+                    $device = DeviceRepository::find($id);
+                    $owner = $device !== null && !empty($device['user_id']) ? UserRepository::find((int) $device['user_id']) : null;
+                    if ($owner === null) {
+                        redirectWith("$id no tiene usuario: asígnale uno antes de elegir su liga.", $back);
+                    }
+                    if (empty($owner['route_id']) || !LeagueRepository::idsForUser((int) $owner['id'])) {
+                        redirectWith("«{$owner['company']}» todavía no tiene ruta y ligas asignadas.", $back);
+                    }
+                    $raw = param($_POST, 'leagueId');
+                    $leagueId = ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null; // "" = Sin liga
+                    // setDeviceLeague solo acepta ligas asignadas al usuario del equipo
+                    if (!LeagueRepository::setDeviceLeague($id, $leagueId)) {
+                        redirectWith("Esa liga no está asignada a «{$owner['company']}».", $back);
+                    }
+                    $league = $leagueId === null ? null : LeagueRepository::find($leagueId);
+                    redirectWith(($league === null ? "$id queda sin liga." : "$id usará la liga «{$league['name']}».")
+                        . ' La TV recibe su URL en la próxima consulta (≈ 1 min si está mostrando contenido).', $back);
                 case 'delete':
                     DeviceRepository::delete($id);
                     redirectWith("$id eliminado. Si el equipo vuelve a consultar, se registrará como pendiente.", $back);
@@ -1143,6 +1169,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .media-body { flex: 1 1 260px; min-width: 0; }
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
+    /* Liga de un equipo (tarjeta del equipo): etiqueta + selector en una fila */
+    .league-form { align-items: center; flex-wrap: wrap; margin: 4px 0; }
+    .league-form select { flex: 1 1 220px; min-width: 0; padding: 6px 8px; font: inherit; color: var(--text);
+      background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
     .meta a { color: var(--accent); } /* enlaces legibles también en modo oscuro */
     /* Ligas (?view=leagues y ficha del usuario) */
     .type-row { display: flex; gap: 6px 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -1923,11 +1953,43 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="meta">
         Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>'
           . ' · <span class="owner">' . contentValidity($d['user_content_until'] ?? null)['text'] . '</span>' : '<em>sin asignar</em>' ?><br>
-        <?php if ($d['user_id']): $devLeague = LeagueRepository::deviceLeague($d); ?>
-          <!-- Liga del equipo (la elige su usuario en /cuenta/) -->
-          Liga: <?= $devLeague === null ? '<em>sin liga</em>'
-            : h($devLeague['name']) . ' <span class="owner">(' . h($devLeague['type_name']) . ': '
-              . h(str_replace(',', ', ', $devLeague['codes'])) . ')</span>' ?><br>
+        <?php if ($d['user_id']):
+            $devLeague = LeagueRepository::deviceLeague($d);
+            $ownerId = (int) $d['user_id'];
+            $ownerRoute = !empty($usersById[$ownerId]['route_id']);
+            // Ligas del usuario dueño (una consulta por usuario, no por equipo)
+            $ownerLeagues = $leaguesByUser[$ownerId] ??= LeagueRepository::forUser($ownerId);
+        ?>
+          <?php if ($ownerRoute && $ownerLeagues): $did = h($id); ?>
+            <!-- Liga del equipo: el usuario ya tiene ruta y ligas => el admin también la elige
+                 entre las ligas de ESE usuario (se guarda al cambiarla) -->
+            <form method="post" class="user-form league-form"><?= csrfField() ?>
+              <input type="hidden" name="action" value="device_league">
+              <input type="hidden" name="deviceId" value="<?= $did ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
+              <label for="lg-<?= $did ?>">Liga:</label>
+              <select id="lg-<?= $did ?>" name="leagueId" data-autosubmit>
+                <option value="">Sin liga</option>
+                <?php $lastType = null; foreach ($ownerLeagues as $l): ?>
+                  <?php if ($lastType !== (int) $l['type_id']): ?>
+                    <?= $lastType !== null ? '</optgroup>' : '' ?><optgroup label="<?= h($l['type_name']) ?>">
+                  <?php $lastType = (int) $l['type_id']; endif; ?>
+                  <option value="<?= (int) $l['id'] ?>" <?= $devLeague && (int) $devLeague['id'] === (int) $l['id'] ? 'selected' : '' ?>>
+                    <?= h($l['name'] . ' — ' . str_replace(',', ', ', $l['codes'])) ?></option>
+                <?php endforeach; ?>
+                <?= $lastType !== null ? '</optgroup>' : '' ?>
+              </select>
+              <noscript><button type="submit">Guardar liga</button></noscript>
+            </form>
+            <!-- URL final que recibe el equipo (ruta del usuario + leagues de esta liga) -->
+            <span class="route-url"><?= h((string) RouteRepository::urlForDevice($d)) ?></span>
+          <?php else: ?>
+            <!-- Sin ruta o sin ligas en su usuario: solo se muestra la liga -->
+            Liga: <?= $devLeague === null ? '<em>sin liga</em>'
+              : h($devLeague['name']) . ' <span class="owner">(' . h($devLeague['type_name']) . ': '
+                . h(str_replace(',', ', ', $devLeague['codes'])) . ')</span>' ?>
+            <span class="owner">· <?= !$ownerRoute ? 'su usuario no tiene ruta' : 'su usuario no tiene ligas' ?>
+              (asígnaselas en su ficha para poder elegir la liga aquí)</span><br>
+          <?php endif; ?>
         <?php endif; ?>
         <!-- Última conexión: cualquier consulta de las páginas de la TV (device.php / media.php) o señal de la app nativa (ping.php) -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
