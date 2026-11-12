@@ -264,7 +264,70 @@ function baseStyles(): string
       margin-right: 6px; background: currentColor; vertical-align: middle; }
     .online.on { color: var(--ok); } .online.off { color: var(--bad); } .online.never { color: var(--muted); }
     .empty { color: var(--muted); text-align: center; padding: 24px; }
+    /* Buscador de las listas de dispositivos al asignar (deviceFilterBox / deviceFilterScript) */
+    .device-filter { display: block; width: 100%; margin: 6px 0 4px; }
+    .device-hidden { display: none !important; }
 CSS;
+}
+
+/**
+ * BUSCADOR DE DISPOSITIVOS al ASIGNAR (2026-11-12): caja que se pone al
+ * principio de una lista de casillas de dispositivos. deviceFilterScript()
+ * oculta las casillas (label[data-search]) del MISMO contenedor que no
+ * coinciden. Las casillas marcadas que se ocultan SIGUEN marcadas.
+ */
+function deviceFilterBox(string $placeholder = 'Buscar dispositivo por nombre, ID o MAC del case'): string
+{
+    return '<input type="search" class="device-filter" data-device-filter placeholder="' . h($placeholder) . '" aria-label="Buscar dispositivo">'
+        . '<span class="hint device-hidden" data-device-filter-none>Ningún dispositivo coincide.</span>';
+}
+
+/**
+ * Atributo data-search de una casilla: textos en minúsculas y, de cada MAC,
+ * también su versión SIN separadores (para buscar "e8bb3e", "e8-bb" o "fb5a").
+ * @param string[] $texts Textos (nombre, ID, alias...).
+ * @param string[] $macs  MACs ("E8:BB:3E:C8:FB:5A").
+ */
+function deviceSearchAttr(array $texts, array $macs = []): string
+{
+    $parts = array_map('strval', array_filter($texts, static fn($v) => $v !== null && $v !== ''));
+    foreach ($macs as $m) {
+        if ($m !== null && $m !== '') {
+            $parts[] = (string) $m;
+            $parts[] = str_replace(':', '', (string) $m);
+        }
+    }
+    return ' data-search="' . h(mb_strtolower(implode(' ', $parts))) . '"';
+}
+
+/** JS de deviceFilterBox(): filtra mientras se escribe (sin recargar la página). */
+function deviceFilterScript(): string
+{
+    return <<<'JS'
+  (function () {
+    document.querySelectorAll("input[data-device-filter]").forEach(function (box) {
+      var list = box.parentNode;
+      var none = list.querySelector("[data-device-filter-none]");
+      var items = list.querySelectorAll("label[data-search]");
+      function apply() {
+        var q = box.value.trim().toLowerCase();
+        var hex = q.replace(/[\s:.\-]/g, "");
+        var useHex = hex.length >= 2 && /^[0-9a-f]+$/.test(hex);
+        var shown = 0;
+        items.forEach(function (it) {
+          var text = it.getAttribute("data-search");
+          var ok = q === "" || text.indexOf(q) !== -1 || (useHex && text.indexOf(hex) !== -1);
+          it.classList.toggle("device-hidden", !ok);
+          if (ok) shown++;
+        });
+        if (none) none.classList.toggle("device-hidden", shown > 0 || items.length === 0);
+      }
+      box.addEventListener("input", apply);
+      // Enter dentro de la caja NO envía el formulario de asignación
+      box.addEventListener("keydown", function (e) { if (e.key === "Enter") e.preventDefault(); });
+    });
+  })();
+JS;
 }
 
 /**

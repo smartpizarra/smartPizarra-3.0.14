@@ -79,6 +79,12 @@
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
  *
+ *  - BUSCADOR DE EQUIPOS AL ASIGNAR (2026-11-12): las listas de casillas de
+ *    equipos de Anuncios y Tiras tienen una caja que filtra mientras se
+ *    escribe (alias, alias del admin, ID, empresa, MAC o MAC del case;
+ *    deviceFilterBox / deviceFilterScript de web.php). Las marcadas que
+ *    quedan ocultas siguen marcadas.
+ *
  *  - ALIAS Y NOTAS DEL ADMINISTRADOR (2026-11-12): en cada equipo, aparte
  *    del alias/nombre "label" (que también ve y edita el usuario), un ALIAS
  *    ADICIONAL y NOTAS que solo ve el administrador (acción admin_info,
@@ -267,13 +273,16 @@ function adFields(?array $ad, array $users, array $devices): string
         $html .= '<label class="inline"><input type="checkbox" name="users[]" value="' . $uid . '"' . (isset($chosenUsers[$uid]) ? ' checked' : '') . '> '
             . h($u['company']) . ' <span class="owner">(' . (int) $u['devices'] . ')</span></label>';
     }
-    $html .= '</div><div class="pick" data-for="devices"><span class="owner">Equipos:</span>';
+    // Buscador de equipos (alias, alias del admin, ID, empresa, MAC y MAC del case)
+    $html .= '</div><div class="pick" data-for="devices"><span class="owner">Equipos:</span>'
+        . (count($devices) > 1 ? deviceFilterBox('Buscar equipo por alias, ID, empresa, MAC o MAC del case') : '');
     if (!$devices) {
         $html .= '<span class="owner">No hay equipos.</span>';
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $d['admin_alias'] ?? null, $id, $d['user_company']], [$d['mac'] ?? null, $d['profile_case_mac'] ?? null])
+            . '><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
             . ($d['label'] ? h($d['label']) . ' ' : '') . '<span class="mono">' . h($id) . '</span>'
             . ($d['user_company'] ? ' <span class="owner">(' . h($d['user_company']) . ')</span>' : '') . '</label>';
     }
@@ -365,13 +374,16 @@ function overlayAdminTargets(array $o, array $users, array $devices): string
         $html .= '<label class="inline"><input type="checkbox" name="users[]" value="' . $uid . '"' . (isset($chosenUsers[$uid]) ? ' checked' : '') . '> '
             . h($u['company']) . ' <span class="owner">(' . (int) $u['devices'] . ')</span></label>';
     }
-    $html .= '</div><div class="pick" data-for="devices"><span class="owner">Equipos:</span>';
+    // Buscador de equipos (alias, alias del admin, ID, empresa, MAC y MAC del case)
+    $html .= '</div><div class="pick" data-for="devices"><span class="owner">Equipos:</span>'
+        . (count($devices) > 1 ? deviceFilterBox('Buscar equipo por alias, ID, empresa, MAC o MAC del case') : '');
     if (!$devices) {
         $html .= '<span class="owner">No hay equipos.</span>';
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $d['admin_alias'] ?? null, $id, $d['user_company']], [$d['mac'] ?? null, $d['profile_case_mac'] ?? null])
+            . '><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
             . ($d['label'] ? h($d['label']) . ' ' : '') . '<span class="mono">' . h($id) . '</span>'
             . ($d['user_company'] ? ' <span class="owner">(' . h($d['user_company']) . ')</span>' : '') . '</label>';
     }
@@ -2301,6 +2313,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <!-- Fechas locales, "hace X", En línea/Desconectado y confirmaciones -->
   <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
+  <script nonce="<?= h($nonce) ?>"><?= deviceFilterScript() ?></script>
   <script nonce="<?= h($nonce) ?>">
   /* Rutas: URL final en vivo (mismo orden y codificación que RouteRepository::buildUrl) */
   (function () {

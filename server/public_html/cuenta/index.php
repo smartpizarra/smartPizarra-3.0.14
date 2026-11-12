@@ -87,15 +87,15 @@ function targetDevices(): array
 function targetFields(array $devices, bool $all, array $selected, string $uid): string
 {
     $html = '<fieldset class="targets"><legend>Mostrar en</legend>'
-        . '<label class="inline"><input type="radio" name="target" value="all"' . ($all ? ' checked' : '') . '> Todos mis equipos</label>'
+        . '<label class="inline"><input type="radio" name="target" value="all"' . ($all ? ' checked' : '') . '> Todos mis dispositivos</label>'
         . '<label class="inline"><input type="radio" name="target" value="some"' . ($all ? '' : ' checked') . '> Solo en:</label>'
-        . '<div class="device-checks">';
+        . '<div class="device-checks">' . (count($devices) > 1 ? deviceFilterBox() : '');
     if (!$devices) {
-        $html .= '<span class="hint">Todavía no tienes equipos asignados.</span>';
+        $html .= '<span class="hint">Todavía no tienes dispositivos asignados.</span>';
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '" id="d-' . h($uid . $id) . '"'
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="d-' . h($uid . $id) . '"'
             . (in_array($id, $selected, true) ? ' checked' : '') . '> '
             . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
             . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
@@ -182,16 +182,17 @@ function overlayAssignFields(array $o, array $devices): string
     $scope = (string) $o['scope'];
     $p = 'as' . (int) $o['id'] . '-';
     $html = '<fieldset class="targets"><legend>Mostrar en</legend>';
-    foreach (['none' => 'Sin asignar', 'all' => 'Todos mis equipos', 'devices' => 'Solo en:'] as $k => $text) {
+    foreach (['none' => 'Sin asignar', 'all' => 'Todos mis dispositivos', 'devices' => 'Solo en:'] as $k => $text) {
         $html .= '<label class="inline"><input type="radio" name="scope" value="' . $k . '"' . ($scope === $k ? ' checked' : '') . '> ' . $text . '</label>';
     }
-    $html .= '<div class="device-checks">';
+    // Buscador (solo si hay varios dispositivos)
+    $html .= '<div class="device-checks">' . (count($devices) > 1 ? deviceFilterBox() : '');
     if (!$devices) {
-        $html .= '<span class="hint">Todavía no tienes equipos asignados.</span>';
+        $html .= '<span class="hint">Todavía no tienes dispositivos asignados.</span>';
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"><input type="checkbox" name="devices[]" value="' . h($id) . '" id="' . h($p . $id) . '"'
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="' . h($p . $id) . '"'
             . (in_array($id, $o['devices'], true) ? ' checked' : '') . '> '
             . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
             . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
@@ -331,7 +332,7 @@ try {
             $id = strtoupper(trim(param($_POST, 'deviceId')));
             $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
             if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
-                redirectWith('Ese equipo no está asignado a tu cuenta.', 's=equipos');
+                redirectWith('Ese dispositivo no está asignado a tu cuenta.', 's=equipos');
             }
             $raw = param($_POST, 'leagueId');
             $leagueId = ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null; // "" = Sin liga
@@ -352,7 +353,7 @@ try {
             $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
             // Solo equipos asignados a este usuario (nunca los de otro)
             if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
-                redirectWith('Ese equipo no está asignado a tu cuenta.', 's=equipos');
+                redirectWith('Ese dispositivo no está asignado a tu cuenta.', 's=equipos');
             }
             // Texto en UTF-8 (si llega en Windows-1252 se convierte, para no perder ñ/acentos)
             $raw = param($_POST, 'label');
@@ -402,7 +403,7 @@ try {
                 [$what, $g] = overlayNoun($style['kind']);
                 if ($action === 'overlay_create') {
                     OverlayRepository::create($data, $upload[0] ?? null, $upload[1] ?? '', $upload[2] ?? null);
-                    redirectWith("$what «{$style['name']}» cread$g. Ahora usa «Asignar a equipos» para elegir en qué pantallas y durante cuánto tiempo se muestra.", 's=tiras');
+                    redirectWith("$what «{$style['name']}» cread$g. Ahora usa «Asignar a dispositivos» para elegir en qué pantallas y durante cuánto tiempo se muestra.", 's=tiras');
                 }
                 OverlayRepository::update($oid, $data);
                 redirectWith("$what «{$style['name']}» guardad$g. Tus pantallas lo aplicarán en su próxima consulta (≈ 1 min).", 's=tiras');
@@ -413,7 +414,7 @@ try {
                 $chosen = isset($_POST['devices']) && is_array($_POST['devices'])
                     ? array_values(array_filter($_POST['devices'], 'is_string')) : [];
                 if ($scope === 'devices' && !$chosen) {
-                    redirectWith('Marca al menos un equipo, o elige "Todos mis equipos" o "Sin asignar".', 's=tiras');
+                    redirectWith('Marca al menos un dispositivo, o elige "Todos mis dispositivos" o "Sin asignar".', 's=tiras');
                 }
                 // Tiempo de visibilidad de esta asignación: permanente o con fechas
                 [$starts, $ends] = $scope === 'none' ? [null, null] : scheduleData('s=tiras');
@@ -426,7 +427,7 @@ try {
                 }
                 [$what, $g] = overlayNoun((string) $ov['kind']);
                 redirectWith($scope === 'none' ? "$what «{$ov['name']}» sin asignar: no se mostrará en ninguna pantalla."
-                    : "$what «{$ov['name']}» asignad$g a " . ($scope === 'all' ? 'todos tus equipos' : "$n equipo(s)")
+                    : "$what «{$ov['name']}» asignad$g a " . ($scope === 'all' ? 'todos tus dispositivos' : "$n dispositivo(s)")
                     . ($starts === null && $ends === null ? ' de forma permanente' : ' con fechas')
                     . '. Se aplica en su próxima consulta (≈ 1 min).', 's=tiras');
             }
@@ -454,7 +455,7 @@ try {
             }
             [$all, $chosen] = targetDevices();
             if (in_array($action, ['media_upload', 'media_update'], true) && !$all && !$chosen) {
-                redirectWith('Marca al menos un equipo o elige "Todos mis equipos".', 's=contenido');
+                redirectWith('Marca al menos un dispositivo o elige "Todos mis dispositivos".', 's=contenido');
             }
             // Permanente o con fechas (solo al subir o editar)
             [$starts, $ends] = in_array($action, ['media_upload', 'media_update'], true) ? scheduleData() : [null, null];
@@ -488,7 +489,7 @@ try {
                     }
                     MediaRepository::create($uid, (string) $f['tmp_name'], (string) $f['name'], $mime,
                         (int) param($_POST, 'seconds'), $all, $chosen, $starts, $ends);
-                    redirectWith('«' . $f['name'] . '» subido. Tus equipos lo descargarán en su próxima consulta.' . $when(), 's=contenido');
+                    redirectWith('«' . $f['name'] . '» subido. Tus dispositivos lo descargarán en su próxima consulta.' . $when(), 's=contenido');
                 case 'media_update':
                     MediaRepository::update($mid, $uid, (int) param($_POST, 'seconds'), $all, $chosen, $starts, $ends);
                     redirectWith('Cambios guardados.' . $when(), 's=contenido');
@@ -498,7 +499,7 @@ try {
                     redirectWith('Orden cambiado.', 's=contenido');
                 case 'media_delete':
                     MediaRepository::delete($mid, $uid);
-                    redirectWith('Archivo eliminado. Tus equipos dejarán de mostrarlo en su próxima consulta.', 's=contenido');
+                    redirectWith('Archivo eliminado. Tus dispositivos dejarán de mostrarlo en su próxima consulta.', 's=contenido');
                 default:
                     redirectWith('Acción desconocida.', 's=contenido');
             }
@@ -543,7 +544,7 @@ $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizad
  * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | tiras | cuenta.
  * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
  */
-$sections = ['inicio' => 'Inicio', 'equipos' => 'Equipos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'cuenta' => 'Mi cuenta'];
+$sections = ['inicio' => 'Inicio', 'equipos' => 'Dispositivos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'cuenta' => 'Mi cuenta'];
 $section = param($_GET, 's');
 if (!isset($sections[$section])) {
     $section = 'inicio';
@@ -705,7 +706,7 @@ if ($validity['state'] !== 'active') {
   <?php if ($section === 'inicio'): ?>
     <!-- ======================= INICIO: resumen ======================= -->
     <div class="stats">
-      <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Equipos</div></a>
+      <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Dispositivos</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl">Autorizados</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl">En línea ahora</div></a>
       <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?></div><div class="lbl">Archivos de contenido</div></a>
@@ -727,28 +728,28 @@ if ($validity['state'] !== 'active') {
     <section class="card block">
       <h2>¿Qué muestran mis pantallas?</h2>
       <div class="meta">
-        <?= $mediaOnCount ?> de <?= count($devices) ?> equipo(s) pueden mostrar tus imágenes y videos
+        <?= $mediaOnCount ?> de <?= count($devices) ?> dispositivo(s) pueden mostrar tus imágenes y videos
         (autorizados, con el contenido habilitado por el administrador y con la vigencia activa).
       </div>
       <div class="actions">
         <a class="btn" href="?s=contenido">Subir o cambiar contenido</a>
-        <a class="btn" href="?s=equipos">Ver mis equipos</a>
+        <a class="btn" href="?s=equipos">Ver mis dispositivos</a>
       </div>
     </section>
 
   <?php elseif ($section === 'equipos'): ?>
     <!-- ============ EQUIPOS (solo el nombre es editable) ============ -->
     <div class="section-head">
-      <h2>Mis equipos</h2>
-      <span class="hint">Puedes ponerle un nombre y una liga a cada equipo. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
+      <h2>Mis dispositivos</h2>
+      <span class="hint">Puedes ponerle un nombre y una liga a cada dispositivo. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
     </div>
     <?php if (!$devices): ?>
-      <div class="card empty block">Todavía no tienes equipos asignados.</div>
+      <div class="card empty block">Todavía no tienes dispositivos asignados.</div>
     <?php else: ?>
       <!-- Buscar uno de MIS equipos por la MAC que sale en su case (o por su nombre o ID) -->
       <form method="get" class="device-search" role="search">
         <input type="hidden" name="s" value="equipos">
-        <label for="dq" class="sr">Buscar equipo</label>
+        <label for="dq" class="sr">Buscar dispositivo</label>
         <input type="search" id="dq" name="q" value="<?= h($deviceQuery) ?>" maxlength="40"
                placeholder="Buscar por MAC (p. ej. E8:BB:3E:C8:FB:5A), nombre o ID" spellcheck="false">
         <button type="submit">Buscar</button>
@@ -756,8 +757,8 @@ if ($validity['state'] !== 'active') {
       </form>
       <?php if ($deviceQuery !== ''): ?>
         <p class="hint"><?= $shownDevices
-            ? count($shownDevices) . ' equipo(s) coinciden con «' . h($deviceQuery) . '».'
-            : 'Ninguno de tus equipos coincide con «' . h($deviceQuery) . '».' ?></p>
+            ? count($shownDevices) . ' dispositivo(s) coinciden con «' . h($deviceQuery) . '».'
+            : 'Ninguno de tus dispositivos coincide con «' . h($deviceQuery) . '».' ?></p>
       <?php endif; ?>
     <?php endif; ?>
     <?php foreach ($shownDevices as $d): $st = (string) $d['status']; $mOn = DeviceRepository::mediaEnabled($d); ?>
@@ -788,9 +789,9 @@ if ($validity['state'] !== 'active') {
         <form method="post" class="label-form" autocomplete="off"><?= csrfField() ?>
           <input type="hidden" name="action" value="device_label">
           <input type="hidden" name="deviceId" value="<?= h($d['device_id']) ?>">
-          <label for="lbl-<?= h($d['device_id']) ?>" class="sr">Nombre del equipo</label>
+          <label for="lbl-<?= h($d['device_id']) ?>" class="sr">Nombre del dispositivo</label>
           <input type="text" id="lbl-<?= h($d['device_id']) ?>" name="label" value="<?= h((string) $d['label']) ?>"
-                 maxlength="100" placeholder="Nombre del equipo (p. ej. Local Centro)">
+                 maxlength="100" placeholder="Nombre del dispositivo (p. ej. Local Centro)">
           <button type="submit">Guardar nombre</button>
         </form>
         <!-- Liga de este equipo: "Sin liga" o UNA de mis ligas (llega a la TV en ≈ 1 min) -->
@@ -800,7 +801,7 @@ if ($validity['state'] !== 'active') {
           <form method="post" class="league-form"><?= csrfField() ?>
             <input type="hidden" name="action" value="device_league">
             <input type="hidden" name="deviceId" value="<?= $did ?>">
-            <label for="lg-<?= $did ?>">Liga de este equipo</label>
+            <label for="lg-<?= $did ?>">Liga de este dispositivo</label>
             <div class="league-row">
               <select id="lg-<?= $did ?>" name="leagueId">
                 <option value="">Sin liga</option>
@@ -822,7 +823,7 @@ if ($validity['state'] !== 'active') {
 
   <?php elseif ($section === 'contenido'): ?>
     <!-- ============ CONTENIDO PARA LAS PANTALLAS (mirror.html) ============
-         Cada equipo descarga UNA vez sus archivos y los muestra en
+         Cada dispositivo descarga UNA vez sus archivos y los muestra en
          carrusel, en este orden, desde su propia memoria. -->
     <form class="card block upload" method="post" enctype="multipart/form-data" id="uploadForm">
       <?= csrfField() ?>
@@ -869,7 +870,7 @@ if ($validity['state'] !== 'active') {
             <div class="meta">
               <?= $isImg ? 'Imagen · ' . (int) $m['seconds'] . ' s' : 'Video' ?> · <?= h(formatBytes((int) $m['size_bytes'])) ?>
               · Subido el <?= dateTag($m['created_at']) ?><br>
-              Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos mis equipos' : count($m['devices']) . ' equipo(s)' ?><br>
+              Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos mis dispositivos' : count($m['devices']) . ' dispositivo(s)' ?><br>
               <!-- Periodo: permanente o con fechas -->
               <?= scheduleTag($m) ?>
             </div>
@@ -884,7 +885,7 @@ if ($validity['state'] !== 'active') {
             </div>
             <!-- Edición plegada: duración y equipos -->
             <details class="edit">
-              <summary>Editar duración, equipos y fechas</summary>
+              <summary>Editar duración, dispositivos y fechas</summary>
               <form method="post">
                 <?= csrfField() ?>
                 <input type="hidden" name="action" value="media_update"><input type="hidden" name="mediaId" value="<?= $mid ?>">
@@ -911,9 +912,9 @@ if ($validity['state'] !== 'active') {
       <form method="post" enctype="multipart/form-data" autocomplete="off"><?= csrfField() ?>
         <input type="hidden" name="action" value="overlay_create">
         <p class="hint">Una franja con un mensaje (tira) o una imagen (banner) arriba o abajo de la pantalla, sobre tus
-          imágenes y videos. Se ve en tus equipos que muestran contenido (autorizados, con el contenido habilitado y vigencia activa).</p>
+          imágenes y videos. Se ve en tus dispositivos que muestran contenido (autorizados, con el contenido habilitado y vigencia activa).</p>
         <?= overlayFields(null, 'new-') ?>
-        <p class="hint">Se crea <strong>sin equipos</strong>: después, en la lista, usa «Asignar a equipos» para elegir
+        <p class="hint">Se crea <strong>sin dispositivos</strong>: después, en la lista, usa «Asignar a dispositivos» para elegir
           en qué pantallas y durante cuánto tiempo (permanente o con fechas) se muestra.</p>
         <button class="primary" type="submit">Crear</button>
       </form>
@@ -939,7 +940,7 @@ if ($validity['state'] !== 'active') {
           <?php if (!overlayAssigned($o)): ?>
             <span class="badge pending">Sin asignar</span> no se muestra en ninguna pantalla
           <?php else: ?>
-            Asignada a: <?= $o['scope'] === 'all' ? 'todos mis equipos' : count($o['devices']) . ' equipo(s)' ?>
+            Asignada a: <?= $o['scope'] === 'all' ? 'todos mis dispositivos' : count($o['devices']) . ' dispositivo(s)' ?>
           <?php endif; ?>
         </div>
         <div class="actions">
@@ -952,7 +953,7 @@ if ($validity['state'] !== 'active') {
         </div>
         <!-- Asignación a equipos (aparte de la edición) -->
         <details class="edit" <?= overlayAssigned($o) ? '' : 'open' ?>>
-          <summary>Asignar a equipos</summary>
+          <summary>Asignar a dispositivos</summary>
           <form method="post"><?= csrfField() ?>
             <input type="hidden" name="action" value="overlay_assign"><input type="hidden" name="overlayId" value="<?= $oid ?>">
             <?= overlayAssignFields($o, $devices) ?>
@@ -985,7 +986,7 @@ if ($validity['state'] !== 'active') {
             <dt>Cliente desde</dt><dd><?= dateTag($user['created_at']) ?></dd>
             <dt>Vigencia</dt><dd><?= $validity['text'] ?></dd>
             <!-- Ligas asignadas por el administrador (opciones del selector de ligas de sus TV) -->
-            <dt>Ligas</dt><dd><?php if (!$myLeagues): ?>Ninguna asignada (tus equipos quedan sin liga)<?php else: ?>
+            <dt>Ligas</dt><dd><?php if (!$myLeagues): ?>Ninguna asignada (tus dispositivos quedan sin liga)<?php else: ?>
               <?php foreach ($myLeagues as $i => $l): ?><?= $i ? '<br>' : '' ?><strong><?= h($l['type_name']) ?></strong> · <?= h($l['name']) ?>
                 <span class="hint"><?= h(str_replace(',', ', ', $l['codes'])) ?></span><?php endforeach; ?>
             <?php endif; ?></dd>
@@ -1016,6 +1017,7 @@ if ($validity['state'] !== 'active') {
 
   <script nonce="<?= h($nonce) ?>"><?= timeScript($onlineTimeout) ?></script>
   <script nonce="<?= h($nonce) ?>"><?= overlayScript() ?></script>
+  <script nonce="<?= h($nonce) ?>"><?= deviceFilterScript() ?></script>
   <script nonce="<?= h($nonce) ?>">
   (function () {
     "use strict";
