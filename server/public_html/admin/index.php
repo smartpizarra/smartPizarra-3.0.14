@@ -79,6 +79,12 @@
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
  *
+ *  - ALIAS Y NOTAS DEL ADMINISTRADOR (2026-11-12): en cada equipo, aparte
+ *    del alias/nombre "label" (que también ve y edita el usuario), un ALIAS
+ *    ADICIONAL y NOTAS que solo ve el administrador (acción admin_info,
+ *    DeviceRepository::setAdminInfo). El buscador del panel encuentra el
+ *    equipo por ese alias (search(..., admin: true)); /cuenta/ no.
+ *
  *  - PERFILES DE EQUIPO (botón "Perfiles", ?view=profiles, 2026-11-12):
  *    ficha de la caja física = marca, modelo, MAC impresa en el CASE y
  *    fecha de instalación (todos obligatorios; ProfileRepository). Se crea
@@ -1010,7 +1016,11 @@ try {
                     redirectWith("$id vuelve a pendiente.", $back);
                 case 'label':
                     DeviceRepository::setLabel($id, trim(param($_POST, 'label')));
-                    redirectWith("Alias de $id guardado.", $back);
+                    redirectWith("Alias de $id guardado (también lo ve el usuario).", $back);
+                case 'admin_info':
+                    // Alias adicional + notas: SOLO para el administrador
+                    DeviceRepository::setAdminInfo($id, param($_POST, 'adminAlias'), param($_POST, 'adminNotes'));
+                    redirectWith("Alias y notas del administrador de $id guardados (el usuario no los ve).", $back);
                 case 'media_enable':
                 case 'media_disable':
                     // Permiso de contenido (imágenes/videos de mirror.html), aparte de la autorización
@@ -1078,7 +1088,7 @@ try {
         $filter = 'all';
     }
     $back = http_build_query(array_filter(['filter' => $filter, 'q' => $q, 'user' => $userParam]));
-    $devices = $loggedIn && $view === 'list' ? DeviceRepository::search($filter === 'all' ? null : $filter, $q, $userFilter) : [];
+    $devices = $loggedIn && $view === 'list' ? DeviceRepository::search($filter === 'all' ? null : $filter, $q, $userFilter, true) : [];
     $counts = $loggedIn ? DeviceRepository::counts($userFilter) : [];
     // Contenido de los usuarios (?view=media[&user=ID])
     $mediaUser = $userFilter !== null && $userFilter > 0 ? $userFilter : null;
@@ -1253,6 +1263,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .media-name { font-weight: 600; overflow-wrap: anywhere; }
     .user-form { display: flex; gap: 6px; }
     .device-mac { font-family: ui-monospace, Consolas, monospace; } /* MAC del equipo */
+    /* Alias y notas del administrador (solo panel) */
+    .admin-alias { font-weight: 600; margin-right: 8px; padding: 1px 8px; border-radius: 999px;
+      border: 1px dashed var(--line); color: var(--muted); }
+    .admin-notes { margin-top: 6px; padding: 6px 10px; border-left: 3px solid var(--warn, #b45309);
+      background: var(--bg); overflow-wrap: anywhere; }
     /* Perfiles de equipo */
     .need-profile { color: var(--bad, #c0392b); }
     input[type=date] { padding: 9px 10px; font: inherit; color: var(--text); background: var(--bg);
@@ -1405,7 +1420,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
   <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles'], true) ? ' hidden-tools' : '' ?>" method="get">
-    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, empresa, email, MAC o MAC del case' ?>" aria-label="Buscar">
+    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, alias del admin, empresa, email, MAC o MAC del case' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
       <option value="">Todos los usuarios</option>
@@ -1798,7 +1813,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     <!-- Búsqueda de perfiles: marca, modelo, equipo o MAC del case (sin importar ":" o "-") -->
     <form class="profile-search" method="get">
       <input type="hidden" name="view" value="profiles">
-      <input type="search" name="pq" value="<?= h($pq) ?>" placeholder="Buscar por MAC del case, marca, modelo o equipo" aria-label="Buscar perfil">
+      <input type="search" name="pq" value="<?= h($pq) ?>" placeholder="Buscar por MAC, marca, modelo o equipo" aria-label="Buscar perfil">
       <button type="submit">Buscar</button>
       <?php if ($pq !== ''): ?><a class="btn" href="?view=profiles">Ver todos</a><?php endif; ?>
     </form>
@@ -1810,7 +1825,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <span class="badge <?= $pr['device_id'] ? 'authorized' : 'off' ?>"><?= $pr['device_id'] ? 'Asignado' : 'Sin equipo' ?></span>
         </div>
         <div class="meta">
-          MAC del case: <span class="device-mac"><?= h($pr['case_mac']) ?></span>
+          MAC: <span class="device-mac"><?= h($pr['case_mac']) ?></span>
           · Instalado el <?= h(date('d/m/Y', strtotime((string) $pr['installed_on']))) ?><br>
           <?php if ($pr['device_id']): ?>
             Equipo: <a href="./?<?= h(http_build_query(['filter' => 'all', 'q' => $pr['device_id']])) ?>"><?= h($pr['device_id']) ?></a>
@@ -2125,6 +2140,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="device-head">
         <span>
           <?= $d['label'] ? '<span class="alias">' . h($d['label']) . '</span>' : '' ?>
+          <!-- Alias del administrador (el usuario no lo ve) -->
+          <?= !empty($d['admin_alias']) ? '<span class="admin-alias" title="Alias del administrador (el usuario no lo ve)">' . h($d['admin_alias']) . '</span>' : '' ?>
           <span class="device-id"><?= h($id) ?></span>
         </span>
         <span>
@@ -2217,6 +2234,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         · Última consulta <?= agoTag($d['last_seen_at']) ?>
         <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
         <?= $d['last_ip'] ? ' · IP ' . h($d['last_ip']) : '' ?>
+        <?php if (!empty($d['admin_notes'])): ?>
+          <!-- Notas del administrador (el usuario no las ve) -->
+          <div class="admin-notes"><strong>Notas:</strong> <?= nl2br(h($d['admin_notes'])) ?></div>
+        <?php endif; ?>
       </div>
       <div class="actions">
         <?php if ($st !== 'authorized'): $noProfile = DeviceRepository::needsProfile($d); ?>
@@ -2237,7 +2258,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <button class="<?= $mediaOn ? 'bad' : 'ok' ?>" type="submit"><?= $mediaOn ? 'Deshabilitar contenido' : 'Habilitar contenido' ?></button></form>
         <form method="post" class="label-form"><?= csrfField() ?><input type="hidden" name="action" value="label">
           <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
-          <input type="text" name="label" value="<?= h($d['label']) ?>" maxlength="100" placeholder="Alias (p. ej. Local Centro)" aria-label="Alias">
+          <input type="text" name="label" value="<?= h($d['label']) ?>" maxlength="100" placeholder="Alias que también ve el usuario (p. ej. Local Centro)" aria-label="Alias (lo ve el usuario)">
           <button type="submit">Guardar</button></form>
         <!-- Usuario dueño del equipo (se guarda al cambiarlo) -->
         <form method="post" class="user-form"><?= csrfField() ?><input type="hidden" name="action" value="set_user">
@@ -2254,6 +2275,19 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           <button type="submit">Eliminar</button></form>
         <a class="btn" href="./?<?= h(http_build_query(['history' => $id])) ?>">Historial</a>
       </div>
+      <!-- Alias adicional y notas: SOLO el administrador (no salen en /cuenta/ ni en la TV) -->
+      <details class="edit">
+        <summary>Alias y notas del administrador<?= !empty($d['admin_alias']) || !empty($d['admin_notes']) ? '' : ' (vacío)' ?></summary>
+        <form method="post" autocomplete="off"><?= csrfField() ?><input type="hidden" name="action" value="admin_info">
+          <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="back" value="<?= h($back) ?>">
+          <label for="aa-<?= h($id) ?>">Alias del administrador (se puede buscar por él)</label>
+          <input type="text" id="aa-<?= h($id) ?>" name="adminAlias" value="<?= h((string) ($d['admin_alias'] ?? '')) ?>" maxlength="100" placeholder="p. ej. Caja 14 · Sucursal Norte">
+          <label for="an-<?= h($id) ?>">Notas</label>
+          <textarea id="an-<?= h($id) ?>" name="adminNotes" rows="3" maxlength="<?= DeviceRepository::ADMIN_NOTES_MAX ?>" placeholder="Notas internas: instalación, incidencias, contacto…"><?= h((string) ($d['admin_notes'] ?? '')) ?></textarea>
+          <button class="primary" type="submit">Guardar alias y notas</button>
+          <span class="owner">El usuario no ve este alias ni estas notas.</span>
+        </form>
+      </details>
     </section>
   <?php endforeach; ?>
   <?php endif; /* fin vista usuarios / historial / lista */ ?>

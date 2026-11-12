@@ -251,6 +251,11 @@ final class Database
             return 'Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.';
         }
+        // Alias y notas del administrador por equipo
+        if (!in_array('admin_alias', $cols, true) || !in_array('admin_notes', $cols, true)) {
+            return 'Faltan el alias y las notas del administrador (columnas sp_devices.admin_alias / admin_notes): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-admin-notes.sql.';
+        }
         // Perfiles de equipo (marca, modelo, MAC del case, instalación)
         if (!in_array('sp_device_profiles', $tables, true) || !in_array('first_authorized_at', $cols, true)) {
             return 'Faltan los perfiles de equipo (tabla sp_device_profiles / columna first_authorized_at): '
@@ -590,6 +595,27 @@ final class DeviceRepository
             ->execute([$label === '' ? null : mb_substr($label, 0, 100), $id]);
     }
 
+    /** Máximo de caracteres de las notas del administrador. */
+    public const ADMIN_NOTES_MAX = 2000;
+
+    /**
+     * ALIAS ADICIONAL y NOTAS del ADMINISTRADOR (2026-11-12). Solo los ve y
+     * edita el panel del administrador: /cuenta/ y las TV nunca los muestran.
+     * Vacío = NULL. El alias se limpia de saltos de línea (máx. 100); las
+     * notas conservan los saltos de línea (máx. ADMIN_NOTES_MAX).
+     */
+    public static function setAdminInfo(string $id, string $alias, string $notes): void
+    {
+        $clean = static function (string $v): string {
+            return mb_check_encoding($v, 'UTF-8') ? $v : mb_convert_encoding($v, 'UTF-8', 'Windows-1252');
+        };
+        $alias = mb_substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $clean($alias))), 0, 100);
+        $notes = str_replace(["\r\n", "\r"], "\n", $clean($notes));
+        $notes = mb_substr(trim((string) preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/u', ' ', $notes)), 0, self::ADMIN_NOTES_MAX);
+        Database::pdo()->prepare('UPDATE sp_devices SET admin_alias = ?, admin_notes = ? WHERE device_id = ?')
+            ->execute([$alias === '' ? null : $alias, $notes === '' ? null : $notes, $id]);
+    }
+
     public static function delete(string $id): void
     {
         Database::pdo()->prepare('DELETE FROM sp_devices WHERE device_id = ?')->execute([$id]);
@@ -602,8 +628,11 @@ final class DeviceRepository
      * @param int|null    $userId Filtro de usuario: null = todos, 0 = sin asignar, >0 = ese usuario.
      * @return array<int,array<string,mixed>> Filas con user_company/user_email, boots y last_boot_at.
      */
-    public static function search(?string $status, string $search, ?int $userId = null): array
+    public static function search(?string $status, string $search, ?int $userId = null, bool $admin = false): array
     {
+        // $admin = true (SOLO el panel del administrador): la búsqueda también
+        // mira el ALIAS DEL ADMINISTRADOR. /cuenta/ llama con false: el usuario
+        // no puede encontrar (ni adivinar) un equipo por ese alias.
         $where = [];
         $args = [];
         if ($status !== null) {
@@ -621,6 +650,10 @@ final class DeviceRepository
             $match = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ? OR p.brand LIKE ? OR p.model LIKE ?';
             $like = '%' . addcslashes($search, '%_\\') . '%';
             array_push($args, $like, $like, $like, $like, $like, $like);
+            if ($admin) {
+                $match .= ' OR d.admin_alias LIKE ?';
+                $args[] = $like;
+            }
             // Búsqueda por MAC (la que envía la TV y la del CASE de su perfil):
             // sin importar separadores (":", "-", ".") ni mayúsculas; vale un
             // trozo ("FB:5A", "e8bb3e"...).

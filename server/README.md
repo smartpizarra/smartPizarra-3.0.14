@@ -268,6 +268,18 @@ Cómo funciona:
 - Borrar un equipo deja su perfil libre.
 - El **usuario**, en `/cuenta/` → *Equipos*, ve la **MAC del case** de cada uno de sus equipos (*sin registrar* si aún no tiene perfil) y puede **buscar sus equipos** por esa MAC (completa o un trozo, sin importar `:` o `-`), por su nombre o por su ID. Solo encuentra los suyos. Para esto basta con subir `public_html/cuenta/index.php`.
 
+Para el **alias y las notas del administrador**:
+
+1. Ejecuta una vez `migrations/2026-11-12-device-admin-notes.sql` (columnas `sp_devices.admin_alias` y `admin_notes`). Si sale _Duplicate column name 'admin_alias'_, ya estaba hecha.
+2. Sube `private/lib.php` y `admin/index.php`.
+
+Cómo funciona:
+
+- Cada equipo tiene, aparte del **alias** de siempre (que también ve y edita el usuario en `/cuenta/`), un **alias del administrador** y **notas** que **solo ve el administrador**. Se editan en la tarjeta del equipo → *Alias y notas del administrador*.
+- El alias del administrador sale en la cabecera de la tarjeta con borde punteado, y las notas debajo de los datos del equipo.
+- El **buscador del panel** encuentra el equipo por ese alias. El de `/cuenta/` **no**: el usuario no puede verlo ni encontrar un equipo por él, y la TV tampoco lo recibe.
+- Las notas admiten varias líneas (máximo 2000 caracteres). Si dejas los dos campos vacíos, se borran.
+
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
 ## Notas

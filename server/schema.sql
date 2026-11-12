@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS sp_devices (
   mac_at        DATETIME     NULL,              -- cuándo se le asignó esa MAC (UTC)
   mac_from      VARCHAR(32)  NULL,              -- equipo que tenía antes esa MAC (p. ej. la misma TV antes de restablecerla)
   first_authorized_at DATETIME NULL,            -- PRIMERA autorización (UTC); NULL = nunca autorizado => para autorizarlo necesita PERFIL
+  admin_alias   VARCHAR(100) NULL,              -- alias ADICIONAL solo para el administrador (el usuario no lo ve); se busca por él
+  admin_notes   TEXT         NULL,              -- notas internas del administrador (el usuario no las ve)
   PRIMARY KEY (device_id),
   UNIQUE KEY uq_device_mac (mac),               -- una MAC solo puede estar en un equipo (NULL se puede repetir)
   KEY idx_status (status),
