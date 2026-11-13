@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-12)
+// Versión del archivo: 1.0.2 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -10,6 +10,10 @@
  *  - Entra aquí con su email y esa contraseña; la primera vez (o tras un
  *    "Restablecer contraseña" del administrador) DEBE cambiarla.
  *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión).
+ *  - PAUSAR EL CONTENIDO (2026-11-12): cada archivo tiene "Pausar" /
+ *    "Activar", como las tiras (acciones media_pause / media_resume,
+ *    MediaRepository::setActive). Pausado no se envía a las pantallas pero
+ *    se conserva (sigue contando para el límite de archivos).
  *  - LÍMITE DE ARCHIVOS (2026-11-12): solo puede tener UserRepository::
  *    maxFiles() archivos de contenido (por defecto 5; lo amplía el
  *    administrador). Contenido muestra "N de límite" y, al llegar al
@@ -527,6 +531,14 @@ try {
                 case 'media_down':
                     MediaRepository::move($mid, $uid, $action === 'media_up' ? -1 : 1);
                     redirectWith('Orden cambiado.', 's=contenido');
+                case 'media_pause':
+                case 'media_resume':
+                    // Pausar / activar uno de SUS archivos (como las tiras)
+                    $on = $action === 'media_resume';
+                    MediaRepository::setActive($mid, $uid, $on);
+                    $name = (string) (MediaRepository::findForUser($mid, $uid)['original_name'] ?? '');
+                    redirectWith($on ? "«{$name}» activado: tus pantallas lo mostrarán en su próxima consulta."
+                        : "«{$name}» pausado: tus pantallas lo quitarán en su próxima consulta. No se borra.", 's=contenido');
                 case 'media_delete':
                     MediaRepository::delete($mid, $uid);
                     redirectWith('Archivo eliminado. Tus dispositivos dejarán de mostrarlo en su próxima consulta.', 's=contenido');
@@ -928,10 +940,14 @@ if ($validity['state'] !== 'active') {
               <?= $isImg ? 'Imagen · ' . (int) $m['seconds'] . ' s' : 'Video' ?> · <?= h(formatBytes((int) $m['size_bytes'])) ?>
               · Subido el <?= dateTag($m['created_at']) ?><br>
               Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos mis dispositivos' : count($m['devices']) . ' dispositivo(s)' ?><br>
-              <!-- Periodo: permanente o con fechas -->
-              <?= scheduleTag($m) ?>
+              <!-- Pausado, o su periodo (permanente o con fechas) -->
+              <?= MediaRepository::isActive($m) ? scheduleTag($m) : '<span class="badge off">Pausado</span> <span class="hint">no se muestra en tus pantallas</span>' ?>
             </div>
             <div class="actions">
+              <!-- Pausar / activar (como las tiras y banners) -->
+              <form method="post"><?= csrfField() ?><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <input type="hidden" name="action" value="<?= MediaRepository::isActive($m) ? 'media_pause' : 'media_resume' ?>">
+                <button class="<?= MediaRepository::isActive($m) ? 'bad' : 'ok' ?>" type="submit"><?= MediaRepository::isActive($m) ? 'Pausar' : 'Activar' ?></button></form>
               <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_up"><input type="hidden" name="mediaId" value="<?= $mid ?>">
                 <button type="submit" <?= $i === 0 ? 'disabled' : '' ?> title="Mostrar antes">&#9650;</button></form>
               <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_down"><input type="hidden" name="mediaId" value="<?= $mid ?>">

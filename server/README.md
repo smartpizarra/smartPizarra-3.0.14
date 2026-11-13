@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.1 (2026-11-12) -->
+<!-- Versión del archivo: 1.0.2 (2026-11-12) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -322,6 +322,17 @@ Cómo funciona:
 - El **usuario** ve su límite en `/cuenta/`: en *Contenido* («Archivos: 3 de 5 · Puedes subir 2 más»), en el título *Mis archivos (3 de 5)* y en *Inicio*. Al llegar al límite se desactiva la subida y se le indica que borre alguno o pida más al administrador; el servidor también lo comprueba.
 - Bajar el límite **no borra nada**: si el usuario tiene más archivos que su límite, simplemente no puede subir más hasta borrar.
 - Este límite se suma al de espacio (`media_quota_mb`) y al de tamaño por archivo, que siguen igual.
+
+Para **pausar el contenido** (como las tiras y los banners):
+
+1. Ejecuta una vez `migrations/2026-11-12-media-active.sql` (columna `sp_media.active`; todo lo ya subido queda activo). Si sale _Duplicate column name 'active'_, ya estaba hecha.
+2. Sube `private/lib.php`, `admin/index.php` y `cuenta/index.php`.
+
+Cómo funciona:
+
+- Cada archivo de contenido tiene el botón **Pausar** / **Activar**: el usuario lo ve en `/cuenta/` → *Contenido* (solo para sus archivos) y el administrador en *Contenido* del panel.
+- Un archivo **pausado** muestra la insignia *Pausado*, deja de enviarse a las pantallas y `mirror.html` lo quita en su próxima consulta (≈ 1 min). **No se borra**: conserva su orden, dispositivos y fechas, y al activarlo vuelve a mostrarse. La pantalla lo descarga de nuevo al reactivarlo.
+- Un archivo pausado **sigue contando** para el límite de archivos del usuario.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 

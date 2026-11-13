@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.1 (2026-11-12)
+-- Versión del archivo: 1.0.2 (2026-11-12)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS sp_media (
   all_devices   TINYINT(1)   NOT NULL DEFAULT 1, -- 1 = en TODOS los equipos del usuario (también los futuros)
   starts_at     DATETIME     NULL DEFAULT NULL, -- se muestra desde (UTC); NULL = ya (permanente si ends_at también es NULL)
   ends_at       DATETIME     NULL DEFAULT NULL, -- se muestra hasta (UTC, sin incluir); NULL = sin fin
+  active        TINYINT(1)   NOT NULL DEFAULT 1, -- 0 = PAUSADO (no se envía a las pantallas; se conserva)
   created_at    DATETIME     NOT NULL,          -- subida (UTC)
   PRIMARY KEY (id),
   UNIQUE KEY uq_media_stored (stored_name),

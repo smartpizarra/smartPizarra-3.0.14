@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-12)
+// Versión del archivo: 1.0.2 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -79,6 +79,10 @@
  *    UNA de las ligas de ESE usuario (las mismas que ve el usuario en
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
+ *
+ *  - PAUSAR EL CONTENIDO (2026-11-12): en Contenido (?view=media) cada
+ *    archivo de un usuario tiene "Pausar" / "Activar" (acciones
+ *    media_pause / media_resume), igual que el usuario en /cuenta/.
  *
  *  - LÍMITE DE ARCHIVOS POR USUARIO (2026-11-12): cuántos archivos de
  *    contenido puede subir cada usuario desde /cuenta/ (por defecto 5).
@@ -684,6 +688,18 @@ try {
                 ? 'Ese archivo ya no existe.'
                 : '«' . $gone['original_name'] . '» de «' . $gone['user_company'] . '» eliminado. '
                     . 'Sus pantallas dejarán de mostrarlo en su próxima consulta.', $back);
+        } elseif ($action === 'media_pause' || $action === 'media_resume') {
+            /* ---- Pausar / activar un archivo de un usuario (vista ?view=media) ---- */
+            $back = param($_POST, 'back') !== '' ? param($_POST, 'back') : 'view=media';
+            $on = $action === 'media_resume';
+            $mid = (int) param($_POST, 'mediaId');
+            if (!MediaRepository::setActive($mid, null, $on)) {
+                redirectWith('Ese archivo ya no existe.', $back);
+            }
+            $m = MediaRepository::find($mid) ?? [];
+            redirectWith('«' . ($m['original_name'] ?? '') . '» ' . ($on
+                ? 'activado: sus pantallas lo mostrarán en su próxima consulta.'
+                : 'pausado: sus pantallas lo quitarán en su próxima consulta (no se borra).'), $back);
         } elseif (str_starts_with($action, 'league_')) {
             /* ---- LIGAS y TIPOS DE LIGA (vista ?view=leagues) ---- */
             $typeId = (int) param($_POST, 'typeId');
@@ -2205,6 +2221,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               · Subido el <?= dateTag($m['created_at']) ?><br>
               <!-- Periodo que eligió el usuario (permanente o con fechas) -->
               <?php $mState = MediaRepository::state($m); ?>
+              <?php if (!MediaRepository::isActive($m)): ?><span class="badge off">Pausado</span><?php endif; ?>
               <span class="badge <?= ['permanent' => 'authorized', 'active' => 'authorized', 'scheduled' => 'pending', 'ended' => 'revoked'][$mState] ?>"><?=
                 ['permanent' => 'Permanente', 'active' => 'En curso', 'scheduled' => 'Programado', 'ended' => 'Finalizado'][$mState] ?></span>
               <?php if ($mState !== 'permanent'): ?>
@@ -2215,6 +2232,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
             <div class="actions">
               <a class="btn" href="?file=<?= $mid ?>" target="_blank" rel="noopener">Ver</a>
               <a class="btn" href="?file=<?= $mid ?>&amp;dl=1">Descargar</a>
+              <!-- Pausar / activar (como las tiras y banners) -->
+              <form method="post"><?= csrfField() ?><input type="hidden" name="mediaId" value="<?= $mid ?>">
+                <input type="hidden" name="action" value="<?= MediaRepository::isActive($m) ? 'media_pause' : 'media_resume' ?>">
+                <input type="hidden" name="back" value="<?= h($mediaBack) ?>">
+                <button class="<?= MediaRepository::isActive($m) ? 'bad' : 'ok' ?>" type="submit"><?= MediaRepository::isActive($m) ? 'Pausar' : 'Activar' ?></button></form>
               <form method="post" data-confirm="¿Eliminar «<?= h($m['original_name']) ?>» de «<?= h($m['user_company']) ?>»? Se borra del servidor y sus pantallas dejarán de mostrarlo."><?= csrfField() ?>
                 <input type="hidden" name="action" value="media_delete"><input type="hidden" name="mediaId" value="<?= $mid ?>">
                 <input type="hidden" name="back" value="<?= h($mediaBack) ?>">

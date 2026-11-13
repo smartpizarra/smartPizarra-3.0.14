@@ -1,0 +1,13 @@
+-- Versión del archivo: 1.0.0 (2026-11-12)
+-- =====================================================================
+--  MIGRACIÓN 2026-11-12: PAUSAR EL CONTENIDO (como las tiras y banners)
+--  Solo si la base YA existía (si importas schema.sql desde cero, ya
+--  viene incluido). phpMyAdmin > tu base > pestaña "SQL" > pegar y
+--  ejecutar UNA vez. Si dice "Duplicate column name 'active'", ya estaba.
+--
+--  active = 0: el archivo está PAUSADO: no se envía a las pantallas
+--  (mirror.html lo quita en su próxima consulta) pero se conserva, con
+--  su orden, dispositivos y fechas, hasta que se vuelva a activar.
+--  Todo lo ya subido queda ACTIVO.
+-- =====================================================================
+ALTER TABLE sp_media ADD COLUMN active TINYINT(1) NOT NULL DEFAULT 1;

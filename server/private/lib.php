@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-12)
+// Versión del archivo: 1.0.2 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -226,6 +226,11 @@ final class Database
         if (!in_array('starts_at', $mediaCols, true) || !in_array('ends_at', $mediaCols, true)) {
             return 'Faltan las columnas de fechas del contenido: ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-11-media-dates.sql.';
+        }
+        // Pausar el contenido (como las tiras y banners)
+        if (!in_array('active', $mediaCols, true)) {
+            return 'Falta la pausa del contenido (columna sp_media.active): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-12-media-active.sql.';
         }
         // Tiras y banners de mirror.html (usuario y administrador)
         $overlaysMissing = array_diff(['sp_overlays', 'sp_overlay_users', 'sp_overlay_devices'], $tables);
@@ -1106,6 +1111,28 @@ final class MediaRepository
         return (int) $stmt->fetchColumn();
     }
 
+    /**
+     * PAUSA (false) o ACTIVA (true) un archivo. Pausado no se envía a las
+     * pantallas (forDevice) pero se conserva con su orden, equipos y fechas.
+     * @param int|null $userId Dueño (desde /cuenta/: solo sus archivos); null = el administrador.
+     * @return bool false si el archivo no existe (o no es de ese usuario).
+     */
+    public static function setActive(int $id, ?int $userId, bool $active): bool
+    {
+        $sql = 'UPDATE sp_media SET active = ? WHERE id = ?' . ($userId !== null ? ' AND user_id = ?' : '');
+        $args = $userId !== null ? [$active ? 1 : 0, $id, $userId] : [$active ? 1 : 0, $id];
+        Database::pdo()->prepare($sql)->execute($args);
+        $check = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_media WHERE id = ?' . ($userId !== null ? ' AND user_id = ?' : ''));
+        $check->execute($userId !== null ? [$id, $userId] : [$id]);
+        return (int) $check->fetchColumn() > 0;
+    }
+
+    /** @return bool true si el archivo está activo (no pausado). */
+    public static function isActive(array $media): bool
+    {
+        return (int) ($media['active'] ?? 1) === 1;
+    }
+
     /** @return int Archivos de contenido que tiene subidos un usuario (para su límite, UserRepository::maxFiles). */
     public static function countForUser(int $userId): int
     {
@@ -1325,9 +1352,9 @@ final class MediaRepository
     }
 
     /**
-     * Lista que reproduce un equipo AHORA: archivos de SU usuario que van a
-     * todos sus equipos o a él en concreto, permanentes o dentro de sus
-     * fechas, en orden. Vacía si no tiene usuario. Al empezar o terminar
+     * Lista que reproduce un equipo AHORA: archivos ACTIVOS (no pausados) de
+     * SU usuario que van a todos sus equipos o a él en concreto, permanentes
+     * o dentro de sus fechas, en orden. Vacía si no tiene usuario. Al empezar o terminar
      * un periodo la lista cambia (y su revision), así el equipo lo añade
      * o lo quita en su siguiente consulta.
      * @return array<int,array<string,mixed>>
@@ -1340,6 +1367,7 @@ final class MediaRepository
              WHERE d.device_id = ?
                AND (m.all_devices = 1
                     OR EXISTS (SELECT 1 FROM sp_media_devices md WHERE md.media_id = m.id AND md.device_id = d.device_id))
+               AND m.active = 1
                AND (m.starts_at IS NULL OR m.starts_at <= ?)
                AND (m.ends_at IS NULL OR m.ends_at > ?)
              ORDER BY m.position, m.id'
