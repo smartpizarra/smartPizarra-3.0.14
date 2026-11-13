@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.0 (2026-11-12)
+-- Versión del archivo: 1.0.1 (2026-11-12)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sp_users (
   last_login_at        DATETIME     NULL,              -- último acceso a /cuenta/ (UTC)
   content_until        DATETIME     NULL,              -- VIGENCIA: el contenido se muestra hasta esta fecha (UTC); NULL = sin vigencia
   content_changed_at   DATETIME     NULL,              -- último cambio de la vigencia (UTC)
+  max_files            INT UNSIGNED NOT NULL DEFAULT 5,   -- LÍMITE de archivos de contenido que puede subir (lo cambia el administrador)
   route_id             INT UNSIGNED NULL,              -- RUTA del usuario (sp_routes.id; NULL = sin ruta). FK al final
   PRIMARY KEY (id),
   UNIQUE KEY uq_user_email (email)

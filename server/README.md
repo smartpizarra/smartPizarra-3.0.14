@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.0 (2026-11-12) -->
+<!-- Versión del archivo: 1.0.1 (2026-11-12) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -310,6 +310,18 @@ Cómo funciona:
 - Borrar un usuario borra también su conversación.
 
 **Contenido habilitado en el JSON de todas las páginas** (2026-11-12): `api/device.php` devuelve también `"mediaEnabled": true|false`, el permiso de contenido que da el administrador en la tarjeta del equipo (`api/media.php` ya lo devolvía). Las 6 páginas de Kodular (`loading`, `config`, `connection`, `fingerprint`, `mirror` y `none`) lo guardan en `smartpizarra.mediaEnabled` (`"true"`/`"false"`; `loading.html` lo crea con `"false"` si no existe o no es válido) cada vez que el servidor responde y lo envían **siempre** en su JSON a la app como `"mediaEnabled": true|false` (`false` mientras no se sepa). Sube `api/device.php` y las 6 páginas a los assets de Kodular.
+
+Para el **límite de archivos por usuario**:
+
+1. Ejecuta una vez `migrations/2026-11-12-user-max-files.sql` (columna `sp_users.max_files`, por defecto 5). Si sale _Duplicate column name 'max_files'_, ya estaba hecha.
+2. Sube `private/lib.php`, `admin/index.php` y `cuenta/index.php`.
+
+Cómo funciona:
+
+- Cada usuario puede tener como máximo **5 archivos** de contenido (imágenes o videos), incluidos los nuevos. El administrador cambia el límite en la **ficha del usuario → Contenido → Límite de archivos** (de 0 a 1000). La lista de usuarios y la ficha muestran `archivos/límite`.
+- El **usuario** ve su límite en `/cuenta/`: en *Contenido* («Archivos: 3 de 5 · Puedes subir 2 más»), en el título *Mis archivos (3 de 5)* y en *Inicio*. Al llegar al límite se desactiva la subida y se le indica que borre alguno o pida más al administrador; el servidor también lo comprueba.
+- Bajar el límite **no borra nada**: si el usuario tiene más archivos que su límite, simplemente no puede subir más hasta borrar.
+- Este límite se suma al de espacio (`media_quota_mb`) y al de tamaño por archivo, que siguen igual.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 

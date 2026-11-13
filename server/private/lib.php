@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -251,6 +251,11 @@ final class Database
         if (!in_array('mac', $cols, true) || !in_array('mac_from', $cols, true)) {
             return 'Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.';
+        }
+        // Límite de archivos de contenido por usuario
+        if (!in_array('max_files', $userCols, true)) {
+            return 'Falta el límite de archivos por usuario (columna sp_users.max_files): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-12-user-max-files.sql.';
         }
         // Buzón de mensajes administrador <-> usuario
         if (!in_array('sp_messages', $tables, true)) {
@@ -842,6 +847,30 @@ final class UserRepository
      * Se refleja en todos sus equipos en su próxima consulta.
      * @return string|null Nueva fecha de fin (UTC) o null si no había nada que restar.
      */
+    /** Límite de archivos por defecto de un usuario nuevo (columna sp_users.max_files). */
+    public const DEFAULT_MAX_FILES = 5;
+    /** Máximo que el administrador puede poner. */
+    public const MAX_FILES_LIMIT = 1000;
+
+    /** @return int Cuántos archivos de contenido puede subir el usuario (su límite). */
+    public static function maxFiles(array $user): int
+    {
+        return isset($user['max_files']) ? (int) $user['max_files'] : self::DEFAULT_MAX_FILES;
+    }
+
+    /**
+     * Cambia el LÍMITE de archivos de un usuario (lo ya subido no se toca).
+     * @return bool false si el valor está fuera de 0..MAX_FILES_LIMIT.
+     */
+    public static function setMaxFiles(int $id, int $max): bool
+    {
+        if ($max < 0 || $max > self::MAX_FILES_LIMIT) {
+            return false;
+        }
+        Database::pdo()->prepare('UPDATE sp_users SET max_files = ? WHERE id = ?')->execute([$max, $id]);
+        return true;
+    }
+
     public static function addContentDays(int $id, int $days): ?string
     {
         $user = self::find($id);
@@ -1073,6 +1102,14 @@ final class MediaRepository
     public static function usedBytes(int $userId): int
     {
         $stmt = Database::pdo()->prepare('SELECT COALESCE(SUM(size_bytes), 0) FROM sp_media WHERE user_id = ?');
+        $stmt->execute([$userId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** @return int Archivos de contenido que tiene subidos un usuario (para su límite, UserRepository::maxFiles). */
+    public static function countForUser(int $userId): int
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_media WHERE user_id = ?');
         $stmt->execute([$userId]);
         return (int) $stmt->fetchColumn();
     }

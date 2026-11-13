@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -10,6 +10,10 @@
  *  - Entra aquí con su email y esa contraseña; la primera vez (o tras un
  *    "Restablecer contraseña" del administrador) DEBE cambiarla.
  *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión).
+ *  - LÍMITE DE ARCHIVOS (2026-11-12): solo puede tener UserRepository::
+ *    maxFiles() archivos de contenido (por defecto 5; lo amplía el
+ *    administrador). Contenido muestra "N de límite" y, al llegar al
+ *    límite, desactiva la subida; media_upload también lo comprueba.
  *  - MENSAJES (pestaña ?s=mensajes, 2026-11-12): su conversación con el
  *    administrador (MessageRepository). Abrir la pestaña marca como leídos
  *    los mensajes del administrador; la pestaña e Inicio avisan de los no
@@ -500,6 +504,11 @@ try {
                     if ($size > MediaRepository::maxBytes()) {
                         redirectWith('El archivo supera el máximo de ' . formatBytes(MediaRepository::maxBytes()) . '.', 's=contenido');
                     }
+                    // LÍMITE de archivos del usuario (lo pone el administrador; por defecto 5)
+                    $maxFiles = UserRepository::maxFiles($user);
+                    if (MediaRepository::countForUser($uid) >= $maxFiles) {
+                        redirectWith("Llegaste a tu límite de {$maxFiles} archivo(s). Borra alguno o pide al administrador que te permita más.", 's=contenido');
+                    }
                     if (MediaRepository::usedBytes($uid) + $size > MediaRepository::quotaBytes()) {
                         redirectWith('No queda espacio: tu límite es ' . formatBytes(MediaRepository::quotaBytes())
                             . '. Borra algún archivo.', 's=contenido');
@@ -597,6 +606,9 @@ foreach ($devices as $d) {
     $onlineCount += (!empty($d['online_at']) && time() - utcTs($d['online_at']) < $onlineTimeout) ? 1 : 0;
 }
 $quota = MediaRepository::quotaBytes();
+// Límite de archivos del usuario (por defecto 5; lo cambia el administrador)
+$maxFiles = $user !== null ? UserRepository::maxFiles($user) : UserRepository::DEFAULT_MAX_FILES;
+$atFileLimit = count($mediaList) >= $maxFiles;
 // Ligas que le asignó el administrador (solo lectura; llegan a sus TV)
 $myLeagues = $user !== null && in_array($section, ['cuenta', 'equipos'], true) ? LeagueRepository::forUser((int) $user['id']) : [];
 // Vigencia del contenido (la asigna el administrador en días)
@@ -688,6 +700,8 @@ if ($validity['state'] !== 'active') {
     /* Nombre del equipo (pestaña Equipos) */
     .label-form { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
     /* Buscador de equipos por MAC del case y la MAC en la tarjeta */
+    .file-limit { margin: 4px 0 10px; }
+    .file-limit.full { color: var(--bad); }
     .msg-notice { display: block; text-decoration: none; color: inherit; border-left: 4px solid var(--accent); }
     .device-search { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
     .device-search input[type=search] { flex: 1 1 240px; min-width: 0; padding: 8px 10px; }
@@ -749,7 +763,7 @@ if ($validity['state'] !== 'active') {
       <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Dispositivos</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl">Autorizados</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl">En línea ahora</div></a>
-      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?></div><div class="lbl">Archivos de contenido</div></a>
+      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?>/<?= $maxFiles ?></div><div class="lbl">Archivos de contenido</div></a>
     </div>
     <!-- Vigencia: hasta cuándo se muestra el contenido en las pantallas -->
     <section class="card block validity <?= h($validity['state']) ?>">
@@ -874,11 +888,14 @@ if ($validity['state'] !== 'active') {
       <?php endif; ?>
       <p class="hint">Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
         Los videos se reproducen sin sonido.</p>
+      <!-- Límite de archivos (lo pone el administrador) -->
+      <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>">Archivos: <strong><?= count($mediaList) ?> de <?= $maxFiles ?></strong>
+        <?= $atFileLimit ? '· Llegaste a tu límite: borra alguno o pide al administrador que te permita más.' : '· Puedes subir ' . ($maxFiles - count($mediaList)) . ' más.' ?></p>
       <input type="hidden" name="action" value="media_upload">
       <div class="row">
         <div>
           <label for="file">Archivo</label>
-          <input type="file" id="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required>
+          <input type="file" id="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required <?= $atFileLimit ? 'disabled' : '' ?>>
         </div>
         <div>
           <label for="seconds">Segundos en pantalla (solo imágenes)</label>
@@ -887,11 +904,11 @@ if ($validity['state'] !== 'active') {
       </div>
       <?= targetFields($devices, true, [], 'new') ?>
       <?= scheduleFields(null, 'new-') ?>
-      <button class="primary" type="submit" id="uploadBtn">Subir</button>
+      <button class="primary" type="submit" id="uploadBtn" <?= $atFileLimit ? 'disabled' : '' ?>>Subir</button>
     </form>
 
     <div class="section-head">
-      <h2>Mis archivos (<?= count($mediaList) ?>)</h2>
+      <h2>Mis archivos (<?= count($mediaList) ?> de <?= $maxFiles ?>)</h2>
       <span class="hint">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?> · se muestran en este orden</span>
     </div>
     <?php if (!$mediaList): ?>

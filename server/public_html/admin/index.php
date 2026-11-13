@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-12)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -79,6 +79,11 @@
  *    UNA de las ligas de ESE usuario (las mismas que ve el usuario en
  *    /cuenta/; setDeviceLeague rechaza cualquier otra). La tarjeta
  *    muestra además la URL final que recibe el equipo.
+ *
+ *  - LÍMITE DE ARCHIVOS POR USUARIO (2026-11-12): cuántos archivos de
+ *    contenido puede subir cada usuario desde /cuenta/ (por defecto 5).
+ *    Se cambia en su ficha (sección Contenido, acción user_max_files).
+ *    La lista de usuarios muestra "N/límite archivo(s)".
  *
  *  - BUZÓN DE MENSAJES (botón "Mensajes", ?view=messages, 2026-11-12): una
  *    conversación por usuario (MessageRepository). Lista de conversaciones
@@ -999,6 +1004,16 @@ try {
                     $password = UserRepository::resetPassword($uid);
                     $_SESSION['newPassword'] = ['email' => $user['email'], 'company' => $user['company'], 'password' => $password];
                     redirectWith("Contraseña de «{$user['company']}» restablecida; su sesión abierta se cierra.", $back);
+                case 'user_max_files':
+                    // LÍMITE de archivos de contenido que puede subir el usuario
+                    $raw = param($_POST, 'maxFiles');
+                    if (!ctype_digit($raw) || !UserRepository::setMaxFiles($uid, (int) $raw)) {
+                        redirectWith('Indica un número de archivos entre 0 y ' . UserRepository::MAX_FILES_LIMIT . '.', $back);
+                    }
+                    $max = (int) $raw;
+                    $has = MediaRepository::countForUser($uid);
+                    redirectWith("«{$user['company']}» puede subir hasta {$max} archivo(s); ahora tiene {$has}."
+                        . ($has > $max ? ' No se borra nada: no podrá subir más hasta tener menos de ' . $max . '.' : ''), $back);
                 case 'user_days':
                     // Sumar o restar días de vigencia (afecta a todos sus equipos)
                     $days = (int) param($_POST, 'days');
@@ -1547,7 +1562,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="stats">
         <div class="stat"><b><?= (int) $userCard['devices'] ?></b><span>Equipos</span></div>
         <div class="stat"><b><?= (int) $userCard['authorized'] ?></b><span>Autorizados</span></div>
-        <div class="stat"><b><?= (int) $userCard['media'] ?></b><span>Archivos</span></div>
+        <div class="stat"><b><?= (int) $userCard['media'] ?>/<?= UserRepository::maxFiles($userCard) ?></b><span>Archivos</span></div>
         <div class="stat"><b><?= $uv['state'] === 'active' ? (int) $uv['days'] : '—' ?></b><span>Días de vigencia</span></div>
       </div>
     </section>
@@ -1579,7 +1594,15 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     <!-- Contenido subido por el usuario -->
     <section class="card section">
       <h2>Contenido</h2>
-      <div class="meta"><?= (int) $userCard['media'] ?> archivo(s) subido(s) desde /cuenta/.</div>
+      <div class="meta"><?= (int) $userCard['media'] ?> de <?= UserRepository::maxFiles($userCard) ?> archivo(s) subido(s) desde /cuenta/.</div>
+      <!-- Límite de archivos que puede subir (por defecto 5) -->
+      <form method="post" class="days-form"><?= csrfField() ?>
+        <input type="hidden" name="action" value="user_max_files"><input type="hidden" name="userId" value="<?= $uid ?>">
+        <input type="hidden" name="back" value="<?= h($userBack) ?>">
+        <label for="maxf<?= $uid ?>">Límite de archivos</label>
+        <input type="number" id="maxf<?= $uid ?>" name="maxFiles" value="<?= UserRepository::maxFiles($userCard) ?>" min="0" max="<?= UserRepository::MAX_FILES_LIMIT ?>" required>
+        <button class="ok" type="submit">Guardar límite</button>
+      </form>
       <div class="actions">
         <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver su contenido</a>
       </div>
@@ -1709,7 +1732,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               <span class="badge <?= ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$v['state']] ?>">
                 <?= $v['state'] === 'active' ? 'Vigente · ' . (int) $v['days'] . ' d' : ($v['state'] === 'expired' ? 'Vencida' : 'Sin vigencia') ?></span>
               <?php if ((int) $u['must_change_password'] === 1): ?><span class="badge pending">Contraseña temporal</span><?php endif; ?>
-              <span class="owner"><?= (int) $u['devices'] ?> equipo(s) · <?= (int) $u['authorized'] ?> aut. · <?= (int) $u['media'] ?> archivo(s)</span>
+              <span class="owner"><?= (int) $u['devices'] ?> equipo(s) · <?= (int) $u['authorized'] ?> aut. · <?= (int) $u['media'] ?>/<?= UserRepository::maxFiles($u) ?> archivo(s)</span>
             </span>
             <span class="chev" aria-hidden="true">&rsaquo;</span>
           </a>

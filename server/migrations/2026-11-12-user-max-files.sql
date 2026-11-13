@@ -1,0 +1,14 @@
+-- Versión del archivo: 1.0.0 (2026-11-12)
+-- =====================================================================
+--  MIGRACIÓN 2026-11-12: LÍMITE DE ARCHIVOS DE CONTENIDO POR USUARIO
+--  Solo si la base YA existía (si importas schema.sql desde cero, ya
+--  viene incluido). phpMyAdmin > tu base > pestaña "SQL" > pegar y
+--  ejecutar UNA vez. Si dice "Duplicate column name 'max_files'", ya estaba.
+--
+--  Cuántos archivos (imágenes/videos de mirror.html) puede subir cada
+--  usuario desde /cuenta/. Por defecto 5; el administrador lo cambia en la
+--  ficha del usuario. Lo ya subido NO se borra: si un usuario tiene más
+--  archivos que su límite, simplemente no puede subir más hasta borrar o
+--  hasta que el administrador se lo amplíe.
+-- =====================================================================
+ALTER TABLE sp_users ADD COLUMN max_files INT UNSIGNED NOT NULL DEFAULT 5;
