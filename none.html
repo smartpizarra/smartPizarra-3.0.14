@@ -1,15 +1,15 @@
 <!doctype html>
-<!-- Versión del archivo: 1.0.0 (2026-11-12) -->
+<!-- Versión del archivo: 1.0.1 (2026-11-12) -->
 <!--
 =====================================================================
   SMART PIZARRA - PANTALLA "SIN RUTA" (none.html)
-  PARA ANDROID WEBVIEW (assets de Kodular: http://localhost/none.html)
+  PARA ANDROID WEBVIEW (assets de Kodular: none)
 =====================================================================
   QUE HACE
   La muestra la app cuando el equipo NO tiene una ruta de contenido
   (su usuario no tiene ruta en el panel > Gestión de Rutas): las páginas
   guardan entonces en smartpizarra.routeUrl la URL de ESTA página
-  (NO_ROUTE_URL = "http://localhost/none.html") y la app la abre.
+  (NO_ROUTE_URL = "none") y la app la abre.
     - Avisa de que el equipo no puede mostrar el contenido y que se
       comunique con su supervisor (texto en el idioma global; el otro
       idioma debajo, más pequeño).
@@ -37,7 +37,7 @@
      "internetStatus":"online|offline","httpStatus":200|403|404|0,
      "authorized":true|false,
      "authStatus":"authorized|pending|revoked|conflict|unknown",
-     "routeUrl":"http://localhost/none.html" | "https://sport...&leagues=...",
+     "routeUrl":"none" | "https://sport...&leagues=...",
      "hasRoute":true|false (routeUrl distinta de NO_ROUTE_URL),
      "routeChanged":true|false (cambió en esta consulta),
      "error":"",
@@ -46,6 +46,13 @@
     status "error" = sin respuesta válida del servidor (sin internet o
     error): authStatus "unknown", authorized = última bandera guardada,
     routeUrl = la guardada.
+  CAÍDA Y VUELTA DE INTERNET (2026-11-12): el mismo JSON sale AL MOMENTO
+  con "action":"offline" cuando se cae la conexión (2 consultas seguidas
+  sin respuesta, la 2ª a los 3 s; o 1 si Android avisa de que no hay red;
+  o la primera al abrir sin internet) y con "action":"online" cuando
+  vuelve. Sin internet se comprueba cada 5 s (para avisar pronto) pero el
+  JSON "check" sigue saliendo cada 30 s, sin repetirse. "Conexión" = el
+  servidor responde (cualquier código HTTP).
   Sin deviceId / secreto / apiUrl no hay consulta y no se envía nada.
 
   FUNCIONES PÚBLICAS (la app las llama con RunJavaScript)
@@ -61,7 +68,10 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
     <title>Contenido no disponible - Smart Pizarra</title>
     <style>
       * {
@@ -175,10 +185,16 @@
     <div id="stage" class="theme-0">
       <div id="box">
         <svg class="icon accent" viewBox="0 0 24 24" aria-hidden="true">
-          <path fill="currentColor" d="M12 2 1 21h22L12 2zm0 4.6L19.5 19h-15L12 6.6zM11 10v5h2v-5h-2zm0 6v2h2v-2h-2z" />
+          <path
+            fill="currentColor"
+            d="M12 2 1 21h22L12 2zm0 4.6L19.5 19h-15L12 6.6zM11 10v5h2v-5h-2zm0 6v2h2v-2h-2z"
+          />
         </svg>
         <h1 class="accent" id="title"></h1>
-        <p class="text"><span id="line1"></span><br /><span id="line2a"></span><strong id="line2b"></strong><span id="line2c"></span></p>
+        <p class="text">
+          <span id="line1"></span><br /><span id="line2a"></span
+          ><strong id="line2b"></strong><span id="line2c"></span>
+        </p>
         <p class="alt" id="alt"></p>
         <p class="brand">SMART PIZARRA</p>
       </div>
@@ -195,6 +211,10 @@
 
         var CHECK_MS = 30000; // consulta al servidor (y JSON a la app)
         var CHECK_TIMEOUT_MS = 8000; // espera máxima de una consulta
+        // CAÍDA Y VUELTA DE INTERNET (2026-11-12): JSON "offline" / "online" al momento
+        var CHECK_OFFLINE_MS = 5000; // sin internet: se comprueba cada 5 s (avisa pronto al volver)
+        var RETRY_MS = 3000; // un fallo estando conectado: se confirma a los 3 s
+        var FAILURES_TO_OFFLINE = 2; // fallos seguidos para declarar la caída (si Android no dice ya que no hay red)
         var WATCH_MS = 1000; // relectura de orientación e idioma
         var DRIFT_MS = 60000; // protección de pantalla: salto del bloque
         var THEME_MS = 600000; // protección de pantalla: cambio de paleta
@@ -236,9 +256,10 @@
          */
         var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
         /** URL por defecto SIN ruta: la pantalla local none.html (assets de Kodular). */
-        var NO_ROUTE_URL = "http://localhost/none.html";
+        var NO_ROUTE_URL = "none";
         /** URL "sin ruta" de la versión anterior (en el servidor): se sustituye por NO_ROUTE_URL. */
-        var OLD_NO_ROUTE_RE = /^https?:\/\/(www\.)?smartpizarra\.cloud\/none\/?$/i;
+        var OLD_NO_ROUTE_RE =
+          /^https?:\/\/(www\.)?smartpizarra\.cloud\/none\/?$/i;
 
         /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
         function cleanRouteUrl(value) {
@@ -250,7 +271,10 @@
         /** @returns {string} URL de la ruta guardada (NO_ROUTE_URL si no hay o no es válida). */
         function readDeviceRoute() {
           try {
-            return cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) || NO_ROUTE_URL;
+            return (
+              cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) ||
+              NO_ROUTE_URL
+            );
           } catch (e) {
             return NO_ROUTE_URL; // sin localStorage: sin ruta
           }
@@ -272,7 +296,11 @@
         (function () {
           try {
             var old = window.localStorage.getItem(MEDIA_ENABLED_KEY);
-            if (old === "1" || old === "0") window.localStorage.setItem(MEDIA_ENABLED_KEY, old === "1" ? "true" : "false");
+            if (old === "1" || old === "0")
+              window.localStorage.setItem(
+                MEDIA_ENABLED_KEY,
+                old === "1" ? "true" : "false",
+              );
           } catch (e) {}
         })();
 
@@ -282,10 +310,16 @@
          * @returns {boolean} true si cambió.
          */
         function storeMediaEnabled(res) {
-          if (!res || typeof res !== "object" || typeof res.mediaEnabled !== "boolean") return false;
+          if (
+            !res ||
+            typeof res !== "object" ||
+            typeof res.mediaEnabled !== "boolean"
+          )
+            return false;
           var v = res.mediaEnabled ? "true" : "false";
           try {
-            if (window.localStorage.getItem(MEDIA_ENABLED_KEY) === v) return false;
+            if (window.localStorage.getItem(MEDIA_ENABLED_KEY) === v)
+              return false;
             window.localStorage.setItem(MEDIA_ENABLED_KEY, v);
             return true;
           } catch (e) {
@@ -310,7 +344,11 @@
          * @returns {boolean} true si cambió.
          */
         function storeDeviceRoute(res) {
-          if (!res || typeof res !== "object" || !Object.prototype.hasOwnProperty.call(res, "deviceRoute")) {
+          if (
+            !res ||
+            typeof res !== "object" ||
+            !Object.prototype.hasOwnProperty.call(res, "deviceRoute")
+          ) {
             return false;
           }
           var url = cleanRouteUrl(res.deviceRoute) || NO_ROUTE_URL;
@@ -405,7 +443,8 @@
           msg.email = readText(KEYS.email);
           msg.deviceId = readText(KEYS.deviceId);
           msg.routeUrl = readDeviceRoute(); // ruta con la liga dentro (NO_ROUTE_URL = sin ruta)
-          if (typeof msg.mediaEnabled !== "boolean") msg.mediaEnabled = readMediaEnabled(); // contenido habilitado
+          if (typeof msg.mediaEnabled !== "boolean")
+            msg.mediaEnabled = readMediaEnabled(); // contenido habilitado
           msg.hasRoute = msg.routeUrl !== NO_ROUTE_URL;
           msg.orientation = readOrientation();
           msg.language = readLanguageKey();
@@ -424,7 +463,10 @@
               window.AppInventor.setWebViewString(message); // Kodular / App Inventor
             } else if (window.android && window.android.onReceiveValue) {
               window.android.onReceiveValue(message);
-            } else if (window.androidInterface && window.androidInterface.onReceiveValue) {
+            } else if (
+              window.androidInterface &&
+              window.androidInterface.onReceiveValue
+            ) {
               window.androidInterface.onReceiveValue(message);
             } else {
               window.postMessage(message, "*"); // navegador normal (pruebas)
@@ -442,6 +484,9 @@
           timer: null,
           busy: false,
           last: null, // último resultado (para noneStatus)
+          net: "unknown", // estado de la conexión: unknown | online | offline
+          failures: 0, // consultas seguidas sin respuesta
+          lastSent: 0, // hora del último JSON enviado (ms)
 
           /** Programa la siguiente consulta. */
           schedule: function (ms) {
@@ -465,7 +510,10 @@
                 var xhr = new XMLHttpRequest();
                 xhr.open("POST", apiUrl, true);
                 xhr.timeout = CHECK_TIMEOUT_MS;
-                xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+                xhr.setRequestHeader(
+                  "Content-Type",
+                  "application/x-www-form-urlencoded",
+                );
                 xhr.onload = function () {
                   var data = null;
                   try {
@@ -475,14 +523,20 @@
                   }
                   finish(xhr.status, data);
                 };
-                xhr.onerror = xhr.ontimeout = xhr.onabort = function () {
-                  finish(0, null);
-                };
+                xhr.onerror =
+                  xhr.ontimeout =
+                  xhr.onabort =
+                    function () {
+                      finish(0, null);
+                    };
                 var version = readText(KEYS.version) || "";
                 xhr.send(
-                  "deviceId=" + encodeURIComponent(id) +
-                    "&secret=" + encodeURIComponent(secret) +
-                    "&version=" + encodeURIComponent(version)
+                  "deviceId=" +
+                    encodeURIComponent(id) +
+                    "&secret=" +
+                    encodeURIComponent(secret) +
+                    "&version=" +
+                    encodeURIComponent(version),
                 );
               } catch (e) {
                 finish(0, null);
@@ -490,8 +544,16 @@
             });
           },
 
-          /** Una consulta + el JSON a la app. Nunca dos a la vez. */
-          run: function () {
+          /**
+           * Una consulta + el JSON a la app. Nunca dos a la vez.
+           * El JSON sale: al cambiar la conexión ("offline" al caer, "online" al
+           * volver), en la consulta normal cada CHECK_MS (action "check") y
+           * siempre con force (al abrir, noneCheck(), al volver a primer plano).
+           * Sin internet se comprueba cada CHECK_OFFLINE_MS SIN repetir el JSON
+           * (sigue saliendo uno cada CHECK_MS).
+           * @param {boolean} [force] Enviar el JSON aunque no haya cambios.
+           */
+          run: function (force) {
             var self = this;
             clearTimeout(this.timer);
             if (this.busy) return;
@@ -517,28 +579,71 @@
                 authStatus = "conflict"; // el ID está registrado con otro secreto
                 writeStorage(KEYS.authorized, "0");
               } else if (ok) {
-                authStatus = d.authorized === true ? "authorized" : d.status === "revoked" ? "revoked" : "pending";
-                writeStorage(KEYS.authorized, d.authorized === true ? "1" : "0");
+                authStatus =
+                  d.authorized === true
+                    ? "authorized"
+                    : d.status === "revoked"
+                      ? "revoked"
+                      : "pending";
+                writeStorage(
+                  KEYS.authorized,
+                  d.authorized === true ? "1" : "0",
+                );
                 storeDeviceRoute(d); // solo autorizados traen deviceRoute
                 storeMediaEnabled(d); // contenido habilitado
               }
               var answered = ok || authStatus === "conflict";
+              // ---- Estado de la conexión: ¿se cayó o volvió internet? ----
+              var reached = r.http !== 0; // cualquier respuesta HTTP = hay conexión
+              var change = ""; // "offline" (se cayó) | "online" (volvió) | ""
+              var next = CHECK_MS;
+              if (reached) {
+                self.failures = 0;
+                if (self.net === "offline") change = "online";
+                self.net = "online";
+              } else {
+                self.failures++;
+                var lost =
+                  self.net === "unknown" ||
+                  self.failures >= FAILURES_TO_OFFLINE ||
+                  navigator.onLine === false;
+                if (self.net !== "offline" && lost) {
+                  change = "offline";
+                  self.net = "offline";
+                }
+                // Primer fallo estando conectado: se confirma enseguida, sin JSON todavía
+                next = self.net === "offline" ? CHECK_OFFLINE_MS : RETRY_MS;
+              }
+              var due = Date.now() - self.lastSent >= CHECK_MS - 1000; // toca el JSON periódico
+              var send =
+                force ||
+                change !== "" ||
+                (due && (reached || self.net === "offline"));
               var msg = withSettings({
                 origin: "none",
-                action: "check",
+                action: change || "check",
                 status: answered ? "ok" : "error",
                 internetStatus: r.http ? "online" : "offline",
                 httpStatus: r.http,
-                authorized: answered ? authStatus === "authorized" : readStorage(KEYS.authorized) === "1",
+                authorized: answered
+                  ? authStatus === "authorized"
+                  : readStorage(KEYS.authorized) === "1",
                 authStatus: authStatus,
                 routeChanged: false,
-                error: answered ? "" : r.http ? "HTTP " + r.http : "sin respuesta",
+                error: answered
+                  ? ""
+                  : r.http
+                    ? "HTTP " + r.http
+                    : "sin respuesta",
               });
               msg.routeChanged = msg.routeUrl !== before;
               self.last = msg;
-              sendToAppInventor(JSON.stringify(msg));
+              if (send) {
+                sendToAppInventor(JSON.stringify(msg));
+                self.lastSent = Date.now();
+              }
               self.busy = false;
-              self.schedule(CHECK_MS);
+              self.schedule(next);
             });
           },
         };
@@ -556,7 +661,8 @@
         function applyLayout() {
           var orientation = readOrientation() || 0;
           var width = window.innerWidth || document.documentElement.clientWidth;
-          var height = window.innerHeight || document.documentElement.clientHeight;
+          var height =
+            window.innerHeight || document.documentElement.clientHeight;
           if (!width || !height) return; // WebView aún en 0x0
           var state = orientation + "|" + width + "x" + height;
           if (state === lastLayout) return;
@@ -569,7 +675,8 @@
             h = width;
             transform = "translate(" + width + "px, 0px) rotate(90deg)";
           } else if (orientation === 180) {
-            transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            transform =
+              "translate(" + width + "px, " + height + "px) rotate(180deg)";
           } else if (orientation === 270) {
             w = height;
             h = width;
@@ -579,7 +686,8 @@
           stage.style.height = h + "px";
           stage.style.transformOrigin = "0 0";
           stage.style.transform = transform;
-          stage.style.fontSize = Math.max(10, Math.round(Math.min(w, h) * 0.04)) + "px";
+          stage.style.fontSize =
+            Math.max(10, Math.round(Math.min(w, h) * 0.04)) + "px";
           drift(); // recolocar el bloque dentro del nuevo espacio
         }
 
@@ -640,11 +748,13 @@
            ================================================================== */
 
         window.noneCheck = function () {
-          check.run();
+          check.run(true);
         };
 
         window.noneStatus = function () {
-          return JSON.stringify(check.last || withSettings({ origin: "none", action: "status" }));
+          return JSON.stringify(
+            check.last || withSettings({ origin: "none", action: "status" }),
+          );
         };
 
         // Para pruebas desde la consola
@@ -667,9 +777,17 @@
           window.addEventListener("resize", watch);
           window.addEventListener("storage", watch);
           document.addEventListener("visibilitychange", function () {
-            if (!document.hidden) check.run(); // al volver: consulta enseguida
+            if (!document.hidden) check.run(true); // al volver: consulta enseguida
           });
-          check.run(); // primera consulta (y primer JSON) al abrir
+          // Avisos de red de Android/WebView: comprobar ya (la consulta decide
+          // si de verdad se cayó o volvió internet y entonces envía el JSON)
+          window.addEventListener("online", function () {
+            check.run();
+          });
+          window.addEventListener("offline", function () {
+            check.run();
+          });
+          check.run(true); // primera consulta (y primer JSON) al abrir
         }
 
         if (document.readyState === "loading") {
