@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.3 (2026-11-13)
+// Versión del archivo: 1.0.4 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -1107,6 +1107,204 @@ final class MediaRepository
             }
         }
         return isset(self::TYPES[$mime]) ? $mime : null;
+    }
+
+    /* ------------------- VIDEOS QUE LA TV PUEDE MOSTRAR (2026-11-13) -------------------
+     * Medido en el TV box (Hi3798, WebView 101): los MP4 de 60 fps pierden el
+     * 60-75 % de los fotogramas (se ven a saltos); los de 24-30 fps van fluidos.
+     * Al SUBIR un MP4 se lee su cabecera (moov) y se RECHAZA si supera estos
+     * límites. Sin ffmpeg: lectura directa de las cajas del MP4 (pocos KB).
+     * Si la cabecera no se puede leer, el video se acepta (no se bloquea un
+     * archivo bueno por un formato raro). Los WEBM no se comprueban. */
+
+    /** Fotogramas por segundo máximos (30 con margen para 29,97 / 30,00x). */
+    public const VIDEO_MAX_FPS = 30.5;
+    /** Nivel H.264 máximo (41 = 4.1; 4.2 ya es para 1080p a 60 fps). */
+    public const VIDEO_MAX_H264_LEVEL = 41;
+    /** Resolución máxima: lado largo / lado corto (1920×1080, en vertical u horizontal). */
+    public const VIDEO_MAX_LONG = 1920;
+    public const VIDEO_MAX_SHORT = 1080;
+
+    /**
+     * Comprueba que un MP4 se pueda reproducir fluido en las TV.
+     * @return string|null Motivo del rechazo (texto para el usuario) o null si vale.
+     */
+    public static function videoProblem(string $file, string $mime): ?string
+    {
+        if ($mime !== 'video/mp4') {
+            return null;
+        }
+        $info = self::mp4Info($file);
+        if ($info === null) {
+            return null; // cabecera ilegible: no se bloquea
+        }
+        $problems = [];
+        if ($info['codec'] === 'hevc') {
+            $problems[] = 'está en H.265/HEVC (las pantallas no lo reproducen)';
+        }
+        if ($info['fps'] !== null && $info['fps'] > self::VIDEO_MAX_FPS) {
+            $problems[] = 'es de ' . (int) round($info['fps']) . ' fotogramas por segundo (máximo 30)';
+        }
+        if ($info['codec'] === 'h264' && $info['level'] !== null && $info['level'] > self::VIDEO_MAX_H264_LEVEL) {
+            $problems[] = 'usa el nivel H.264 ' . number_format($info['level'] / 10, 1) . ' (máximo 4.1)';
+        }
+        $long = max($info['width'], $info['height']);
+        $short = min($info['width'], $info['height']);
+        if ($long > self::VIDEO_MAX_LONG || $short > self::VIDEO_MAX_SHORT) {
+            $problems[] = 'mide ' . $info['width'] . '×' . $info['height'] . ' (máximo 1920×1080)';
+        }
+        if (!$problems) {
+            return null;
+        }
+        return 'Este video ' . implode(', ', $problems) . ': en las pantallas no se vería bien (a saltos o nada). '
+            . 'Expórtalo a 30 fps, H.264 (nivel 4.0) y 1920×1080 como máximo, sin audio, y vuelve a subirlo '
+            . '(p. ej. con HandBrake: Framerate 30 constante, Encoder Level 4.0).';
+    }
+
+    /**
+     * Lee la pista de VIDEO de un MP4: códec, perfil/nivel H.264, tamaño y fps.
+     * @return array{codec:string,profile:?int,level:?int,width:int,height:int,fps:?float}|null
+     *         codec = h264 | hevc | otro; null si no se encuentra la cabecera.
+     */
+    public static function mp4Info(string $file): ?array
+    {
+        $f = @fopen($file, 'rb');
+        if ($f === false) {
+            return null;
+        }
+        $size = (int) filesize($file);
+        $moov = null;
+        $pos = 0;
+        // Cajas del nivel superior hasta encontrar "moov" (puede estar al final)
+        for ($n = 0; $n < 1000 && $pos + 8 <= $size; $n++) {
+            fseek($f, $pos);
+            $h = (string) fread($f, 8);
+            if (strlen($h) < 8) {
+                break;
+            }
+            $len = unpack('N', substr($h, 0, 4))[1];
+            $type = substr($h, 4, 4);
+            $hdr = 8;
+            if ($len === 1) {
+                $ext = unpack('N2', (string) fread($f, 8));
+                $len = $ext[1] * 4294967296 + $ext[2];
+                $hdr = 16;
+            } elseif ($len === 0) {
+                $len = $size - $pos;
+            }
+            if ($len < $hdr) {
+                break;
+            }
+            if ($type === 'moov') {
+                if ($len > 32 * 1048576) {
+                    break; // cabecera absurda: no se lee
+                }
+                fseek($f, $pos + $hdr);
+                $moov = (string) fread($f, $len - $hdr);
+                break;
+            }
+            $pos += $len;
+        }
+        fclose($f);
+        if ($moov === null) {
+            return null;
+        }
+        foreach (self::mp4Boxes($moov) as [$type, $trak]) {
+            if ($type === 'trak' && ($info = self::mp4VideoTrack($trak)) !== null) {
+                return $info;
+            }
+        }
+        return null;
+    }
+
+    /** @return array<int,array{0:string,1:string}> Cajas hijas [tipo, contenido] de un bloque. */
+    private static function mp4Boxes(string $d): array
+    {
+        $out = [];
+        $pos = 0;
+        $len = strlen($d);
+        while ($pos + 8 <= $len) {
+            $size = unpack('N', substr($d, $pos, 4))[1];
+            $type = substr($d, $pos + 4, 4);
+            $hdr = 8;
+            if ($size === 1 && $pos + 16 <= $len) {
+                $ext = unpack('N2', substr($d, $pos + 8, 8));
+                $size = $ext[1] * 4294967296 + $ext[2];
+                $hdr = 16;
+            } elseif ($size === 0) {
+                $size = $len - $pos;
+            }
+            if ($size < $hdr || $pos + $size > $len) {
+                break;
+            }
+            $out[] = [$type, substr($d, $pos + $hdr, $size - $hdr)];
+            $pos += $size;
+        }
+        return $out;
+    }
+
+    /** @return string|null Contenido de la primera caja hija de ese tipo. */
+    private static function mp4Child(string $d, string $type): ?string
+    {
+        foreach (self::mp4Boxes($d) as [$t, $c]) {
+            if ($t === $type) {
+                return $c;
+            }
+        }
+        return null;
+    }
+
+    /** Datos de un "trak" si es la pista de VIDEO (hdlr = vide); si no, null. */
+    private static function mp4VideoTrack(string $trak): ?array
+    {
+        $mdia = self::mp4Child($trak, 'mdia');
+        $hdlr = $mdia !== null ? self::mp4Child($mdia, 'hdlr') : null;
+        if ($hdlr === null || substr($hdlr, 8, 4) !== 'vide') {
+            return null;
+        }
+        $info = ['codec' => 'otro', 'profile' => null, 'level' => null, 'width' => 0, 'height' => 0, 'fps' => null];
+        // mdhd: escala de tiempo de la pista
+        $timescale = 0;
+        $mdhd = self::mp4Child($mdia, 'mdhd');
+        if ($mdhd !== null && strlen($mdhd) >= 24) {
+            $timescale = unpack('N', substr($mdhd, ord($mdhd[0]) === 1 ? 20 : 12, 4))[1];
+        }
+        $minf = self::mp4Child($mdia, 'minf');
+        $stbl = $minf !== null ? self::mp4Child($minf, 'stbl') : null;
+        if ($stbl === null) {
+            return $info;
+        }
+        // stsd: códec (avc1/hvc1...), tamaño y avcC (perfil y nivel)
+        $stsd = self::mp4Child($stbl, 'stsd');
+        if ($stsd !== null && strlen($stsd) >= 8 + 8 + 78) {
+            $entry = substr($stsd, 8);
+            $fmt = substr($entry, 4, 4);
+            $info['codec'] = in_array($fmt, ['avc1', 'avc3'], true) ? 'h264' : (in_array($fmt, ['hvc1', 'hev1'], true) ? 'hevc' : 'otro');
+            $wh = unpack('n2', substr($entry, 8 + 24, 4));
+            $info['width'] = $wh[1];
+            $info['height'] = $wh[2];
+            $avcC = self::mp4Child(substr($entry, 8 + 78), 'avcC');
+            if ($avcC !== null && strlen($avcC) >= 4) {
+                $info['profile'] = ord($avcC[1]);
+                $info['level'] = ord($avcC[3]);
+            }
+        }
+        // stts: fotogramas y duración => fps medios
+        $stts = self::mp4Child($stbl, 'stts');
+        if ($stts !== null && $timescale > 0 && strlen($stts) >= 8) {
+            $count = unpack('N', substr($stts, 4, 4))[1];
+            $frames = 0;
+            $ticks = 0;
+            for ($i = 0; $i < $count && 8 + $i * 8 + 8 <= strlen($stts); $i++) {
+                $e = unpack('N2', substr($stts, 8 + $i * 8, 8));
+                $frames += $e[1];
+                $ticks += $e[1] * $e[2];
+            }
+            if ($frames > 0 && $ticks > 0) {
+                $info['fps'] = round($frames * $timescale / $ticks, 2);
+            }
+        }
+        return $info;
     }
 
     /** @return array<string,mixed>|null Archivo de ESE usuario (null si no existe o es de otro). */

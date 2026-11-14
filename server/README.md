@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.4 (2026-11-13) -->
+<!-- Versión del archivo: 1.0.5 (2026-11-13) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -335,6 +335,19 @@ Cómo funciona:
 - Un archivo pausado **sigue contando** para el límite de archivos del usuario.
 
 **Nombre del dispositivo en las pantallas** (2026-11-13; sube `api/device.php`, `api/media.php` y las 6 páginas a Kodular; sin migración): `api/device.php` y `api/media.php` devuelven `"deviceName"`, el nombre del equipo en el panel (el que pone el usuario en `/cuenta/` → *Dispositivos* o el administrador como alias; `""` si no tiene). **Nunca** el alias del administrador ni sus notas. Las 6 páginas lo guardan en `smartpizarra.deviceName` cada vez que el servidor responde; `loading`, `config`, `connection` y `fingerprint` lo muestran junto a la versión, la web y el email («Nombre: Local Centro» / «Name: …»). Sin nombre, la línea no aparece.
+
+## Videos que las pantallas pueden mostrar fluidos — 2026-11-13
+
+Medido en el TV box: los MP4 de **60 fps** pierden el 60–75 % de los fotogramas (se ven a saltos); los de 24–30 fps van fluidos. Por eso, al **subir** un video MP4 (contenido del usuario en `/cuenta/` y anuncios del panel) el servidor lee su cabecera y lo **rechaza** con un mensaje que explica cómo exportarlo si:
+
+- tiene **más de 30 fps**;
+- usa un **nivel H.264 mayor que 4.1**;
+- está en **H.265/HEVC** (el WebView no lo reproduce);
+- mide **más de 1920×1080** (en vertical u horizontal).
+
+Recomendado: H.264, 30 fps constantes, nivel 4.0, hasta 1920×1080, unos 4–5 Mbps, sin audio. Con ffmpeg:
+`ffmpeg -i original.mp4 -vf fps=30 -c:v libx264 -profile:v high -level 4.0 -crf 23 -maxrate 5M -bufsize 10M -movflags +faststart -an pantalla.mp4`.
+Si la cabecera no se puede leer, el video se acepta (no se bloquea un archivo válido por un formato raro). Los WEBM no se comprueban. Los videos que ya estaban subidos no se tocan: los de 60 fps hay que volver a exportarlos y subirlos. Sube `private/lib.php`, `cuenta/index.php` y `admin/index.php` (sin migración).
 
 ## Muchos equipos (cientos de pantallas) — 2026-11-13
 

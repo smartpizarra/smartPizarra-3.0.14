@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-12)
+// Versión del archivo: 1.0.3 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -10,6 +10,9 @@
  *  - Entra aquí con su email y esa contraseña; la primera vez (o tras un
  *    "Restablecer contraseña" del administrador) DEBE cambiarla.
  *  - Ve sus datos y sus equipos (alias, ID, estado, última conexión).
+ *  - VIDEOS FLUIDOS (2026-11-13): al subir un MP4 se RECHAZA si es de más
+ *    de 30 fps, nivel H.264 > 4.1, H.265/HEVC o mayor de 1920×1080
+ *    (MediaRepository::videoProblem): en las TV se vería a saltos.
  *  - PAUSAR EL CONTENIDO (2026-11-12): cada archivo tiene "Pausar" /
  *    "Activar", como las tiras (acciones media_pause / media_resume,
  *    MediaRepository::setActive). Pausado no se envía a las pantallas pero
@@ -521,6 +524,11 @@ try {
                     if ($mime === null) {
                         redirectWith('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.', 's=contenido');
                     }
+                    // Video que las TV no pueden mostrar fluido (60 fps, 4K, HEVC...): se rechaza
+                    $videoProblem = MediaRepository::videoProblem((string) $f['tmp_name'], $mime);
+                    if ($videoProblem !== null) {
+                        redirectWith('«' . $f['name'] . '» no se subió. ' . $videoProblem, 's=contenido');
+                    }
                     MediaRepository::create($uid, (string) $f['tmp_name'], (string) $f['name'], $mime,
                         (int) param($_POST, 'seconds'), $all, $chosen, $starts, $ends);
                     redirectWith('«' . $f['name'] . '» subido. Tus dispositivos lo descargarán en su próxima consulta.' . $when(), 's=contenido');
@@ -899,7 +907,8 @@ if ($validity['state'] !== 'active') {
           puedes preparar tu contenido, pero las pantallas no lo mostrarán hasta que el administrador la renueve.</p>
       <?php endif; ?>
       <p class="hint">Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
-        Los videos se reproducen sin sonido.</p>
+        Los videos se reproducen sin sonido. <strong>Videos: 30 fps como máximo</strong>, H.264 y hasta 1920×1080
+        (los de 60 fps o 4K se ven a saltos en las pantallas y no se aceptan).</p>
       <!-- Límite de archivos (lo pone el administrador) -->
       <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>">Archivos: <strong><?= count($mediaList) ?> de <?= $maxFiles ?></strong>
         <?= $atFileLimit ? '· Llegaste a tu límite: borra alguno o pide al administrador que te permita más.' : '· Puedes subir ' . ($maxFiles - count($mediaList)) . ' más.' ?></p>

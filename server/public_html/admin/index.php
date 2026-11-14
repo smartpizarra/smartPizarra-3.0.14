@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.3 (2026-11-13)
+// Versión del archivo: 1.0.4 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -88,6 +88,10 @@
  *    contenido puede subir cada usuario desde /cuenta/ (por defecto 5).
  *    Se cambia en su ficha (sección Contenido, acción user_max_files).
  *    La lista de usuarios muestra "N/límite archivo(s)".
+ *
+ *  - VIDEOS FLUIDOS (2026-11-13): un anuncio MP4 de más de 30 fps, nivel
+ *    H.264 > 4.1, HEVC o mayor de 1920×1080 se RECHAZA al subirlo
+ *    (MediaRepository::videoProblem), igual que el contenido de /cuenta/.
  *
  *  - MUCHOS EQUIPOS (2026-11-13): la lista de dispositivos va PAGINADA
  *    (DEVICES_PER_PAGE por página, ?p=N; antes tope de 500) y cada tarjeta
@@ -969,6 +973,11 @@ try {
                     if ($mime === null) {
                         redirectWith('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.', 'view=ads');
                     }
+                    // Video que las TV no pueden mostrar fluido (60 fps, 4K, HEVC...): se rechaza
+                    $videoProblem = MediaRepository::videoProblem((string) $f['tmp_name'], $mime);
+                    if ($videoProblem !== null) {
+                        redirectWith('«' . $f['name'] . '» no se subió. ' . $videoProblem, 'view=ads');
+                    }
                     $data = adFormData(pathinfo((string) $f['name'], PATHINFO_FILENAME));
                     AdRepository::create((string) $f['tmp_name'], (string) $f['name'], $mime, $data);
                     redirectWith("Anuncio «{$data['name']}» subido. Los equipos lo descargarán en su próxima consulta (≈ 1 min).", 'view=ads');
@@ -1797,7 +1806,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <input type="hidden" name="action" value="ad_upload">
         <label for="ad-file">Imagen o video</label>
         <input type="file" id="ad-file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required>
-        <span class="owner">JPG, PNG, WEBP, GIF, MP4 (H.264) o WEBM · máx. <?= h(formatBytes(MediaRepository::maxBytes())) ?>
+        <span class="owner">JPG, PNG, WEBP, GIF, MP4 (H.264, máx. 30 fps y 1920×1080) o WEBM · máx. <?= h(formatBytes(MediaRepository::maxBytes())) ?>
           (límite de PHP: <?= h((string) ini_get('upload_max_filesize')) ?>)</span>
         <?= adFields(null, $users, $allDevices) ?>
         <button class="primary" type="submit">Subir anuncio</button>
