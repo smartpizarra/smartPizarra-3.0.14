@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - API DE DISPOSITIVOS
@@ -45,7 +45,9 @@
  *        que el usuario eligió para ESTE equipo en /cuenta/ ("" sin liga), o
  *        null = sin ruta. Todas las respuestas 200 llevan además
  *        "mediaEnabled": true|false (permiso de contenido; las páginas lo
- *        guardan en smartpizarra.mediaEnabled y lo envían en su JSON).
+ *        guardan en smartpizarra.mediaEnabled y lo envían en su JSON) y
+ *        "deviceName": nombre del equipo en el panel ("" sin nombre; las
+ *        páginas lo guardan en smartpizarra.deviceName y lo muestran).
  *        Las páginas la guardan en smartpizarra.routeUrl
  *        ("" sin ruta). La liga ya NO se envía aparte (va dentro de la URL).
  *    400 {"ok":false,"error":"bad_request"}      datos con formato inválido
@@ -132,7 +134,9 @@ try {
         DeviceRepository::authPayload($device),
         ['registered' => $registered, 'mac' => $device['mac'] ?? null,
          // Permiso de CONTENIDO (lo da el administrador): todas las páginas lo envían a la app
-         'mediaEnabled' => DeviceRepository::mediaEnabled($device)]
+         'mediaEnabled' => DeviceRepository::mediaEnabled($device),
+         // Nombre del equipo en el panel (label; "" = sin nombre): las páginas lo muestran
+         'deviceName' => (string) ($device['label'] ?? '')]
     );
     // Ruta de su USUARIO (URL final con leagues = liga de ESTE equipo, que elige
     // el usuario en /cuenta/) o null, solo a equipos AUTORIZADOS. Si no está

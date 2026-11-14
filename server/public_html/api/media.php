@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - API DE CONTENIDO (imágenes y videos) PARA mirror.html
@@ -191,6 +191,8 @@ try {
     $revision = $allowed || $ads || $overlays ? sha1(json_encode([$items, $ads, $ovHash])) : '';
     $out = ['ok' => true, 'deviceId' => $id] + $auth + [
         'mediaEnabled' => $mediaEnabled,
+        // Nombre del equipo en el panel (label; "" = sin nombre): las páginas lo muestran
+        'deviceName' => (string) ($device['label'] ?? ''),
         'contentActive' => $contentActive,
         // Segundos de vigencia restantes (el equipo los cuenta con su propio reloj)
         'secondsLeft' => $contentActive ? max(0, (int) strtotime($until . ' UTC') - time()) : 0,

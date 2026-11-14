@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.2 (2026-11-12) -->
+<!-- Versión del archivo: 1.0.3 (2026-11-13) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -333,6 +333,8 @@ Cómo funciona:
 - Cada archivo de contenido tiene el botón **Pausar** / **Activar**: el usuario lo ve en `/cuenta/` → *Contenido* (solo para sus archivos) y el administrador en *Contenido* del panel.
 - Un archivo **pausado** muestra la insignia *Pausado*, deja de enviarse a las pantallas y `mirror.html` lo quita en su próxima consulta (≈ 1 min). **No se borra**: conserva su orden, dispositivos y fechas, y al activarlo vuelve a mostrarse. La pantalla lo descarga de nuevo al reactivarlo.
 - Un archivo pausado **sigue contando** para el límite de archivos del usuario.
+
+**Nombre del dispositivo en las pantallas** (2026-11-13; sube `api/device.php`, `api/media.php` y las 6 páginas a Kodular; sin migración): `api/device.php` y `api/media.php` devuelven `"deviceName"`, el nombre del equipo en el panel (el que pone el usuario en `/cuenta/` → *Dispositivos* o el administrador como alias; `""` si no tiene). **Nunca** el alias del administrador ni sus notas. Las 6 páginas lo guardan en `smartpizarra.deviceName` cada vez que el servidor responde; `loading`, `config`, `connection` y `fingerprint` lo muestran junto a la versión, la web y el email («Nombre: Local Centro» / «Name: …»). Sin nombre, la línea no aparece.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 
