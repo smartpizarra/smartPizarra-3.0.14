@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.2 (2026-11-12)
+-- Versión del archivo: 1.0.3 (2026-11-13)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -308,4 +308,26 @@ CREATE TABLE IF NOT EXISTS sp_messages (
   KEY idx_msg_thread (user_id, id),
   KEY idx_msg_unread (sender, read_at),
   CONSTRAINT fk_msg_user FOREIGN KEY (user_id) REFERENCES sp_users (id) ON DELETE CASCADE -- borrar el usuario borra su conversación
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- COLA DE DESCARGAS CON TURNOS (muchas pantallas). Ver migrations/2026-11-13-download-queue.sql.
+CREATE TABLE IF NOT EXISTS sp_download_queue (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, -- orden de llegada (= número de turno)
+  device_id   VARCHAR(32)  NOT NULL,                 -- un equipo, un turno como mucho
+  state       VARCHAR(7)   NOT NULL DEFAULT 'waiting', -- waiting (esperando) | active (descargando)
+  created_at  DATETIME     NOT NULL,                 -- cuándo pidió turno (UTC)
+  granted_at  DATETIME     NULL DEFAULT NULL,        -- cuándo le tocó (UTC)
+  seen_at     DATETIME     NOT NULL,                 -- última señal ("sigo aquí" / descarga), UTC
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_queue_device (device_id),
+  KEY idx_queue_state (state, id),
+  CONSTRAINT fk_queue_device FOREIGN KEY (device_id) REFERENCES sp_devices (device_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Valores pequeños del sistema (p. ej. lo que tarda de media un turno de descarga).
+CREATE TABLE IF NOT EXISTS sp_kv (
+  k           VARCHAR(40)  NOT NULL,                 -- clave (p. ej. dl_turn_avg = duración media aprendida de un turno, s)
+  v           VARCHAR(255) NOT NULL,
+  updated_at  DATETIME     NOT NULL,                 -- UTC
+  PRIMARY KEY (k)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

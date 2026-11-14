@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - CONFIGURACIÓN DEL SERVIDOR (PLANTILLA)
@@ -32,7 +32,10 @@ return [
     'allowed_origins' => ['http://localhost'],
 
     // Límites anti-abuso
-    'register_per_ip_per_hour' => 30, // equipos NUEVOS por IP y hora
+    // Equipos NUEVOS por IP y hora. Con instalaciones grandes en un mismo
+    // local (todos con la misma IP pública) súbelo: 200 permite instalar
+    // 200 TV por hora desde una misma red (2026-11-13; antes 30).
+    'register_per_ip_per_hour' => 200,
     'login_fails_per_ip'       => 10, // intentos fallidos de login por IP...
     'login_window_seconds'     => 900, // ...en esta ventana (15 min)
 
@@ -71,6 +74,18 @@ return [
     // Tiras y banners de mirror.html: tamaño máximo de la imagen de un banner
     // y máximo de tiras/banners por usuario. Si faltan, se usan estos valores.
     'overlay_max_mb'    => 5,
+
+    // COLA DE DESCARGAS (2026-11-13). Cuando hay contenido nuevo, como mucho
+    // download_slots pantallas lo descargan A LA VEZ; las demás esperan su
+    // turno por orden de llegada (cada descarga ocupa un proceso PHP: con
+    // demasiadas a la vez el hosting responde "503 Resource Limit").
+    // Súbelo si en hPanel > Uso de recursos ves margen; bájalo si aparecen 503.
+    // download_turn_seconds: lo que tarda una pantalla en descargar su
+    // contenido nuevo, solo hasta que la cola aprende la duración REAL (se
+    // ajusta sola con cada descarga). Sirve para decir a cada una cuánto esperar.
+    // Si faltan, se usan estos valores.
+    'download_slots'        => 10,
+    'download_turn_seconds' => 60,
     'overlays_per_user' => 20,
     'online_timeout_seconds' => 180,
     'boot_history_days' => 365,

@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-12)
+// Versión del archivo: 1.0.3 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -89,6 +89,12 @@
  *    Se cambia en su ficha (sección Contenido, acción user_max_files).
  *    La lista de usuarios muestra "N/límite archivo(s)".
  *
+ *  - MUCHOS EQUIPOS (2026-11-13): la lista de dispositivos va PAGINADA
+ *    (DEVICES_PER_PAGE por página, ?p=N; antes tope de 500) y cada tarjeta
+ *    ya no consulta la base: la liga sale de las ligas de su usuario (una
+ *    consulta por usuario) y la URL de la ruta de las rutas leídas una vez.
+ *    Arriba, el estado de la COLA DE DESCARGAS (DownloadQueue).
+ *
  *  - BUZÓN DE MENSAJES (botón "Mensajes", ?view=messages, 2026-11-12): una
  *    conversación por usuario (MessageRepository). Lista de conversaciones
  *    (la más reciente arriba, con los mensajes sin leer) y, al abrir una
@@ -167,6 +173,9 @@ function panelUrl(array $params): string
     $query = http_build_query(array_filter($params, static fn($v) => $v !== null && $v !== ''));
     return './' . ($query !== '' ? '?' . $query : '');
 }
+
+/** Dispositivos por página en la lista del panel (muchos equipos). */
+const DEVICES_PER_PAGE = 50;
 
 /**
  * Bloque de VIGENCIA de un usuario: estado + sumar/restar días + quitar.
@@ -1170,8 +1179,16 @@ try {
     if (($q !== '' || $userFilter !== null) && !isset($_GET['filter'])) {
         $filter = 'all';
     }
-    $back = http_build_query(array_filter(['filter' => $filter, 'q' => $q, 'user' => $userParam]));
-    $devices = $loggedIn && $view === 'list' ? DeviceRepository::search($filter === 'all' ? null : $filter, $q, $userFilter, true) : [];
+    // Lista PAGINADA (muchos equipos): ?p=N, DEVICES_PER_PAGE por página
+    $devTotal = $loggedIn && $view === 'list' ? DeviceRepository::searchCount($filter === 'all' ? null : $filter, $q, $userFilter, true) : 0;
+    $devPages = max(1, (int) ceil($devTotal / DEVICES_PER_PAGE));
+    $devPage = min($devPages, max(1, (int) param($_GET, 'p')));
+    $back = http_build_query(array_filter(['filter' => $filter, 'q' => $q, 'user' => $userParam, 'p' => $devPage > 1 ? $devPage : null]));
+    $devices = $loggedIn && $view === 'list'
+        ? DeviceRepository::search($filter === 'all' ? null : $filter, $q, $userFilter, true, DEVICES_PER_PAGE, ($devPage - 1) * DEVICES_PER_PAGE)
+        : [];
+    // Estado de la cola de descargas (recuadro de la lista)
+    $queueStatus = $loggedIn && $view === 'list' ? DownloadQueue::status() : null;
     $counts = $loggedIn ? DeviceRepository::counts($userFilter) : [];
     // Contenido de los usuarios (?view=media[&user=ID])
     $mediaUser = $userFilter !== null && $userFilter > 0 ? $userFilter : null;
@@ -1249,7 +1266,9 @@ try {
     usort($profileDevices, static fn($a, $b) => strcmp((string) $a['device_id'], (string) $b['device_id']));
     $freeProfiles = $loggedIn && $view === 'list' ? ProfileRepository::free() : [];
     // Rutas (?view=routes) y nombre de la ruta de cada usuario (ficha)
-    $routes = $loggedIn && ($view === 'routes' || $userCard) ? RouteRepository::all() : [];
+    // (también en la lista: URL final de cada tarjeta sin consultar por equipo)
+    $routes = $loggedIn && ($view === 'routes' || $view === 'list' || $userCard) ? RouteRepository::all() : [];
+    $routesById = array_column($routes, null, 'id');
     $routeNames = array_column($routes, 'name', 'id');
     usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
     // Ligas: vista ?view=leagues y sección "Ligas" de la ficha de un usuario
@@ -1318,6 +1337,11 @@ try {
     $leagueTypes = [];
     $leagues = [];
     $userLeagueIds = [];
+    $devTotal = 0;
+    $devPages = 1;
+    $devPage = 1;
+    $queueStatus = null;
+    $routesById = [];
     $pq = '';
     $profiles = [];
     $profileDevice = '';
@@ -1346,6 +1370,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .tools { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
     .tools input { flex: 1; min-width: 180px; }
     .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    /* Cola de descargas y paginación (muchos equipos) */
+    .queue-box { margin-bottom: 10px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); font-size: .9rem; }
+    .queue-box.busy { border-color: var(--warn); }
+    .pager { display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; margin: 14px 0; }
     .tabs a { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: .9rem; }
     .tabs a.on { background: var(--accent); border-color: var(--accent); color: #fff; }
     .label-form { display: flex; gap: 6px; flex: 1 1 220px; }
@@ -2310,6 +2338,20 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     </section>
   <?php endif; ?>
 
+  <?php if ($queueStatus !== null): ?>
+    <!-- COLA DE DESCARGAS: pantallas descargando contenido nuevo por turnos -->
+    <div class="queue-box <?= $queueStatus['waiting'] ? 'busy' : '' ?>">
+      <strong>Cola de descargas:</strong>
+      <?php if (!$queueStatus['active'] && !$queueStatus['waiting']): ?>
+        vacía <span class="owner">(hasta <?= (int) $queueStatus['slots'] ?> pantallas descargan a la vez)</span>
+      <?php else: ?>
+        <?= (int) $queueStatus['active'] ?> de <?= (int) $queueStatus['slots'] ?> descargando
+        · <?= (int) $queueStatus['waiting'] ?> esperando turno
+        · terminará en ≈ <?= max(1, (int) ceil($queueStatus['etaSeconds'] / 60)) ?> min
+      <?php endif; ?>
+    </div>
+  <?php endif; ?>
+
   <nav class="tabs">
     <?php foreach ($filters as $key => $text): ?>
       <a class="<?= $filter === $key ? 'on' : '' ?>" href="<?= h(panelUrl(['filter' => $key, 'q' => $q, 'user' => $userParam])) ?>">
@@ -2347,11 +2389,16 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         Usuario: <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>'
           . ' · <span class="owner">' . contentValidity($d['user_content_until'] ?? null)['text'] . '</span>' : '<em>sin asignar</em>' ?><br>
         <?php if ($d['user_id']):
-            $devLeague = LeagueRepository::deviceLeague($d);
             $ownerId = (int) $d['user_id'];
             $ownerRoute = !empty($usersById[$ownerId]['route_id']);
             // Ligas del usuario dueño (una consulta por usuario, no por equipo)
             $ownerLeagues = $leaguesByUser[$ownerId] ??= LeagueRepository::forUser($ownerId);
+            // Liga del equipo: la suya si sigue siendo de su usuario (igual que
+            // LeagueRepository::deviceLeague, pero sin consultar la base)
+            $devLeague = null;
+            foreach ($ownerLeagues as $ol) {
+                if ((int) $ol['id'] === (int) ($d['league_id'] ?? 0)) { $devLeague = $ol; break; }
+            }
         ?>
           <?php if ($ownerRoute && $ownerLeagues): $did = h($id); ?>
             <!-- Liga del equipo: el usuario ya tiene ruta y ligas => el admin también la elige
@@ -2374,7 +2421,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               <noscript><button type="submit">Guardar liga</button></noscript>
             </form>
             <!-- URL final que recibe el equipo (ruta del usuario + leagues de esta liga) -->
-            <span class="route-url"><?= h((string) RouteRepository::urlForDevice($d)) ?></span>
+            <!-- (igual que RouteRepository::urlForDevice, con las rutas ya leídas) -->
+            <span class="route-url"><?= h(isset($routesById[(int) $usersById[$ownerId]['route_id']])
+                ? RouteRepository::buildUrl($routesById[(int) $usersById[$ownerId]['route_id']], $devLeague ? (string) $devLeague['codes'] : '')
+                : '') ?></span>
           <?php else: ?>
             <!-- Sin ruta o sin ligas en su usuario: solo se muestra la liga -->
             Liga: <?= $devLeague === null ? '<em>sin liga</em>'
@@ -2483,6 +2533,18 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </details>
     </section>
   <?php endforeach; ?>
+  <?php if ($devPages > 1): ?>
+    <!-- Paginación (muchos equipos) -->
+    <nav class="pager">
+      <?php if ($devPage > 1): ?>
+        <a class="btn" href="<?= h(panelUrl(['filter' => $filter, 'q' => $q, 'user' => $userParam, 'p' => $devPage - 1])) ?>">&laquo; Anterior</a>
+      <?php endif; ?>
+      <span class="owner">Página <?= $devPage ?> de <?= $devPages ?> · <?= $devTotal ?> equipo(s)</span>
+      <?php if ($devPage < $devPages): ?>
+        <a class="btn" href="<?= h(panelUrl(['filter' => $filter, 'q' => $q, 'user' => $userParam, 'p' => $devPage + 1])) ?>">Siguiente &raquo;</a>
+      <?php endif; ?>
+    </nav>
+  <?php endif; ?>
   <?php endif; /* fin vista usuarios / historial / lista */ ?>
 
   <!-- Escáner: cámara trasera + lector de QR -->

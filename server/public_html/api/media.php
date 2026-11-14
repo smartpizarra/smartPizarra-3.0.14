@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-13)
+// Versión del archivo: 1.0.2 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - API DE CONTENIDO (imágenes y videos) PARA mirror.html
@@ -16,7 +16,9 @@
  *    deviceId, secret   igual que api/device.php (localStorage del equipo)
  *    action=list        lista de lo que debe mostrar el equipo
  *      rev            (opcional) la "revision" que ya tiene el equipo
- *    action=file        descarga un archivo
+ *    action=turn        pide TURNO para descargar (cola, 2026-11-13; ver abajo)
+ *    action=done        libera el turno al terminar sus descargas
+ *    action=file        descarga un archivo (exige turno)
  *      id             id del archivo (de la lista)
  *      ad=1           (opcional) el id es de un ANUNCIO (lista "ads")
  *      ov=1           (opcional) el id es de un BANNER (lista "overlays")
@@ -34,6 +36,16 @@
  *  ov=1). Las del ADMINISTRADOR llegan a cualquier equipo autorizado; las
  *  del USUARIO solo si el equipo puede mostrar su contenido (permiso +
  *  vigencia). La del administrador tiene prioridad en la misma posición.
+ *
+ *  COLA DE DESCARGAS CON TURNOS (2026-11-13, DownloadQueue en lib.php): con
+ *  muchas pantallas, el contenido nuevo se descarga POR TURNOS. action=turn
+ *  responde {"ok":true,"granted":true,...} (descarga ya) o
+ *  {"ok":true,"granted":false,"position":N,"waiting":N,"active":N,"slots":N,
+ *  "retryAfter":S} (vuelve a preguntar en S segundos). Como mucho
+ *  download_slots (config.php) descargan a la vez; en cuanto uno termina
+ *  (action=done) o abandona, entra el siguiente. action=file sin turno =>
+ *  503 {"ok":false,"error":"busy","position":N,"retryAfter":S} + cabecera
+ *  Retry-After (las versiones viejas de mirror.html entran así en la cola).
  *
  *  Solo reciben contenido los equipos AUTORIZADOS, con el permiso de
  *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled) y
@@ -63,7 +75,8 @@
  *         200 {"ok":true,"status":"authorized","authorized":true,"mediaEnabled":false,"revision":"<huella de ads>","items":[],"ads":[...]}
  *    file 200 el archivo (Content-Type del archivo, Content-Length)
  *    400 bad_request · 403 secret_mismatch | not_authorized | media_disabled | content_expired · 404 not_registered |
- *    not_found · 405 method · 429 rate_limited (descargas por equipo y hora) · 500 server
+ *    not_found · 405 method · 429 rate_limited (descargas por equipo y hora) ·
+ *    503 busy (sin turno de descarga: esperar retryAfter) · 500 server
  */
 
 declare(strict_types=1);
@@ -80,7 +93,7 @@ try {
     $secret = strtolower(trim((string) ($_POST['secret'] ?? '')));
     $action = (string) ($_POST['action'] ?? 'list');
     if (!DeviceRepository::isValidId($id) || !DeviceRepository::isValidSecret($secret)
-        || !in_array($action, ['list', 'file'], true)) {
+        || !in_array($action, ['list', 'file', 'turn', 'done'], true)) {
         Http::json(['ok' => false, 'error' => 'bad_request'], 400);
     }
 
@@ -103,9 +116,29 @@ try {
     $contentActive = UserRepository::contentActive($until);
     $allowed = $auth['authorized'] && $mediaEnabled && $contentActive;
 
+    // ---- Cola de descargas: pedir / liberar turno ----
+    if ($action === 'turn') {
+        if (!$auth['authorized']) {
+            Http::json(['ok' => false, 'error' => 'not_authorized'], 403);
+        }
+        Http::json(['ok' => true] + DownloadQueue::request($id));
+    }
+    if ($action === 'done') {
+        DownloadQueue::release($id);
+        Http::json(['ok' => true]);
+    }
+
     if ($action === 'file') {
         if (!$auth['authorized']) {
             Http::json(['ok' => false, 'error' => 'not_authorized'], 403);
+        }
+        // Turno de descarga: sin turno => 503 "busy" con lo que debe esperar.
+        // Con turno, cada descarga renueva su "sigo aquí" (seen_at).
+        $turn = DownloadQueue::request($id);
+        if (!$turn['granted']) {
+            header('Retry-After: ' . $turn['retryAfter']);
+            Http::json(['ok' => false, 'error' => 'busy', 'position' => $turn['position'],
+                        'waiting' => $turn['waiting'], 'retryAfter' => $turn['retryAfter']], 503);
         }
         // Anuncio: basta con estar autorizado (no exige vigencia ni permiso de contenido)
         $isAd = (string) ($_POST['ad'] ?? '') === '1';

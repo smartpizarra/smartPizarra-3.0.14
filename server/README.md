@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.3 (2026-11-13) -->
+<!-- Versión del archivo: 1.0.4 (2026-11-13) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -335,6 +335,29 @@ Cómo funciona:
 - Un archivo pausado **sigue contando** para el límite de archivos del usuario.
 
 **Nombre del dispositivo en las pantallas** (2026-11-13; sube `api/device.php`, `api/media.php` y las 6 páginas a Kodular; sin migración): `api/device.php` y `api/media.php` devuelven `"deviceName"`, el nombre del equipo en el panel (el que pone el usuario en `/cuenta/` → *Dispositivos* o el administrador como alias; `""` si no tiene). **Nunca** el alias del administrador ni sus notas. Las 6 páginas lo guardan en `smartpizarra.deviceName` cada vez que el servidor responde; `loading`, `config`, `connection` y `fingerprint` lo muestran junto a la versión, la web y el email («Nombre: Local Centro» / «Name: …»). Sin nombre, la línea no aparece.
+
+## Muchos equipos (cientos de pantallas) — 2026-11-13
+
+Para que el servidor trabaje fluido con cientos de pantallas:
+
+1. Ejecuta una vez `migrations/2026-11-13-download-queue.sql` (tablas `sp_download_queue` y `sp_kv`; repetirla no hace nada).
+2. Sube `private/lib.php`, `api/media.php` y `admin/index.php`.
+3. Sube a los assets de Kodular `mirror.html`, `none.html` y `fingerprint.html`.
+4. En tu `private/config.php` del servidor (no está en el proyecto) añade o cambia:
+   - `'register_per_ip_per_hour' => 200,` (antes 30: equipos nuevos por IP y hora; súbelo si instalas muchas TV en un mismo local).
+   - `'download_slots' => 10,` (pantallas que descargan a la vez; súbelo si hPanel → *Uso de recursos* va holgado, bájalo si aparecen errores 503).
+   - `'download_turn_seconds' => 60,` (opcional: duración de un turno hasta que la cola aprende la real).
+5. En Kodular, pon el Clock de `ping.php` en 60 s o más.
+
+Cómo funciona:
+
+- **Cola de descargas con turnos.** Cuando hay contenido nuevo, como mucho `download_slots` pantallas lo descargan a la vez; las demás esperan su turno **por orden de llegada**. Cada pantalla pide turno (`api/media.php` `action=turn`); si no le toca, el servidor le dice su puesto y cuánto esperar antes de volver a preguntar (proporcional al puesto: la 400 vuelve mucho más tarde que la 15, así esperar no carga el servidor). Con turno descarga **todo** lo que le falte y lo libera (`action=done`); en cuanto una termina entra la siguiente. Los turnos abandonados (pantalla apagada) caducan solos. La duración real de un turno se **aprende** (media móvil) para que las esperas se ajusten a tu conexión y al tamaño de tus archivos. Una descarga sin turno recibe `503 busy` + `Retry-After` (las versiones viejas de `mirror.html` entran así en la cola).
+- **Pantallas desincronizadas.** Cada consulta lleva un margen al azar (±10 %); tras arrancar o al volver internet, `mirror.html` espera 0–20 s al azar si ya tiene algo que mostrar (después de un apagón no llegan todas en el mismo segundo).
+- **Espera creciente si el servidor falla.** `mirror.html`: 1 → 2 → 4 → 8 → 10 min (o lo que pida el servidor con `Retry-After`). `none.html`: sin respuesta 5 → 10 → 20 → 40 → 60 s (el aviso de red de Android sigue comprobando al instante), con error 5xx 30 s → 5 min. `fingerprint.html`: pendiente cada 10 s ± 20 %, sin respuesta 30 s → 5 min.
+- **Menos escrituras.** La «última conexión» solo se escribe si pasaron 30 s desde la anterior o cambió la versión o la IP.
+- **Panel.** La lista de dispositivos va **paginada** (50 por página) y ya no consulta la base por cada tarjeta; arriba se ve el estado de la **cola de descargas** (descargando, esperando, tiempo estimado).
+
+Medido en local con 500 equipos: panel «Todos» de 704 consultas / 312 ms / 3,8 MB a **19 consultas / 85 ms / 415 KB**; la 2.ª ronda de consultas de las pantallas pasa de 500 escrituras a **0**; 500 pantallas con un archivo nuevo, 10 a la vez: nunca más de 10 descargando, todas terminan en ~33 min simulados (descargas de 10–60 s) y cada una pregunta de media 4 veces mientras espera.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
 

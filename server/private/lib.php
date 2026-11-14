@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-12)
+// Versión del archivo: 1.0.3 (2026-11-13)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -262,6 +262,11 @@ final class Database
             return 'Falta el límite de archivos por usuario (columna sp_users.max_files): ejecuta en phpMyAdmin (pestaña SQL) '
                 . 'server/migrations/2026-11-12-user-max-files.sql.';
         }
+        // Cola de descargas con turnos (muchas pantallas)
+        if (!in_array('sp_download_queue', $tables, true) || !in_array('sp_kv', $tables, true)) {
+            return 'Falta la cola de descargas (tabla sp_download_queue): ejecuta en phpMyAdmin (pestaña SQL) '
+                . 'server/migrations/2026-11-13-download-queue.sql.';
+        }
         // Buzón de mensajes administrador <-> usuario
         if (!in_array('sp_messages', $tables, true)) {
             return 'Falta el buzón de mensajes (tabla sp_messages): ejecuta en phpMyAdmin (pestaña SQL) '
@@ -334,6 +339,9 @@ final class DeviceRepository
 {
     /** Estados posibles. */
     public const STATUSES = ['pending', 'authorized', 'revoked'];
+
+    /** touch()/markOnline() solo escriben si la última conexión tiene más de estos segundos. */
+    public const TOUCH_EVERY = 30;
 
     /** Formato del ID que crea loading.html: SP-XXXX-XXXX-XXXX (hex). */
     public static function isValidId(string $id): bool
@@ -479,11 +487,17 @@ final class DeviceRepository
      */
     public static function touch(string $id, ?string $version, string $ip): void
     {
+        // MENOS ESCRITURAS (2026-11-13): con cientos de pantallas consultando cada
+        // minuto, solo se escribe si pasaron TOUCH_EVERY s desde la anterior o si
+        // cambió la versión o la IP ("última conexión" sigue siendo exacta al minuto).
         $now = Database::now();
+        $limit = gmdate('Y-m-d H:i:s', time() - self::TOUCH_EVERY);
         Database::pdo()->prepare(
             'UPDATE sp_devices SET last_seen_at = ?, online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
-             WHERE device_id = ?'
-        )->execute([$now, $now, $version, $ip, $id]);
+             WHERE device_id = ?
+               AND (last_seen_at < ? OR online_at IS NULL OR online_at < ? OR NOT (last_ip <=> ?)
+                    OR (? IS NOT NULL AND NOT (app_version <=> ?)))'
+        )->execute([$now, $now, $version, $ip, $id, $limit, $limit, $ip, $version, $version]);
     }
 
     /**
@@ -494,10 +508,14 @@ final class DeviceRepository
      */
     public static function markOnline(string $id, ?string $version, string $ip): void
     {
+        // Igual que touch(): solo si pasaron TOUCH_EVERY s o cambió la versión o la IP
+        $limit = gmdate('Y-m-d H:i:s', time() - self::TOUCH_EVERY);
         Database::pdo()->prepare(
             'UPDATE sp_devices SET online_at = ?, app_version = COALESCE(?, app_version), last_ip = ?
-             WHERE device_id = ?'
-        )->execute([Database::now(), $version, $ip, $id]);
+             WHERE device_id = ?
+               AND (online_at IS NULL OR online_at < ? OR NOT (last_ip <=> ?)
+                    OR (? IS NOT NULL AND NOT (app_version <=> ?)))'
+        )->execute([Database::now(), $version, $ip, $id, $limit, $ip, $version, $version]);
     }
 
     /** Cambia el estado desde el panel. */
@@ -652,11 +670,49 @@ final class DeviceRepository
      * @param int|null    $userId Filtro de usuario: null = todos, 0 = sin asignar, >0 = ese usuario.
      * @return array<int,array<string,mixed>> Filas con user_company/user_email, boots y last_boot_at.
      */
-    public static function search(?string $status, string $search, ?int $userId = null, bool $admin = false): array
+    public static function search(?string $status, string $search, ?int $userId = null, bool $admin = false,
+                                  int $limit = 500, int $offset = 0): array
     {
         // $admin = true (SOLO el panel del administrador): la búsqueda también
         // mira el ALIAS DEL ADMINISTRADOR. /cuenta/ llama con false: el usuario
         // no puede encontrar (ni adivinar) un equipo por ese alias.
+        // $limit / $offset: PÁGINA de resultados (el panel muestra 50 por página).
+        [$where, $args] = self::searchWhere($status, $search, $userId, $admin);
+        // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
+        // profile_*: PERFIL del equipo (marca, modelo, MAC del case, instalación) o NULL
+        $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,
+                  p.id AS profile_id, p.brand AS profile_brand, p.model AS profile_model,
+                  p.case_mac AS profile_case_mac, p.installed_on AS profile_installed_on,
+                  (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
+                  (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
+                FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id
+                LEFT JOIN sp_device_profiles p ON p.device_id = d.device_id'
+            . $where
+            . ' ORDER BY (d.status = \'pending\') DESC, d.last_seen_at DESC, d.device_id'
+            . ' LIMIT ' . max(1, min(5000, $limit)) . ' OFFSET ' . max(0, $offset);
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute($args);
+        return $stmt->fetchAll();
+    }
+
+    /** @return int Cuántos equipos cumplen los mismos filtros que search() (para paginar). */
+    public static function searchCount(?string $status, string $search, ?int $userId = null, bool $admin = false): int
+    {
+        [$where, $args] = self::searchWhere($status, $search, $userId, $admin);
+        $stmt = Database::pdo()->prepare(
+            'SELECT COUNT(*) FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id
+             LEFT JOIN sp_device_profiles p ON p.device_id = d.device_id' . $where
+        );
+        $stmt->execute($args);
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Filtros comunes de search() y searchCount().
+     * @return array{0:string,1:array<int,mixed>} [" WHERE ..." o "", argumentos]
+     */
+    private static function searchWhere(?string $status, string $search, ?int $userId, bool $admin): array
+    {
         $where = [];
         $args = [];
         if ($status !== null) {
@@ -688,20 +744,7 @@ final class DeviceRepository
             }
             $where[] = $match . ')';
         }
-        // boots / last_boot_at: resumen del historial de arranques (usa idx_device_time)
-        // profile_*: PERFIL del equipo (marca, modelo, MAC del case, instalación) o NULL
-        $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,
-                  p.id AS profile_id, p.brand AS profile_brand, p.model AS profile_model,
-                  p.case_mac AS profile_case_mac, p.installed_on AS profile_installed_on,
-                  (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
-                  (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
-                FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id
-                LEFT JOIN sp_device_profiles p ON p.device_id = d.device_id'
-            . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
-            . ' ORDER BY (d.status = \'pending\') DESC, d.last_seen_at DESC LIMIT 500';
-        $stmt = Database::pdo()->prepare($sql);
-        $stmt->execute($args);
-        return $stmt->fetchAll();
+        return [$where ? ' WHERE ' . implode(' AND ', $where) : '', $args];
     }
 
     /**
@@ -2870,6 +2913,181 @@ final class MessageRepository
         $stmt = Database::pdo()->prepare('DELETE FROM sp_messages WHERE user_id = ?');
         $stmt->execute([$userId]);
         return $stmt->rowCount();
+    }
+}
+
+/**
+ * COLA DE DESCARGAS CON TURNOS (tabla sp_download_queue), 2026-11-13.
+ *
+ * Cuando hay contenido nuevo, cientos de pantallas querrían descargarlo en
+ * el mismo minuto y cada descarga ocupa un proceso PHP (readfile) mientras
+ * dura: en un hosting compartido eso agota los procesos ("503 Resource
+ * Limit"). Con la cola, como mucho slots() pantallas descargan A LA VEZ;
+ * las demás esperan su turno por ORDEN DE LLEGADA:
+ *  - mirror.html pide turno (api/media.php action=turn). Si hay hueco =>
+ *    "granted": descarga TODO lo que le falte y lo libera (action=done).
+ *    Si no => su posición y cuántos segundos esperar antes de volver a
+ *    preguntar (retryAfter, proporcional a su posición: la 400 vuelve
+ *    mucho más tarde que la 15; así esperar no carga el servidor).
+ *  - Cada descarga (action=file) comprueba el turno: sin turno => 503 "busy"
+ *    + Retry-After (también protege de versiones viejas de mirror.html,
+ *    que entran en la cola automáticamente).
+ *  - En cuanto UNO termina entra el siguiente (no por tandas cerradas).
+ *  - Turnos abandonados: en espera sin preguntar WAIT_TTL o activo sin
+ *    descargar ACTIVE_TTL => se borran (la pantalla apagada no bloquea).
+ * Un bloqueo con nombre de MySQL (GET_LOCK) evita que dos peticiones a la
+ * vez den más turnos de la cuenta. Ajustes en config.php:
+ * download_slots (por defecto 10) y download_turn_seconds (duración de un
+ * turno mientras la cola no ha aprendido la real; por defecto 60). La
+ * duración REAL se aprende sola (media móvil en sp_kv "dl_turn_avg").
+ */
+final class DownloadQueue
+{
+    /** Pantallas descargando a la vez si config.php no dice otra cosa. */
+    public const DEFAULT_SLOTS = 10;
+    /** En espera sin volver a preguntar durante este tiempo (s) => fuera de la cola. */
+    public const WAIT_TTL = 1200;
+    /** Con turno sin pedir ningún archivo durante este tiempo (s) => turno liberado. */
+    public const ACTIVE_TTL = 600;
+    /** Límites de la espera que se indica a la pantalla (s). */
+    public const MIN_WAIT = 15;
+    public const MAX_WAIT = 600;
+
+    /** @return int Pantallas que pueden descargar a la vez (config download_slots, 1..200). */
+    public static function slots(): int
+    {
+        return max(1, min(200, (int) (AppConfig::get()['download_slots'] ?? self::DEFAULT_SLOTS)));
+    }
+
+    /**
+     * Duración media de un turno (s), para calcular las esperas. Se APRENDE de
+     * las descargas reales (media móvil en sp_kv "dl_turn_avg", ver release());
+     * mientras no hay datos, la de config.php (download_turn_seconds, 60).
+     */
+    public static function turnSeconds(): int
+    {
+        static $cached = null;
+        if ($cached === null) {
+            $stmt = Database::pdo()->prepare('SELECT v FROM sp_kv WHERE k = ?');
+            $stmt->execute(['dl_turn_avg']);
+            $learned = $stmt->fetchColumn();
+            $cached = $learned !== false
+                ? (int) round((float) $learned)
+                : (int) (AppConfig::get()['download_turn_seconds'] ?? 60);
+        }
+        return max(5, min(3600, $cached));
+    }
+
+    /**
+     * Pide (o confirma) el turno de un equipo: lo mete en la cola si no
+     * estaba, purga los abandonados y da turno por orden de llegada hasta
+     * llenar los huecos.
+     * @return array{granted:bool,position:int,waiting:int,active:int,slots:int,retryAfter:int}
+     *         position = puesto en la espera (0 si tiene turno); retryAfter = s hasta volver a preguntar.
+     */
+    public static function request(string $deviceId): array
+    {
+        $pdo = Database::pdo();
+        $locked = (int) $pdo->query("SELECT GET_LOCK('sp_download_queue', 5)")->fetchColumn() === 1;
+        try {
+            $t = time();
+            $now = gmdate('Y-m-d H:i:s', $t);
+            $slots = self::slots();
+            // 1) Turnos abandonados fuera
+            $pdo->prepare(
+                'DELETE FROM sp_download_queue
+                 WHERE (state = \'waiting\' AND seen_at < ?) OR (state = \'active\' AND seen_at < ?)'
+            )->execute([gmdate('Y-m-d H:i:s', $t - self::WAIT_TTL), gmdate('Y-m-d H:i:s', $t - self::ACTIVE_TTL)]);
+            // 2) Entra en la cola (si ya estaba, solo "sigue aquí": conserva su puesto)
+            $pdo->prepare(
+                'INSERT INTO sp_download_queue (device_id, state, created_at, seen_at) VALUES (?, \'waiting\', ?, ?)
+                 ON DUPLICATE KEY UPDATE seen_at = VALUES(seen_at)'
+            )->execute([$deviceId, $now, $now]);
+            // 3) Huecos libres => turno a los primeros en llegar
+            $active = (int) $pdo->query('SELECT COUNT(*) FROM sp_download_queue WHERE state = \'active\'')->fetchColumn();
+            $free = $slots - $active;
+            if ($free > 0) {
+                $pdo->prepare(
+                    'UPDATE sp_download_queue SET state = \'active\', granted_at = ?, seen_at = ?
+                     WHERE state = \'waiting\' ORDER BY id LIMIT ' . $free
+                )->execute([$now, $now]);
+            }
+            // 4) Respuesta para este equipo
+            $stmt = $pdo->prepare('SELECT id, state FROM sp_download_queue WHERE device_id = ?');
+            $stmt->execute([$deviceId]);
+            $row = $stmt->fetch() ?: ['id' => 0, 'state' => 'waiting'];
+            $counts = self::counts();
+            if ($row['state'] === 'active') {
+                return ['granted' => true, 'position' => 0, 'waiting' => $counts['waiting'],
+                        'active' => $counts['active'], 'slots' => $slots, 'retryAfter' => 0];
+            }
+            $pos = $pdo->prepare('SELECT COUNT(*) FROM sp_download_queue WHERE state = \'waiting\' AND id <= ?');
+            $pos->execute([(int) $row['id']]);
+            $position = max(1, (int) $pos->fetchColumn());
+            // Espera PROPORCIONAL al puesto exacto: delante tiene position pantallas
+            // que se atienden de slots en slots, cada turno ~turnSeconds. Los
+            // primeros vuelven pronto (mín. MIN_WAIT) para no dejar huecos vacíos;
+            // los del final, tarde (máx. MAX_WAIT): esperar no carga el servidor.
+            $wait = (int) round($position / $slots * self::turnSeconds());
+            return ['granted' => false, 'position' => $position, 'waiting' => $counts['waiting'],
+                    'active' => $counts['active'], 'slots' => $slots,
+                    'retryAfter' => max(self::MIN_WAIT, min(self::MAX_WAIT, $wait))];
+        } finally {
+            if ($locked) {
+                $pdo->query("SELECT RELEASE_LOCK('sp_download_queue')");
+            }
+        }
+    }
+
+    /**
+     * Libera el turno (o la espera) de un equipo: al terminar sus descargas.
+     * Si tenía turno, su duración actualiza la media aprendida (dl_turn_avg:
+     * 80 % la anterior + 20 % la nueva) para que las esperas se ajusten solas
+     * a la conexión y al tamaño de los archivos.
+     */
+    public static function release(string $deviceId): void
+    {
+        $pdo = Database::pdo();
+        $stmt = $pdo->prepare('SELECT state, granted_at FROM sp_download_queue WHERE device_id = ?');
+        $stmt->execute([$deviceId]);
+        $row = $stmt->fetch();
+        $pdo->prepare('DELETE FROM sp_download_queue WHERE device_id = ?')->execute([$deviceId]);
+        if ($row && $row['state'] === 'active' && !empty($row['granted_at'])) {
+            $took = max(1, min(3600, time() - (int) strtotime($row['granted_at'] . ' UTC')));
+            $pdo->prepare(
+                'INSERT INTO sp_kv (k, v, updated_at) VALUES (?, ?, ?)
+                 ON DUPLICATE KEY UPDATE v = ROUND(0.8 * v + 0.2 * VALUES(v), 2), updated_at = VALUES(updated_at)'
+            )->execute(['dl_turn_avg', (string) $took, Database::now()]);
+        }
+    }
+
+    /** @return array{active:int,waiting:int} Turnos en curso y en espera (sin contar los ya caducados). */
+    public static function counts(): array
+    {
+        $t = time();
+        $stmt = Database::pdo()->prepare(
+            'SELECT state, COUNT(*) n FROM sp_download_queue
+             WHERE (state = \'waiting\' AND seen_at >= ?) OR (state = \'active\' AND seen_at >= ?)
+             GROUP BY state'
+        );
+        $stmt->execute([gmdate('Y-m-d H:i:s', $t - self::WAIT_TTL), gmdate('Y-m-d H:i:s', $t - self::ACTIVE_TTL)]);
+        $out = ['active' => 0, 'waiting' => 0];
+        foreach ($stmt as $r) {
+            $out[$r['state']] = (int) $r['n'];
+        }
+        return $out;
+    }
+
+    /**
+     * Resumen para el panel del administrador.
+     * @return array{active:int,waiting:int,slots:int,etaSeconds:int} etaSeconds = tiempo estimado hasta vaciar la cola.
+     */
+    public static function status(): array
+    {
+        $c = self::counts();
+        $slots = self::slots();
+        return $c + ['slots' => $slots,
+            'etaSeconds' => (int) ceil(($c['waiting'] + $c['active']) / $slots) * self::turnSeconds()];
     }
 }
 
