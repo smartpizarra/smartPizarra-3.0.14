@@ -1,0 +1,573 @@
+<!doctype html>
+<!-- Versión del archivo: 1.0.0 (2026-11-15) -->
+<!--
+=====================================================================
+  SMART PIZARRA - ACTUALIZADOR EN SEGUNDO PLANO (refresh.html)
+  PARA ANDROID WEBVIEW (assets de Kodular: refresh)
+=====================================================================
+  QUÉ HACE (no muestra contenido ni mensajes: solo el fondo #002B4F)
+    - Vigila la CONEXIÓN A INTERNET: avisa al momento cuando se cae y
+      cuando vuelve (JSON "offline" / "online").
+    - Cada CHECK_MS (30 s) consulta smartpizarra.cloud (api/device.php,
+      igual que none.html): eso ACTUALIZA EL TIMESTAMP del equipo en el
+      servidor ("última conexión" del panel: online_at / last_seen_at).
+    - ACTUALIZA EL localStorage con lo que responda el servidor, solo si
+      cambió: autorización, ruta, contenido habilitado y nombre.
+    - Devuelve a Kodular UN JSON tras cada consulta.
+
+  SETTINGS (localStorage). Los crea loading.html.
+    Lee:      "smartpizarra.deviceId" / ".deviceSecret" / ".apiUrl"   para consultar
+              "smartpizarra.version" / ".url" / ".email" / ".orientation" /
+              ".language" / ".scale"                                   solo en el JSON
+    Escribe:  "smartpizarra.authorized"    "1" | "0"
+              "smartpizarra.routeUrl"      URL de la ruta (NO_ROUTE_URL = "none" sin ruta)
+              "smartpizarra.mediaEnabled"  "true" | "false"
+              "smartpizarra.deviceName"    nombre en el panel ("" sin nombre)
+    (mismos bloques y reglas que loading, config, connection, fingerprint,
+    mirror y none)
+
+  CONTRATO DE SALIDA: UN JSON tras CADA consulta (la primera al abrir):
+    {"origin":"refresh",
+     "action":"check|update|offline|online",
+        check   = consulta normal sin cambios (cada 30 s)
+        update  = el servidor cambió algo y se actualizó el localStorage
+        offline = se cayó internet (al momento)
+        online  = volvió internet (al momento)
+     "status":"ok|error",
+     "internetStatus":"online|offline", "httpStatus":200|403|0...,
+     "authorized":true|false,
+     "authStatus":"authorized|pending|revoked|conflict|unknown",
+     "changed":true|false, "changes":["authorized","routeUrl","mediaEnabled","deviceName"],
+     "routeUrl":"none"|"https://...", "hasRoute":true|false,
+     "mediaEnabled":true|false, "deviceName":"...",
+     "lastCheck": hora de la consulta (ms desde 1970),
+     "error":"", "version","url","email","deviceId","orientation",
+     "language","scale" (null si no existen)}
+    status "error" = sin respuesta válida (sin internet o error): no se toca
+    el localStorage y los datos del JSON son los guardados.
+    Sin deviceId / secreto / apiUrl no hay consulta y no se envía nada.
+
+  CAÍDA DE INTERNET: 2 consultas seguidas sin respuesta (la 2ª a los 3 s),
+  1 si Android avisa de que no hay red, o la primera al abrir sin internet.
+  Sin conexión se comprueba cada 5 -> 10 -> 20 -> 40 -> 60 s (para avisar
+  pronto al volver) y el JSON "check" sigue saliendo cada 30 s, no más.
+  Con error 5xx del servidor: 30 s -> 1 -> 2 -> 5 min. Cada espera lleva un
+  margen al azar ±10 % (cientos de pantallas no consultan a la vez).
+  "Conexión" = el servidor responde (cualquier código HTTP).
+
+  SEGUNDO PLANO: a diferencia de las demás páginas, SIGUE consultando
+  aunque la WebView esté oculta (es su trabajo; puede ir en un
+  WebViewer invisible de Kodular).
+
+  FUNCIONES PÚBLICAS (la app las llama con RunJavaScript / EvaluateJS)
+    refreshCheck()    Consulta ya el servidor y envía el JSON.
+    refreshStatus()   Texto JSON con el último estado (sin consultar).
+
+  RENDIMIENTO (TV box): sin elementos, sin animaciones, sin pintar nada
+  más que el fondo; una petición pequeña cada 30 s. JavaScript ES5.
+  Sin recursos externos.
+=====================================================================
+-->
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Smart Pizarra</title>
+    <style>
+      /* Solo el fondo: #002B4FFF (opaco) = #002B4F. Nada más se pinta. */
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #002b4f;
+      }
+    </style>
+  </head>
+  <body>
+    <script>
+      // Todo dentro de una IIFE; lo público se publica en window.*
+      (function () {
+        "use strict";
+
+        /* ==================================================================
+           1. CONFIGURACIÓN
+           ================================================================== */
+
+        var CHECK_MS = 30000; // consulta al servidor (timestamp) y JSON a la app
+        var CHECK_TIMEOUT_MS = 8000; // espera máxima de una consulta
+        var CHECK_OFFLINE_MS = 5000; // sin internet: primera re-comprobación
+        var CHECK_OFFLINE_MAX_MS = 60000; // ... se duplica hasta 60 s
+        var RETRY_MS = 3000; // un fallo estando conectado: se confirma a los 3 s
+        var ERROR_MAX_MS = 5 * 60000; // error 5xx: espera creciente hasta 5 min
+        var JITTER = 0.1; // margen aleatorio ±10 % de cada espera
+        var FAILURES_TO_OFFLINE = 2; // fallos seguidos para declarar la caída
+
+        /** Claves de localStorage (iguales a CONFIG.settings de loading.html). */
+        var KEYS = {
+          orientation: "smartpizarra.orientation",
+          language: "smartpizarra.language",
+          deviceId: "smartpizarra.deviceId",
+          deviceSecret: "smartpizarra.deviceSecret", // nunca va en el JSON
+          apiUrl: "smartpizarra.apiUrl", // https://smartpizarra.cloud/api/device.php
+          authorized: "smartpizarra.authorized",
+          version: "smartpizarra.version",
+          url: "smartpizarra.url",
+          email: "smartpizarra.email",
+          appScale: "smartpizarra.scale",
+        };
+        var ORIENTATIONS = [0, 90, 180, 270];
+        var LANGUAGES = ["es", "en"];
+
+        /* ------------------------------------------------------------------
+         * RUTA DEL EQUIPO (2026-11-12). URL de la ruta del usuario con la liga
+         * de ESTE equipo dentro; "none" (NO_ROUTE_URL) = sin ruta.
+         * MISMO bloque en loading, config, connection, fingerprint, mirror, none
+         * y refresh.
+         * ---------------------------------------------------------------- */
+        var DEVICE_ROUTE_KEY = "smartpizarra.routeUrl";
+        var NO_ROUTE_URL = "none";
+        var OLD_NO_ROUTE_RE =
+          /^https?:\/\/(www\.)?smartpizarra\.cloud\/none\/?$/i;
+
+        /** @returns {string} URL http(s) válida (sin espacios ni comillas, máx. 2000) o "". */
+        function cleanRouteUrl(value) {
+          var v = typeof value === "string" ? value.trim() : "";
+          if (OLD_NO_ROUTE_RE.test(v)) return ""; // antigua página del servidor => NO_ROUTE_URL
+          return /^https?:\/\/[^\s"'<>]{1,2000}$/.test(v) ? v : "";
+        }
+
+        /** @returns {string} Ruta guardada (NO_ROUTE_URL si no hay o no es válida). */
+        function readDeviceRoute() {
+          try {
+            return (
+              cleanRouteUrl(window.localStorage.getItem(DEVICE_ROUTE_KEY)) ||
+              NO_ROUTE_URL
+            );
+          } catch (e) {
+            return NO_ROUTE_URL;
+          }
+        }
+
+        /**
+         * Guarda la ruta de una respuesta del servidor (solo si trae deviceRoute:
+         * equipos autorizados; null = sin ruta => NO_ROUTE_URL).
+         * @returns {boolean} true si cambió.
+         */
+        function storeDeviceRoute(res) {
+          if (
+            !res ||
+            typeof res !== "object" ||
+            !Object.prototype.hasOwnProperty.call(res, "deviceRoute")
+          ) {
+            return false;
+          }
+          var url = cleanRouteUrl(res.deviceRoute) || NO_ROUTE_URL;
+          try {
+            var ls = window.localStorage;
+            // Restos de cuando la liga se guardaba aparte (ahora va en la URL)
+            ls.removeItem("smartpizarra.league");
+            ls.removeItem("smartpizarra.leagues");
+            ls.removeItem("smartpizarra.leagueOptions");
+            if (ls.getItem(DEVICE_ROUTE_KEY) === url) return false;
+            ls.setItem(DEVICE_ROUTE_KEY, url);
+          } catch (e) {
+            return false;
+          }
+          return true;
+        }
+
+        /* ------------------------------------------------------------------
+         * NOMBRE DEL DISPOSITIVO (2026-11-13): "deviceName" de la respuesta
+         * ("" = sin nombre) en "smartpizarra.deviceName".
+         * MISMO bloque en loading, config, connection, fingerprint, mirror, none
+         * y refresh.
+         * ---------------------------------------------------------------- */
+        var DEVICE_NAME_KEY = "smartpizarra.deviceName";
+
+        /** @returns {boolean} true si cambió. */
+        function storeDeviceName(res) {
+          if (!res || typeof res !== "object" || typeof res.deviceName !== "string") return false;
+          var v = res.deviceName.replace(/[\x00-\x1F\x7F]+/g, " ").trim().slice(0, 100);
+          try {
+            if (window.localStorage.getItem(DEVICE_NAME_KEY) === v) return false;
+            window.localStorage.setItem(DEVICE_NAME_KEY, v);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        /** @returns {string} Nombre guardado ("" si no tiene). */
+        function readDeviceName() {
+          try {
+            return (window.localStorage.getItem(DEVICE_NAME_KEY) || "").trim();
+          } catch (e) {
+            return "";
+          }
+        }
+
+        /* ------------------------------------------------------------------
+         * CONTENIDO HABILITADO (2026-11-12): "mediaEnabled" de la respuesta
+         * (true/false) en "smartpizarra.mediaEnabled" ("true"/"false").
+         * MISMO bloque en loading, config, connection, fingerprint, mirror, none
+         * y refresh.
+         * ---------------------------------------------------------------- */
+        var MEDIA_ENABLED_KEY = "smartpizarra.mediaEnabled";
+        // Formato anterior "1"/"0" => "true"/"false" (al abrir cualquier página)
+        (function () {
+          try {
+            var old = window.localStorage.getItem(MEDIA_ENABLED_KEY);
+            if (old === "1" || old === "0")
+              window.localStorage.setItem(
+                MEDIA_ENABLED_KEY,
+                old === "1" ? "true" : "false",
+              );
+          } catch (e) {}
+        })();
+
+        /** @returns {boolean} true si cambió. */
+        function storeMediaEnabled(res) {
+          if (
+            !res ||
+            typeof res !== "object" ||
+            typeof res.mediaEnabled !== "boolean"
+          )
+            return false;
+          var v = res.mediaEnabled ? "true" : "false";
+          try {
+            if (window.localStorage.getItem(MEDIA_ENABLED_KEY) === v)
+              return false;
+            window.localStorage.setItem(MEDIA_ENABLED_KEY, v);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        /** @returns {boolean} Permiso guardado (false si no se sabe). */
+        function readMediaEnabled() {
+          try {
+            var v = window.localStorage.getItem(MEDIA_ENABLED_KEY);
+            return v === "true" || v === "1"; // "1" = formato anterior
+          } catch (e) {
+            return false;
+          }
+        }
+
+        /* ==================================================================
+           2. SETTINGS (localStorage)
+           ================================================================== */
+
+        function readStorage(key) {
+          try {
+            return window.localStorage.getItem(key);
+          } catch (e) {
+            return null;
+          }
+        }
+
+        /** @returns {boolean} true si el valor cambió. */
+        function writeStorageIfChanged(key, value) {
+          try {
+            if (window.localStorage.getItem(key) === value) return false;
+            window.localStorage.setItem(key, value);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        /** @returns {string|null} Texto sin espacios sobrantes, o null si falta. */
+        function readText(key) {
+          var raw = readStorage(key);
+          var text = raw === null ? "" : String(raw).trim();
+          return text !== "" ? text : null;
+        }
+
+        /** @returns {number|null} 0/90/180/270, o null. */
+        function readOrientation() {
+          var degrees = parseInt(readStorage(KEYS.orientation), 10);
+          if (isNaN(degrees)) return null;
+          degrees = ((degrees % 360) + 360) % 360;
+          return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
+        }
+
+        /** @returns {string|null} Idioma guardado o null. */
+        function readLanguage() {
+          var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
+          return LANGUAGES.indexOf(code) === -1 ? null : code;
+        }
+
+        /** Escala para la app (10..300 %) como factor, o null. */
+        function readAppScale() {
+          var p = parseInt(readStorage(KEYS.appScale), 10);
+          return p >= 10 && p <= 300 ? p / 100 : null;
+        }
+
+        /** Agrega a un mensaje los settings leídos AHORA (null en los que no existen). */
+        function withSettings(msg) {
+          msg.routeUrl = readDeviceRoute();
+          msg.hasRoute = msg.routeUrl !== NO_ROUTE_URL;
+          msg.mediaEnabled = readMediaEnabled();
+          msg.deviceName = readDeviceName();
+          msg.version = readText(KEYS.version);
+          msg.url = readText(KEYS.url);
+          msg.email = readText(KEYS.email);
+          msg.deviceId = readText(KEYS.deviceId);
+          msg.orientation = readOrientation();
+          msg.language = readLanguage();
+          msg.scale = readAppScale();
+          return msg;
+        }
+
+        /* ==================================================================
+           3. COMUNICACIÓN CON LA APP
+           ================================================================== */
+
+        /** Envía un texto a la app probando 4 métodos (igual que las demás páginas). */
+        function sendToAppInventor(message) {
+          try {
+            if (window.AppInventor && window.AppInventor.setWebViewString) {
+              window.AppInventor.setWebViewString(message); // Kodular / App Inventor
+            } else if (window.android && window.android.onReceiveValue) {
+              window.android.onReceiveValue(message);
+            } else if (
+              window.androidInterface &&
+              window.androidInterface.onReceiveValue
+            ) {
+              window.androidInterface.onReceiveValue(message);
+            } else {
+              window.postMessage(message, "*"); // navegador normal (pruebas)
+            }
+          } catch (e) {
+            console.log("Error enviando a AppInventor:", e);
+          }
+        }
+
+        /* ==================================================================
+           4. CONSULTA AL SERVIDOR (api/device.php) = TIMESTAMP + DATOS
+           ================================================================== */
+
+        var refresh = {
+          timer: null,
+          busy: false,
+          last: null, // último JSON (para refreshStatus)
+          net: "unknown", // unknown | online | offline
+          failures: 0, // consultas seguidas sin respuesta
+          lastSent: 0, // hora del último JSON enviado (ms)
+          offlineDelay: CHECK_OFFLINE_MS,
+          serverErrors: 0, // respuestas 5xx seguidas
+
+          /** Programa la siguiente consulta (con margen al azar). */
+          schedule: function (ms) {
+            var self = this;
+            clearTimeout(this.timer);
+            var wait = Math.round(ms * (1 - JITTER + Math.random() * 2 * JITTER));
+            this.timer = setTimeout(function () {
+              self.run();
+            }, wait);
+          },
+
+          /** POST form-urlencoded (sin verificación previa CORS en el WebView). */
+          request: function (apiUrl, id, secret) {
+            return new Promise(function (resolve) {
+              var done = false;
+              function finish(http, data) {
+                if (done) return;
+                done = true;
+                resolve({ http: http, data: data });
+              }
+              try {
+                var xhr = new XMLHttpRequest();
+                xhr.open("POST", apiUrl, true);
+                xhr.timeout = CHECK_TIMEOUT_MS;
+                xhr.setRequestHeader(
+                  "Content-Type",
+                  "application/x-www-form-urlencoded",
+                );
+                xhr.onload = function () {
+                  var data = null;
+                  try {
+                    data = JSON.parse(xhr.responseText);
+                  } catch (e) {
+                    data = null;
+                  }
+                  finish(xhr.status, data);
+                };
+                xhr.onerror =
+                  xhr.ontimeout =
+                  xhr.onabort =
+                    function () {
+                      finish(0, null);
+                    };
+                xhr.send(
+                  "deviceId=" +
+                    encodeURIComponent(id) +
+                    "&secret=" +
+                    encodeURIComponent(secret) +
+                    "&version=" +
+                    encodeURIComponent(readText(KEYS.version) || ""),
+                );
+              } catch (e) {
+                finish(0, null);
+              }
+            });
+          },
+
+          /**
+           * Guarda en localStorage lo que respondió el servidor.
+           * @returns {string[]} Claves que cambiaron.
+           */
+          store: function (d, authStatus) {
+            var changes = [];
+            var authorized = authStatus === "authorized" ? "1" : "0";
+            if (writeStorageIfChanged(KEYS.authorized, authorized)) changes.push("authorized");
+            if (authStatus === "conflict") return changes; // sin datos del equipo
+            if (storeDeviceRoute(d)) changes.push("routeUrl"); // solo autorizados la traen
+            if (storeMediaEnabled(d)) changes.push("mediaEnabled");
+            if (storeDeviceName(d)) changes.push("deviceName");
+            return changes;
+          },
+
+          /**
+           * Una consulta + el JSON a la app. Nunca dos a la vez.
+           * El JSON sale al cambiar la conexión, cuando cambió algo del
+           * servidor, cada CHECK_MS en la consulta normal y siempre con force
+           * (al abrir y con refreshCheck()).
+           * @param {boolean} [force] Enviar el JSON aunque no haya cambios.
+           */
+          run: function (force) {
+            var self = this;
+            clearTimeout(this.timer);
+            if (this.busy) return;
+            var id = readText(KEYS.deviceId);
+            var secret = readText(KEYS.deviceSecret);
+            var apiUrl = readText(KEYS.apiUrl);
+            if (!id || !secret || !apiUrl) {
+              this.schedule(CHECK_MS); // sin credenciales: nada que consultar ni enviar
+              return;
+            }
+            this.busy = true;
+            this.request(apiUrl, id, secret).then(function (r) {
+              var d = r.data;
+              var ok = !!(d && d.ok === true);
+              var authStatus = "unknown";
+              if (r.http === 403 && d && d.error === "secret_mismatch") {
+                authStatus = "conflict"; // el ID está registrado con otro secreto
+              } else if (ok) {
+                authStatus =
+                  d.authorized === true
+                    ? "authorized"
+                    : d.status === "revoked"
+                      ? "revoked"
+                      : "pending";
+              }
+              var answered = ok || authStatus === "conflict";
+              var changes = answered ? self.store(d, authStatus) : [];
+
+              // ---- ¿Se cayó o volvió internet? ----
+              var reached = r.http !== 0; // cualquier respuesta HTTP = hay conexión
+              var change = ""; // "offline" | "online" | ""
+              var next = CHECK_MS;
+              if (reached) {
+                self.failures = 0;
+                self.offlineDelay = CHECK_OFFLINE_MS;
+                if (self.net === "offline") change = "online";
+                self.net = "online";
+                if (r.http >= 500) {
+                  self.serverErrors++;
+                  next = Math.min(ERROR_MAX_MS, CHECK_MS * Math.pow(2, self.serverErrors - 1));
+                } else {
+                  self.serverErrors = 0;
+                }
+              } else {
+                self.failures++;
+                var lost =
+                  self.net === "unknown" ||
+                  self.failures >= FAILURES_TO_OFFLINE ||
+                  navigator.onLine === false;
+                if (self.net !== "offline" && lost) {
+                  change = "offline";
+                  self.net = "offline";
+                }
+                if (self.net === "offline") {
+                  next = self.offlineDelay;
+                  self.offlineDelay = Math.min(CHECK_OFFLINE_MAX_MS, self.offlineDelay * 2);
+                } else {
+                  next = RETRY_MS; // primer fallo estando conectado: se confirma, sin JSON aún
+                }
+              }
+
+              var due = Date.now() - self.lastSent >= CHECK_MS - 1000; // toca el periódico
+              var send =
+                force ||
+                change !== "" ||
+                changes.length > 0 ||
+                (due && (reached || self.net === "offline"));
+              var msg = withSettings({
+                origin: "refresh",
+                action: change || (changes.length ? "update" : "check"),
+                status: answered ? "ok" : "error",
+                internetStatus: reached ? "online" : "offline",
+                httpStatus: r.http,
+                authorized: answered
+                  ? authStatus === "authorized"
+                  : readStorage(KEYS.authorized) === "1",
+                authStatus: authStatus,
+                changed: changes.length > 0,
+                changes: changes,
+                lastCheck: Date.now(),
+                error: answered ? "" : r.http ? "HTTP " + r.http : "sin respuesta",
+              });
+              self.last = msg;
+              if (send) {
+                sendToAppInventor(JSON.stringify(msg));
+                self.lastSent = Date.now();
+              }
+              self.busy = false;
+              self.schedule(next);
+            });
+          },
+        };
+
+        /* ==================================================================
+           5. INICIO Y API PÚBLICA
+           ================================================================== */
+
+        window.refreshCheck = function () {
+          refresh.run(true);
+        };
+
+        window.refreshStatus = function () {
+          return JSON.stringify(
+            refresh.last ||
+              withSettings({ origin: "refresh", action: "status", lastCheck: null }),
+          );
+        };
+
+        function init() {
+          // Avisos de red de Android/WebView: comprobar ya (la consulta decide
+          // si de verdad se cayó o volvió internet y entonces envía el JSON)
+          window.addEventListener("online", function () {
+            refresh.run();
+          });
+          window.addEventListener("offline", function () {
+            refresh.run();
+          });
+          refresh.run(true); // primera consulta (y primer JSON) al abrir
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", init);
+        } else {
+          init();
+        }
+      })();
+    </script>
+  </body>
+</html>
