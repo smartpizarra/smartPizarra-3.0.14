@@ -1,0 +1,6 @@
+# Versión del archivo: 1.0.0 (2026-11-15)
+# Salidas de PyInstaller (el .exe pesa ~80 MB: se genera con build_exe.bat)
+build/
+dist/
+*.spec
+__pycache__/

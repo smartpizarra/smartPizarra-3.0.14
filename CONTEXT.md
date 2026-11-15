@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.10 (2026-11-13) -->
+<!-- Versión del archivo: 1.0.11 (2026-11-15) -->
 # CONTEXT — smartPizarra 3.0.14
 
 Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras cada cambio significativo.
@@ -111,6 +111,14 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
 - TV box en `adb connect 10.0.0.123:3222` (WebView del sistema 101.0.4951.61, ventana 960x540 CSS px).
 - `loading.html` verificado ahí (2026-11-02) mediante DevTools sobre la WebView de la app SmartPizarra, sirviendo el archivo desde el PC (otro origen, sin tocar el localStorage real de la app): crea claves por defecto, aplica rotación 90/0, repara escala inválida, animación completa, sin errores de consola. Repetido con la revisión periódica: un cambio a 180°/150 % hecho desde la misma página se aplica en ≤1 s.
 - **Ojo (2026-11-02)**: el APK instalado (`io.kodular.smartpizarra.smartPizarra_3_0_14`, `http://localhost/loading.html`) contiene la versión ANTERIOR de `loading.html` (sin settings). Hay que subir el `loading.html` actual a los assets de Kodular y recompilar.
+
+- **Reinicios del TV (2026-11-15)**: la app NO reinicia el equipo. En el APK, `Shell1` solo se crea (nunca se ejecuta) y la rama `action == "reboot"` de config está vacía. El motivo `reboot,shell` es un valor viejo: el arranque marca `fs_stat ... stat:0xb` (bit 0x8 = apagado sucio), es decir, cuelgue o corte de energía, no una orden. Los `eth0 LinkUp!` cada 36 s del log son avisos repetidos del sistema (`carrier_changes` = 1), no caídas. Umbrales térmicos del chip (`/proc/msp/pm_temp`): 100 / 115 / **125 °C reinicio**; con la app en marcha la CPU está a 77–86 °C, con carga media 13–15. Registrador en el TV: `/data/local/tmp/sptemp.sh` → `sptemp.txt` (temperatura, frecuencia, carga, memoria y pid de la app cada 5 s; sobrevive al reinicio). Otras apps con arranque automático: `com.example.boardvisor` (LotScreenVisor, sin órdenes de reinicio) y `com.smartbet.display` (detenida).
+
+## Optimizador de video (`tools/optimizador-video/`, 2026-11-15)
+- App de Windows (Python + tkinter, compilada a un solo `.exe` con PyInstaller mediante `build_exe.bat`; ffmpeg incluido vía `imageio-ffmpeg`). El `.exe` (`dist/`, ~49 MB) no se versiona.
+- Convierte cualquier video a lo óptimo para el TV: **720×1280** (o 1280×720 / según el video), encaje con bordes, fondo difuminado o recorte; **H.264 High nivel 4.0** yuv420p; **fps constantes** (30; 25/24 si el original es 25/50 o 24/48); ~4 Mbps; GOP de 2 s; sin audio (opcional AAC); `faststart`; sin metadatos de giro.
+- Después verifica cada archivo con las mismas reglas que `MediaRepository::videoProblem` (lector MP4 portado a Python). Probado con videos de 60 fps, 4K HEVC, fps variables, girados 90° y .mov a 25 fps: las 20 salidas las acepta el lector PHP del servidor.
+- Motivo de 720p: en el TV, un 1080×1920 con la pantalla girada pierde 15–30 % de los cuadros; uno de 1080×1620 no perdió ninguno.
 
 ## Decisiones técnicas
 - Claves separadas (no un JSON único) para ser compatibles con `config.html`/`connection.html`/`fingerprint.html` de la versión anterior, que usan `smartpizarra.orientation` y `smartpizarra.scale`.
