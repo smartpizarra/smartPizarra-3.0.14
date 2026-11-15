@@ -1,11 +1,33 @@
 <!doctype html>
-<!-- Versión del archivo: 1.0.0 (2026-11-15) -->
+<!-- Versión del archivo: 1.0.2 (2026-11-15) -->
 <!--
 =====================================================================
   SMART PIZARRA - ACTUALIZADOR EN SEGUNDO PLANO (refresh.html)
   PARA ANDROID WEBVIEW (assets de Kodular: refresh)
 =====================================================================
-  QUÉ HACE (no muestra contenido ni mensajes: solo el fondo #002B4F)
+  AL ABRIRSE, AL INSTANTE Y EN ESTE ORDEN (2026-11-15):
+    1. Verifica la conexión a internet (si Android dice que no hay red,
+       se da por caída sin esperar a la consulta).
+    2. Consulta el servidor (api/device.php): actualiza su timestamp.
+    3. Si el servidor trae algo distinto, actualiza el localStorage.
+    4. Envía UN JSON a Kodular, ya con los datos actualizados.
+  Después repite lo mismo cada 30 s.
+
+  PANTALLA: solo el fondo #002B4F (#002B4FFF opaco), sin contenido.
+  ÚNICA EXCEPCIÓN (2026-11-15): si HAY internet pero el servidor no
+  responde lo esperado, se muestra "Intentando conectar con el servidor…"
+  hasta que vuelva a responder bien. Casos:
+    - responde con error (5xx, 404, 429, 400, respuesta que no es JSON)
+      => hay internet, falla el servidor;
+    - no responde nada => se prueba internet con INTERNET_PROBES
+      (generate_204 de Google, la misma comprobación que usa Android; no
+      envía ningún dato): si contesta, hay internet y falla el servidor;
+      si no, NO hay internet (JSON "offline", sin mensaje en pantalla).
+  El mensaje respeta orientación e idioma (smartpizarra.orientation /
+  .language) y protege la pantalla: cambia de sitio cada DRIFT_MS (60 s),
+  sin blanco puro ni animaciones.
+
+  QUÉ HACE
     - Vigila la CONEXIÓN A INTERNET: avisa al momento cuando se cae y
       cuando vuelve (JSON "offline" / "online").
     - Cada CHECK_MS (30 s) consulta smartpizarra.cloud (api/device.php,
@@ -17,8 +39,8 @@
 
   SETTINGS (localStorage). Los crea loading.html.
     Lee:      "smartpizarra.deviceId" / ".deviceSecret" / ".apiUrl"   para consultar
-              "smartpizarra.version" / ".url" / ".email" / ".orientation" /
-              ".language" / ".scale"                                   solo en el JSON
+              "smartpizarra.orientation" / ".language"   giro e idioma del mensaje
+              "smartpizarra.version" / ".url" / ".email" / ".scale"   solo en el JSON
     Escribe:  "smartpizarra.authorized"    "1" | "0"
               "smartpizarra.routeUrl"      URL de la ruta (NO_ROUTE_URL = "none" sin ruta)
               "smartpizarra.mediaEnabled"  "true" | "false"
@@ -34,7 +56,12 @@
         offline = se cayó internet (al momento)
         online  = volvió internet (al momento)
      "status":"ok|error",
-     "internetStatus":"online|offline", "httpStatus":200|403|0...,
+     "internetStatus":"online|offline",
+     "serverStatus":"ok|error|unreachable|unknown",
+        ok = respondió lo esperado; error = respondió con error;
+        unreachable = no respondió pero hay internet; unknown = sin internet
+     "connecting":true|false (se está mostrando el mensaje en pantalla),
+     "httpStatus":200|403|500|0...,
      "authorized":true|false,
      "authStatus":"authorized|pending|revoked|conflict|unknown",
      "changed":true|false, "changes":["authorized","routeUrl","mediaEnabled","deviceName"],
@@ -43,17 +70,17 @@
      "lastCheck": hora de la consulta (ms desde 1970),
      "error":"", "version","url","email","deviceId","orientation",
      "language","scale" (null si no existen)}
-    status "error" = sin respuesta válida (sin internet o error): no se toca
-    el localStorage y los datos del JSON son los guardados.
+    status "error" = sin respuesta válida: no se toca el localStorage y los
+    datos del JSON son los guardados.
     Sin deviceId / secreto / apiUrl no hay consulta y no se envía nada.
 
-  CAÍDA DE INTERNET: 2 consultas seguidas sin respuesta (la 2ª a los 3 s),
-  1 si Android avisa de que no hay red, o la primera al abrir sin internet.
-  Sin conexión se comprueba cada 5 -> 10 -> 20 -> 40 -> 60 s (para avisar
-  pronto al volver) y el JSON "check" sigue saliendo cada 30 s, no más.
-  Con error 5xx del servidor: 30 s -> 1 -> 2 -> 5 min. Cada espera lleva un
-  margen al azar ±10 % (cientos de pantallas no consultan a la vez).
-  "Conexión" = el servidor responde (cualquier código HTTP).
+  ESPERAS
+    - Sin internet: 2 fallos seguidos (el 2º a los 3 s), 1 si Android avisa
+      de que no hay red, o el primero al abrir. Se comprueba cada
+      5 -> 10 -> 20 -> 40 -> 60 s; el JSON "check" sale cada 30 s, no más.
+    - Servidor que no responde bien (con internet): 2º intento a los 3 s y
+      después 30 s -> 1 -> 2 -> 5 min (cientos de pantallas no lo saturan).
+    - Cada espera lleva un margen al azar ±10 %.
 
   SEGUNDO PLANO: a diferencia de las demás páginas, SIGUE consultando
   aunque la WebView esté oculta (es su trabajo; puede ir en un
@@ -63,9 +90,9 @@
     refreshCheck()    Consulta ya el servidor y envía el JSON.
     refreshStatus()   Texto JSON con el último estado (sin consultar).
 
-  RENDIMIENTO (TV box): sin elementos, sin animaciones, sin pintar nada
-  más que el fondo; una petición pequeña cada 30 s. JavaScript ES5.
-  Sin recursos externos.
+  RENDIMIENTO (TV box): sin animaciones; el mensaje solo se redibuja al
+  cambiar de sitio (1 vez/min). Una petición pequeña cada 30 s.
+  JavaScript ES5. Sin recursos externos.
 =====================================================================
 -->
 <html lang="es">
@@ -77,7 +104,7 @@
     />
     <title>Smart Pizarra</title>
     <style>
-      /* Solo el fondo: #002B4FFF (opaco) = #002B4F. Nada más se pinta. */
+      /* Fondo #002B4FFF (opaco) = #002B4F */
       html,
       body {
         margin: 0;
@@ -85,10 +112,66 @@
         height: 100%;
         overflow: hidden;
         background: #002b4f;
+        font-family: Roboto, "Segoe UI", Tahoma, Arial, sans-serif;
+      }
+
+      /* #stage: pantalla girada 0/90/180/270 (el JS fija tamaño, giro y letra
+         base = 4 % del lado corto). Oculto mientras no hay mensaje. */
+      #stage {
+        position: absolute;
+        left: 0;
+        top: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+      }
+
+      #stage.show {
+        display: flex;
+      }
+
+      /* Mensaje (sin blanco puro; se mueve con transform cada minuto) */
+      #box {
+        text-align: center;
+        color: rgba(226, 236, 246, 0.85);
+        max-width: 85%;
+      }
+
+      #box .icon {
+        width: 3.2em;
+        height: 3.2em;
+        color: #86c7e8;
+        margin-bottom: 0.8em;
+      }
+
+      #title {
+        font-size: 1.5em;
+        font-weight: 700;
+        line-height: 1.3;
+      }
+
+      #detail {
+        margin-top: 0.6em;
+        font-size: 0.9em;
+        opacity: 0.7;
       }
     </style>
   </head>
   <body>
+    <div id="stage">
+      <div id="box">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="currentColor"
+            d="M12 4a8 8 0 0 0-8 8H2l3 3.5L8 12H6a6 6 0 1 1 1.76 4.24l-1.42 1.42A8 8 0 1 0 12 4zm-1 4v5l4.25 2.52.77-1.28L12.5 12.2V8H11z"
+          />
+        </svg>
+        <div id="title"></div>
+        <div id="detail"></div>
+      </div>
+    </div>
+
     <script>
       // Todo dentro de una IIFE; lo público se publica en window.*
       (function () {
@@ -102,10 +185,20 @@
         var CHECK_TIMEOUT_MS = 8000; // espera máxima de una consulta
         var CHECK_OFFLINE_MS = 5000; // sin internet: primera re-comprobación
         var CHECK_OFFLINE_MAX_MS = 60000; // ... se duplica hasta 60 s
-        var RETRY_MS = 3000; // un fallo estando conectado: se confirma a los 3 s
-        var ERROR_MAX_MS = 5 * 60000; // error 5xx: espera creciente hasta 5 min
+        var RETRY_MS = 3000; // primer fallo estando conectado: se repite a los 3 s
+        var ERROR_MAX_MS = 5 * 60000; // servidor fallando: espera creciente hasta 5 min
         var JITTER = 0.1; // margen aleatorio ±10 % de cada espera
         var FAILURES_TO_OFFLINE = 2; // fallos seguidos para declarar la caída
+        // ¿Hay internet aunque el servidor no responda? (respuesta vacía 204, sin datos)
+        var INTERNET_PROBES = [
+          "https://www.gstatic.com/generate_204",
+          "https://connectivitycheck.gstatic.com/generate_204",
+        ];
+        var PROBE_TIMEOUT_MS = 5000;
+        var WATCH_MS = 1000; // relectura de orientación e idioma (con mensaje)
+        var DRIFT_MS = 60000; // protección de pantalla: salto del mensaje
+        var MAX_SHIFT = 0.12; // salto máximo: 12 % del lado corto
+        var MIN_STEP = 0.03; // cada salto mueve al menos un 3 % del lado corto
 
         /** Claves de localStorage (iguales a CONFIG.settings de loading.html). */
         var KEYS = {
@@ -121,7 +214,19 @@
           appScale: "smartpizarra.scale",
         };
         var ORIENTATIONS = [0, 90, 180, 270];
-        var LANGUAGES = ["es", "en"];
+
+        /** Textos del mensaje (claves de idioma iguales a I18N de loading.html). */
+        var I18N = {
+          es: {
+            title: "Intentando conectar con el servidor…",
+            detail: "Se reintentará automáticamente.",
+          },
+          en: {
+            title: "Trying to connect to the server…",
+            detail: "It will retry automatically.",
+          },
+        };
+        var DISPLAY_LANGUAGE = "es"; // si la clave aún no existe
 
         /* ------------------------------------------------------------------
          * RUTA DEL EQUIPO (2026-11-12). URL de la ruta del usuario con la liga
@@ -297,10 +402,10 @@
           return ORIENTATIONS.indexOf(degrees) === -1 ? null : degrees;
         }
 
-        /** @returns {string|null} Idioma guardado o null. */
+        /** @returns {string|null} Idioma guardado (clave de I18N) o null. */
         function readLanguage() {
           var code = (readStorage(KEYS.language) || "").trim().toLowerCase();
-          return LANGUAGES.indexOf(code) === -1 ? null : code;
+          return Object.prototype.hasOwnProperty.call(I18N, code) ? code : null;
         }
 
         /** Escala para la app (10..300 %) como factor, o null. */
@@ -350,7 +455,111 @@
         }
 
         /* ==================================================================
-           4. CONSULTA AL SERVIDOR (api/device.php) = TIMESTAMP + DATOS
+           4. MENSAJE "INTENTANDO CONECTAR CON EL SERVIDOR"
+           Oculto salvo cuando hay internet y el servidor no responde bien.
+           Gira con la orientación, usa el idioma global y cambia de sitio
+           cada DRIFT_MS (protección de pantalla, sin animaciones).
+           ================================================================== */
+
+        var notice = {
+          stage: null,
+          box: null,
+          shown: false,
+          layout: "", // última orientación|tamaño aplicada
+          language: "",
+          x: 0,
+          y: 0,
+          watchTimer: null,
+          driftTimer: null,
+
+          init: function () {
+            this.stage = document.getElementById("stage");
+            this.box = document.getElementById("box");
+          },
+
+          /** Muestra u oculta el mensaje (los relojes solo corren con él visible). */
+          set: function (show) {
+            var self = this;
+            if (show === this.shown) return;
+            this.shown = show;
+            this.stage.className = show ? "show" : "";
+            clearInterval(this.watchTimer);
+            clearInterval(this.driftTimer);
+            if (!show) return;
+            this.layout = "";
+            this.language = "";
+            this.watch();
+            this.watchTimer = setInterval(function () {
+              self.watch();
+            }, WATCH_MS);
+            this.driftTimer = setInterval(function () {
+              self.drift();
+            }, DRIFT_MS);
+          },
+
+          /** Aplica orientación, tamaño e idioma si cambiaron. */
+          watch: function () {
+            var lang = readLanguage() || DISPLAY_LANGUAGE;
+            if (lang !== this.language) {
+              this.language = lang;
+              document.documentElement.lang = lang;
+              document.getElementById("title").textContent = I18N[lang].title;
+              document.getElementById("detail").textContent = I18N[lang].detail;
+              this.layout = ""; // el bloque cambió de tamaño: recolocar
+            }
+            var orientation = readOrientation() || 0;
+            var width = window.innerWidth || document.documentElement.clientWidth;
+            var height = window.innerHeight || document.documentElement.clientHeight;
+            if (!width || !height) return; // WebView aún en 0x0
+            var state = orientation + "|" + width + "x" + height;
+            if (state === this.layout) return;
+            this.layout = state;
+            var w = width;
+            var h = height;
+            var transform = "none";
+            if (orientation === 90) {
+              w = height;
+              h = width;
+              transform = "translate(" + width + "px, 0px) rotate(90deg)";
+            } else if (orientation === 180) {
+              transform = "translate(" + width + "px, " + height + "px) rotate(180deg)";
+            } else if (orientation === 270) {
+              w = height;
+              h = width;
+              transform = "translate(0px, " + height + "px) rotate(270deg)";
+            }
+            var s = this.stage.style;
+            s.width = w + "px";
+            s.height = h + "px";
+            s.transformOrigin = "0 0";
+            s.transform = transform;
+            s.fontSize = Math.max(10, Math.round(Math.min(w, h) * 0.04)) + "px";
+            this.drift();
+          },
+
+          /** Salto a una posición al azar dentro del espacio libre. */
+          drift: function () {
+            var w = this.stage.clientWidth;
+            var h = this.stage.clientHeight;
+            if (!w || !h) return;
+            var short = Math.min(w, h);
+            var limX = Math.min(Math.max(0, (w - this.box.offsetWidth) / 2), short * MAX_SHIFT);
+            var limY = Math.min(Math.max(0, (h - this.box.offsetHeight) / 2), short * MAX_SHIFT);
+            var nx = this.x;
+            var ny = this.y;
+            for (var i = 0; i < 6; i++) {
+              nx = Math.round((Math.random() * 2 - 1) * limX);
+              ny = Math.round((Math.random() * 2 - 1) * limY);
+              if (Math.abs(nx - this.x) + Math.abs(ny - this.y) >= short * MIN_STEP) break;
+            }
+            this.x = nx;
+            this.y = ny;
+            this.box.style.transform = "translate(" + nx + "px," + ny + "px)";
+          },
+        };
+
+        /* ==================================================================
+           5. CONSULTA AL SERVIDOR (api/device.php) = TIMESTAMP + DATOS
            ================================================================== */
 
         var refresh = {
@@ -358,10 +567,10 @@
           busy: false,
           last: null, // último JSON (para refreshStatus)
           net: "unknown", // unknown | online | offline
-          failures: 0, // consultas seguidas sin respuesta
+          failures: 0, // consultas seguidas sin internet
           lastSent: 0, // hora del último JSON enviado (ms)
           offlineDelay: CHECK_OFFLINE_MS,
-          serverErrors: 0, // respuestas 5xx seguidas
+          serverErrors: 0, // consultas seguidas con internet en las que el servidor falló
 
           /** Programa la siguiente consulta (con margen al azar). */
           schedule: function (ms) {
@@ -420,6 +629,50 @@
           },
 
           /**
+           * ¿Hay internet? (solo cuando el servidor no respondió nada). Petición
+           * "no-cors" a generate_204: cualquier respuesta = hay conexión.
+           * @returns {Promise<boolean>}
+           */
+          probeInternet: function () {
+            function one(url) {
+              return new Promise(function (resolve) {
+                var done = false;
+                var t = setTimeout(function () {
+                  if (!done) {
+                    done = true;
+                    resolve(false);
+                  }
+                }, PROBE_TIMEOUT_MS);
+                try {
+                  fetch(url + "?t=" + Date.now(), { mode: "no-cors", cache: "no-store" }).then(
+                    function () {
+                      if (!done) {
+                        done = true;
+                        clearTimeout(t);
+                        resolve(true);
+                      }
+                    },
+                    function () {
+                      if (!done) {
+                        done = true;
+                        clearTimeout(t);
+                        resolve(false);
+                      }
+                    },
+                  );
+                } catch (e) {
+                  done = true;
+                  clearTimeout(t);
+                  resolve(false);
+                }
+              });
+            }
+            return one(INTERNET_PROBES[0]).then(function (ok) {
+              return ok ? true : one(INTERNET_PROBES[1]);
+            });
+          },
+
+          /**
            * Guarda en localStorage lo que respondió el servidor.
            * @returns {string[]} Claves que cambiaron.
            */
@@ -453,90 +706,143 @@
               return;
             }
             this.busy = true;
-            this.request(apiUrl, id, secret).then(function (r) {
-              var d = r.data;
-              var ok = !!(d && d.ok === true);
-              var authStatus = "unknown";
-              if (r.http === 403 && d && d.error === "secret_mismatch") {
-                authStatus = "conflict"; // el ID está registrado con otro secreto
-              } else if (ok) {
-                authStatus =
-                  d.authorized === true
-                    ? "authorized"
-                    : d.status === "revoked"
-                      ? "revoked"
-                      : "pending";
-              }
-              var answered = ok || authStatus === "conflict";
-              var changes = answered ? self.store(d, authStatus) : [];
-
-              // ---- ¿Se cayó o volvió internet? ----
-              var reached = r.http !== 0; // cualquier respuesta HTTP = hay conexión
-              var change = ""; // "offline" | "online" | ""
-              var next = CHECK_MS;
-              if (reached) {
-                self.failures = 0;
-                self.offlineDelay = CHECK_OFFLINE_MS;
-                if (self.net === "offline") change = "online";
-                self.net = "online";
-                if (r.http >= 500) {
-                  self.serverErrors++;
-                  next = Math.min(ERROR_MAX_MS, CHECK_MS * Math.pow(2, self.serverErrors - 1));
-                } else {
-                  self.serverErrors = 0;
+            // PASO 1: conexión. Si Android ya sabe que no hay red, no se espera
+            // a que la consulta falle (hasta CHECK_TIMEOUT_MS): se da por caída.
+            // PASO 2: consulta al servidor (actualiza su timestamp).
+            var query =
+              navigator.onLine === false
+                ? Promise.resolve({ http: 0, data: null, skipped: true })
+                : this.request(apiUrl, id, secret);
+            query
+              .then(function (r) {
+                // Sin respuesta del servidor: ¿es internet o es el servidor?
+                if (r.http !== 0 || r.skipped) {
+                  r.internet = r.http !== 0;
+                  return r;
                 }
-              } else {
-                self.failures++;
-                var lost =
-                  self.net === "unknown" ||
-                  self.failures >= FAILURES_TO_OFFLINE ||
-                  navigator.onLine === false;
-                if (self.net !== "offline" && lost) {
-                  change = "offline";
-                  self.net = "offline";
-                }
-                if (self.net === "offline") {
-                  next = self.offlineDelay;
-                  self.offlineDelay = Math.min(CHECK_OFFLINE_MAX_MS, self.offlineDelay * 2);
-                } else {
-                  next = RETRY_MS; // primer fallo estando conectado: se confirma, sin JSON aún
-                }
-              }
-
-              var due = Date.now() - self.lastSent >= CHECK_MS - 1000; // toca el periódico
-              var send =
-                force ||
-                change !== "" ||
-                changes.length > 0 ||
-                (due && (reached || self.net === "offline"));
-              var msg = withSettings({
-                origin: "refresh",
-                action: change || (changes.length ? "update" : "check"),
-                status: answered ? "ok" : "error",
-                internetStatus: reached ? "online" : "offline",
-                httpStatus: r.http,
-                authorized: answered
-                  ? authStatus === "authorized"
-                  : readStorage(KEYS.authorized) === "1",
-                authStatus: authStatus,
-                changed: changes.length > 0,
-                changes: changes,
-                lastCheck: Date.now(),
-                error: answered ? "" : r.http ? "HTTP " + r.http : "sin respuesta",
+                return self.probeInternet().then(function (online) {
+                  r.internet = online;
+                  return r;
+                });
+              })
+              .then(function (r) {
+                self.finish(r, force);
               });
-              self.last = msg;
-              if (send) {
-                sendToAppInventor(JSON.stringify(msg));
-                self.lastSent = Date.now();
+          },
+
+          /** Pasos 3 y 4: localStorage, mensaje en pantalla, JSON y siguiente consulta. */
+          finish: function (r, force) {
+            var d = r.data;
+            var ok = !!(d && d.ok === true);
+            var authStatus = "unknown";
+            if (r.http === 403 && d && d.error === "secret_mismatch") {
+              authStatus = "conflict"; // el ID está registrado con otro secreto
+            } else if (ok) {
+              authStatus =
+                d.authorized === true
+                  ? "authorized"
+                  : d.status === "revoked"
+                    ? "revoked"
+                    : "pending";
+            }
+            var answered = ok || authStatus === "conflict"; // respondió lo esperado
+            // PASO 3: localStorage, solo lo que cambió (antes de enviar el JSON)
+            var changes = answered ? this.store(d, authStatus) : [];
+
+            var serverStatus = answered
+              ? "ok"
+              : r.http !== 0
+                ? "error"
+                : r.internet
+                  ? "unreachable"
+                  : "unknown";
+
+            // ---- ¿Se cayó o volvió internet? ----
+            var change = ""; // "offline" | "online" | ""
+            var next = CHECK_MS;
+            if (r.internet) {
+              this.failures = 0;
+              this.offlineDelay = CHECK_OFFLINE_MS;
+              if (this.net === "offline") change = "online";
+              this.net = "online";
+              if (answered) {
+                this.serverErrors = 0;
+              } else {
+                // Hay internet pero el servidor no responde bien: 3 s, y luego
+                // 30 s -> 1 -> 2 -> 5 min
+                this.serverErrors++;
+                next =
+                  this.serverErrors === 1
+                    ? RETRY_MS
+                    : Math.min(ERROR_MAX_MS, CHECK_MS * Math.pow(2, this.serverErrors - 2));
               }
-              self.busy = false;
-              self.schedule(next);
+            } else {
+              this.failures++;
+              this.serverErrors = 0;
+              var lost =
+                this.net === "unknown" ||
+                this.failures >= FAILURES_TO_OFFLINE ||
+                navigator.onLine === false;
+              if (this.net !== "offline" && lost) {
+                change = "offline";
+                this.net = "offline";
+              }
+              if (this.net === "offline") {
+                next = this.offlineDelay;
+                this.offlineDelay = Math.min(CHECK_OFFLINE_MAX_MS, this.offlineDelay * 2);
+              } else {
+                next = RETRY_MS; // primer fallo estando conectado: se confirma, sin JSON aún
+              }
+            }
+
+            // Mensaje en pantalla: solo con internet y el servidor sin responder bien
+            var wasShown = notice.shown;
+            notice.set(!!r.internet && !answered);
+
+            var due = Date.now() - this.lastSent >= CHECK_MS - 1000; // toca el periódico
+            var send =
+              force ||
+              change !== "" ||
+              notice.shown !== wasShown || // el mensaje aparece o se quita: avisar ya
+              changes.length > 0 ||
+              changes.length > 0 ||
+              (due && (r.internet || this.net === "offline"));
+            var msg = withSettings({
+              origin: "refresh",
+              action: change || (changes.length ? "update" : "check"),
+              status: answered ? "ok" : "error",
+              internetStatus: r.internet ? "online" : "offline",
+              serverStatus: serverStatus,
+              connecting: notice.shown,
+              httpStatus: r.http,
+              authorized: answered
+                ? authStatus === "authorized"
+                : readStorage(KEYS.authorized) === "1",
+              authStatus: authStatus,
+              changed: changes.length > 0,
+              changes: changes,
+              lastCheck: Date.now(),
+              error: answered
+                ? ""
+                : r.http
+                  ? "HTTP " + r.http
+                  : r.internet
+                    ? "el servidor no responde"
+                    : "sin internet",
             });
+            this.last = msg;
+            // PASO 4: el JSON a Kodular, ya con el localStorage actualizado
+            if (send) {
+              sendToAppInventor(JSON.stringify(msg));
+              this.lastSent = Date.now();
+            }
+            this.busy = false;
+            this.schedule(next);
           },
         };
 
         /* ==================================================================
-           5. INICIO Y API PÚBLICA
+           6. INICIO Y API PÚBLICA
            ================================================================== */
 
         window.refreshCheck = function () {
@@ -551,6 +857,10 @@
         };
 
         function init() {
+          notice.init();
+          window.addEventListener("resize", function () {
+            if (notice.shown) notice.watch();
+          });
           // Avisos de red de Android/WebView: comprobar ya (la consulta decide
           // si de verdad se cayó o volvió internet y entonces envía el JSON)
           window.addEventListener("online", function () {
@@ -559,7 +869,7 @@
           window.addEventListener("offline", function () {
             refresh.run();
           });
-          refresh.run(true); // primera consulta (y primer JSON) al abrir
+          refresh.run(true); // al abrir: conexión -> consulta -> localStorage -> JSON
         }
 
         if (document.readyState === "loading") {
