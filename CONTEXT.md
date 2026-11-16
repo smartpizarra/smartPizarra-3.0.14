@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.14 (2026-11-15) -->
+<!-- Versión del archivo: 1.0.15 (2026-11-16) -->
 # CONTEXT — smartPizarra 3.0.14
 
 Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras cada cambio significativo.
@@ -124,6 +124,13 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
 - Después verifica cada archivo con las mismas reglas que `MediaRepository::videoProblem` (lector MP4 portado a Python). Probado con videos de 60 fps, 4K HEVC, fps variables, girados 90° y .mov a 25 fps: las 20 salidas las acepta el lector PHP del servidor.
 - Motivo de 720p: en el TV, un 1080×1920 con la pantalla girada pierde 15–30 % de los cuadros; uno de 1080×1620 no perdió ninguno.
 
+## Agente de gestión remota (`agent/`, 2026-11-16)
+- Petición: APK nativo para Android TV que hable con el servidor, instale/actualice/desinstale APK, ejecute comandos de consola, abra la app principal sin tareas, pantalla de mantenimiento "Actualizando librerías del sistema..." (logo, barra, % opcional, nada técnico), polling con backoff/ETag/cache, la misma cola de descargas, miles de equipos. Después: "será de tipo Launcher (HOME)". Documento de arquitectura (con diagramas): https://claude.ai/artifact/SPmrYtRtHTg7mn4b5SsWxr
+- Código: `agent/` (Kotlin, `cloud.smartpizarra.agent`, minSdk 24), servidor `server/private/agent.php` + `api/agent.php` + `admin/agentes.php` (enlace *Agentes* en el panel) + `migrations/2026-11-16-agent.sql`. Detalle de uso: `agent/README.md` y `server/README.md` (sección *Agente de las TV*).
+- Decisiones: modelo DECLARATIVO por grupo (app principal + despliegues; ETag = revisión del grupo + `cmd_rev` del equipo); instalación silenciosa por Device Owner → system → root → **adb local** (las box .137/.201 no tienen `device_admin`; la .137 usa adbd sin autenticación) → interactiva; comandos solo de lista blanca y firmados ECDSA P-256 (privada `server/private/agent_command_key.pem`, fuera de git; pública `agent/keys/command_public.pem`); giro 0/90/180/270 por grupo o por equipo.
+- Probado en la .137 con el servidor local (PHP en 127.0.0.1:8098 + `adb reverse`, base `sp_agent_test`): instalación y actualización silenciosas con resultado informado, `ALREADY` si ya está, desinstalación, pantalla de mantenimiento, relanzar SmartPizarra tras cierre forzado, **autoactualización v1→v2→v3** (~20–40 s; arreglado que tras actualizarse quedaba a la vista el launcher de fábrica `com.basic.launcher`), **giro 90°** de la pantalla de mantenimiento. 22 MB RAM, 0 % CPU en reposo.
+- Release: firmado con `agent/signing/` (fuera de git, **hacer copia de seguridad**), 77 KB. Solo acepta `https://`. La .137 tiene instalado el agente **debug** (v3, `1.0.0-b3`) como HOME, apuntando al servidor local de pruebas.
+
 ## Decisiones técnicas
 - Claves separadas (no un JSON único) para ser compatibles con `config.html`/`connection.html`/`fingerprint.html` de la versión anterior, que usan `smartpizarra.orientation` y `smartpizarra.scale`.
 - Ojo: en `example1.html` el `scale` guardado por config.html tenía defecto 60 y significaba zoom de la app (no tamaño visual). En `loading.html` ahora es tamaño visual con defecto 100. Unificar cuando se reciban las otras páginas.
@@ -145,6 +152,7 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
 - **VERSIÓN POR ARCHIVO** (desde 2026-11-12, petición del usuario): cada archivo de texto del proyecto lleva al principio `Versión del archivo: X.Y.Z (AAAA-MM-DD)` en su comentario (HTML línea 2 tras `<!doctype html>`; PHP línea 2 tras `<?php`; SQL `--`, Markdown `<!-- -->`, .py/.gitignore/.htaccess `#` en la línea 1). **Cada vez que se modifica un archivo, su versión sube en el último número y la fecha pasa a la del día, UNA vez por petición**: al terminar, `python tools/version.py bump <archivos>` (o `changed`, que sube todos los que git ve modificados: ojo con los cambios ajenos, p. ej. mirror.html de otra sesión, que no deben subirse sin motivo). `init` pone 1.0.0 a los archivos nuevos; `list` muestra todas. Un archivo nuevo empieza en 1.0.0.
 
 ## Pendiente / próximos pasos
+- Agente: subir migración, PHP y clave privada al servidor real; instalar el APK **release** en una TV (desinstalando antes el debug de la .137) y probarlo contra https://smartpizarra.cloud (el release no se pudo probar en local por exigir https; comprobar que R8 no rompe nada); subir el logo en el panel.
 - Definir objetivo y funcionalidades de la versión 3.0.14.
 - Incorporar el código fuente al repositorio (¿migrar desde 3.0.13?).
 - Documentar arquitectura, dependencias e instrucciones de ejecución cuando existan.

@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.5 (2026-11-13) -->
+<!-- Versión del archivo: 1.0.6 (2026-11-16) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -373,6 +373,28 @@ Cómo funciona:
 Medido en local con 500 equipos: panel «Todos» de 704 consultas / 312 ms / 3,8 MB a **19 consultas / 85 ms / 415 KB**; la 2.ª ronda de consultas de las pantallas pasa de 500 escrituras a **0**; 500 pantallas con un archivo nuevo, 10 a la vez: nunca más de 10 descargando, todas terminan en ~33 min simulados (descargas de 10–60 s) y cada una pregunta de media 4 veces mientras espera.
 
 Si falta algún paso, el panel lo indica en pantalla ("Problema de instalación: …").
+
+## Agente de las TV (launcher que instala APK a distancia) — 2026-11-16
+
+El agente (`cloud.smartpizarra.agent`, carpeta `agent/` del proyecto, ver `agent/README.md`) es el launcher (HOME) de cada TV box. Pregunta al servidor qué debe tener instalado, instala, actualiza o desinstala APK sin que nadie toque la TV, ejecuta comandos firmados y abre la app principal. Se gestiona en **/admin/agentes.php** (botón *Agentes* del panel).
+
+Instalación en el servidor (una vez):
+
+1. Ejecuta `migrations/2026-11-16-agent.sql` en phpMyAdmin (repetirla no hace nada).
+2. Sube `private/agent.php`, `api/agent.php`, `admin/agentes.php` y `admin/index.php`.
+3. **Clave para firmar los comandos remotos.** La pública ya va dentro del APK (`agent/keys/command_public.pem`); la privada está en tu PC en `server/private/agent_command_key.pem` (no va a git). Súbela a `private/` del servidor, **nunca** a `public_html`. Si un día creas una nueva (`openssl ecparam -name prime256v1 -genkey -noout -out agent_command_key.pem` y `openssl ec -in agent_command_key.pem -pubout -out command_public.pem`), la pública nueva debe ir en `agent/keys/` y hay que publicar una versión nueva del agente **antes** de cambiar la privada del servidor.
+4. En `private/config.php` puedes añadir (si faltan se usan estos valores): `'agent_download_slots' => 10`, `'agent_slots_per_ip' => 2`, `'agent_turn_seconds' => 120`, `'agent_apk_max_mb' => 300`. En hPanel → PHP, `upload_max_filesize` y `post_max_size` deben admitir el APK más grande que vayas a subir.
+
+Uso del panel:
+
+- **Equipos.** Un equipo nuevo aparece como *Pendiente*: autorízalo (mismo criterio que los dispositivos). En su ficha: grupo, nombre, giro de pantalla, inventario de apps, resultados y comandos.
+- **Grupos.** Cada grupo define la **app principal** (paquete que se abre cuando no hay tareas), cada cuánto consulta, el texto y los colores de la pantalla de mantenimiento, el porcentaje, la ventana horaria de instalación (hora del equipo), si la pantalla se muestra también al descargar y el **giro** (0/90/180/270, para TV en vertical; un equipo puede tener el suyo).
+- **APK.** Sube el archivo; el paquete y la versión se leen del propio APK. **Despliegue** = instalar/actualizar ese APK o desinstalar un paquete en un grupo, con % de equipos (siempre los mismos), pausa y "Reintentar fallidos". Solo se descarga si el equipo tiene una versión inferior.
+- **El propio agente se actualiza igual**: sube su APK nuevo (versionCode mayor, misma firma) y despliégalo. Android cierra el agente al instalarse y lo vuelve a abrir; el agente vuelve a poner la app principal en pantalla (probado 2026-11-16 en la .137: ~20–40 s).
+- **Comandos** (lista blanca, firmados, caducan): reiniciar, resolución, animaciones, borrar datos o forzar cierre de una app, reiniciar la app principal, diagnóstico.
+- **Logo** de la pantalla de mantenimiento: pestaña de ajustes.
+
+Escala: el manifiesto lleva ETag (grupo + revisión + comandos), así una consulta sin cambios es un `304` sin lecturas pesadas; publicar una versión para miles de TV es UNA fila. Las descargas usan la misma cola con turnos que el contenido, con un límite extra por IP pública para no saturar la conexión de un local.
 
 ## Notas
 

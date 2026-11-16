@@ -1,4 +1,4 @@
-// Versión del archivo: 1.0.0 (2026-11-16)
+// Versión del archivo: 1.0.1 (2026-11-16)
 package cloud.smartpizarra.agent
 
 import android.app.Notification
@@ -83,6 +83,11 @@ class AgentService : Service() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         AgentService.start(context)
+        // Autoactualización: Android mató el proceso (y con él la pantalla de mantenimiento)
+        // y deja a la vista la pantalla anterior (a veces el launcher de fábrica). Al arrancar
+        // el equipo no hace falta: Android ya abre el HOME (este agente). Aquí abrimos
+        // nuestro launcher, que lanza la app principal o el mantenimiento si queda trabajo.
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) MainApp.requestLaunch(context, immediate = true)
     }
 }
 

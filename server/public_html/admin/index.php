@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.4 (2026-11-13)
+// Versión del archivo: 1.0.5 (2026-11-16)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -1559,6 +1559,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'profiles' ? 'on' : '' ?>" href="?view=profiles">Perfiles</a>
       <!-- Buzón: número de mensajes de usuarios sin leer -->
       <a class="btn <?= $view === 'messages' ? 'on' : '' ?>" href="?view=messages">Mensajes<?= $unreadAdmin ? '<span class="unread">' . (int) $unreadAdmin . '</span>' : '' ?></a>
+      <!-- Agente launcher de las TV (instalaciones remotas de APK): página propia agentes.php -->
+      <a class="btn" href="agentes.php">Agentes</a>
       <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
     </nav>
   </header>
