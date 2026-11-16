@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Versión del archivo: 1.0.0 (2026-11-16) -->
+<resources>
+    <!-- Pantalla completa, sin barra, fondo corporativo desde el primer fotograma -->
+    <style name="AgentTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/brand</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+    <color name="brand">#FF002B4F</color>
+    <color name="text_soft">#FFD9DEE5</color>
+</resources>

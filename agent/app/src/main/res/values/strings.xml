@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Versión del archivo: 1.0.0 (2026-11-16) -->
+<resources>
+    <string name="app_name">SmartPizarra Agente</string>
+    <string name="maintenance_default">Actualizando librerías del sistema...</string>
+    <string name="notification_title">Servicio del sistema</string>
+    <string name="channel_name">Servicio del sistema</string>
+    <string name="waiting_config">Esperando configuración</string>
+    <string name="menu_open_app">Abrir aplicación</string>
+    <string name="menu_settings">Ajustes de Android</string>
+    <string name="menu_sync">Sincronizar ahora</string>
+    <string name="menu_close">Cerrar</string>
+</resources>

@@ -1,0 +1,10 @@
+# Versión del archivo: 1.0.0 (2026-11-16)
+# Compilación y configuración local (ruta del SDK): nunca a git
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+# Clave de firma del APK y sus contraseñas: SECRETAS, nunca a git (guárdalas con copia de seguridad)
+signing/

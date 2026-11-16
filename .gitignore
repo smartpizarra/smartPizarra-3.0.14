@@ -4,3 +4,7 @@ server/private/config.php
 
 # Archivos subidos por los usuarios (imágenes/videos de mirror.html): nunca a git
 server/private/media/
+
+# Agente (2026-11-16): clave PRIVADA que firma los comandos remotos y APK subidos al panel
+server/private/agent_command_key.pem
+server/private/agent/

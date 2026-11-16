@@ -86,6 +86,23 @@ return [
     // Si faltan, se usan estos valores.
     'download_slots'        => 10,
     'download_turn_seconds' => 60,
+    // AGENTE (launcher de las TV, 2026-11-16; panel /admin/agentes.php, API api/agent.php).
+    // agent_poll_seconds: consulta por defecto (cada grupo tiene la suya).
+    // agent_download_slots: equipos descargando APK a la vez; agent_slots_per_ip:
+    //   máximo a la vez desde la MISMA IP pública (no saturar la conexión de un local).
+    // agent_turn_seconds: duración de un turno hasta que la cola aprende la real.
+    // agent_apk_max_mb: tamaño máximo de un APK subido (y lo que permita PHP).
+    // agent_command_key_file: clave PRIVADA EC P-256 que firma los comandos remotos
+    //   (la pública va dentro del APK: agent/keys/command_public.pem). Créala con
+    //   OpenSSL (ver server/README.md) y súbela a private/ (NUNCA a public_html ni a git).
+    // agent_dir: carpeta de APK y logo (por defecto private/agent, se crea sola).
+    'agent_poll_seconds'     => 300,
+    'agent_download_slots'   => 10,
+    'agent_slots_per_ip'     => 2,
+    'agent_turn_seconds'     => 120,
+    'agent_apk_max_mb'       => 300,
+    // 'agent_command_key_file' => __DIR__ . '/agent_command_key.pem',
+    // 'agent_dir'              => __DIR__ . '/agent',
     'overlays_per_user' => 20,
     'online_timeout_seconds' => 180,
     'boot_history_days' => 365,
