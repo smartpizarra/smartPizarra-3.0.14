@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-16)
+// Versión del archivo: 1.0.1 (2026-11-16)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DEL AGENTE (launcher de gestión remota)
@@ -89,7 +89,9 @@ if ($setupError === '' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 back('Giro guardado.', $ret);
             case 'agent_delete':
                 AgentRepository::delete($id);
-                back('Equipo borrado. Si sigue encendido volverá a aparecer como pendiente.', 'tab=agents');
+                // Desde la lista vuelve a la misma página/filtro; desde la ficha, a la lista
+                back('Equipo ' . $id . ' eliminado. Si sigue encendido volverá a aparecer como pendiente.',
+                    str_starts_with($ret, 'tab=agents') ? $ret : 'tab=agents');
             case 'command':
                 $name = param($_POST, 'name');
                 $args = AgentCommands::cleanArgs($name, $_POST);
@@ -158,6 +160,10 @@ $flash = $_SESSION['flash'] ?? '';
 unset($_SESSION['flash']);
 
 /* --------------------------------- Vistas ---------------------------------- */
+
+/** Texto de confirmación al eliminar un equipo (lista y ficha). */
+const DELETE_AGENT_CONFIRM = '¿Eliminar este equipo del panel? Se borran su inventario y resultados. '
+    . 'Si la TV sigue encendida con el agente, volverá a aparecer como Pendiente; para bloquearla usa Revocar.';
 
 /** Formulario POST de un botón. */
 function postButton(string $action, array $fields, string $label, string $class = '', string $confirm = ''): string
@@ -264,7 +270,11 @@ if ($setupError !== '') {
         echo '<form method="post">' . csrfField() . '<input type="hidden" name="action" value="agent_group">'
             . '<input type="hidden" name="id" value="' . h($aid) . '"><input type="hidden" name="back" value="' . h($self) . '">'
             . '<select name="group">' . $groupOptions((int) $a['group_id']) . '</select><button type="submit">Cambiar grupo</button></form>'
-            . '<a class="btn" href="?tab=agent&amp;id=' . h($aid) . '">Ficha</a></div></div>';
+            . '<a class="btn" href="?tab=agent&amp;id=' . h($aid) . '">Ficha</a>'
+            // Eliminar desde la lista (vuelve a esta misma página/filtro). Borra el equipo con su
+            // inventario, resultados y turno de descarga (ON DELETE CASCADE).
+            . postButton('agent_delete', ['id' => $aid, 'back' => $self], 'Eliminar', 'bad', DELETE_AGENT_CONFIRM)
+            . '</div></div>';
     }
     if ($res['total'] > $per) {
         $pages = (int) ceil($res['total'] / $per);
@@ -301,7 +311,7 @@ if ($setupError !== '') {
             . postButton('agent_status', ['id' => $aid, 'status' => 'authorized', 'back' => $self], 'Autorizar', 'ok')
             . postButton('agent_status', ['id' => $aid, 'status' => 'pending', 'back' => $self], 'Pendiente')
             . postButton('agent_status', ['id' => $aid, 'status' => 'revoked', 'back' => $self], 'Revocar', 'bad')
-            . postButton('agent_delete', ['id' => $aid], 'Borrar', 'bad', '¿Borrar este equipo del panel?')
+            . postButton('agent_delete', ['id' => $aid], 'Eliminar', 'bad', DELETE_AGENT_CONFIRM)
             . '</div></div>';
 
         echo '<div class="card"><h2>Comandos</h2>' . commandForm($aid, (int) $a['group_id'], $self) . '<table><tr><th>#</th><th>Comando</th><th>Resultado</th><th>Salida</th></tr>';

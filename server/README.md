@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.6 (2026-11-16) -->
+<!-- Versión del archivo: 1.0.7 (2026-11-16) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -387,7 +387,7 @@ Instalación en el servidor (una vez):
 
 Uso del panel:
 
-- **Equipos.** Un equipo nuevo aparece como *Pendiente*: autorízalo (mismo criterio que los dispositivos). En su ficha: grupo, nombre, giro de pantalla, inventario de apps, resultados y comandos.
+- **Equipos.** Un equipo nuevo aparece como *Pendiente*: autorízalo (mismo criterio que los dispositivos). En su ficha: grupo, nombre, giro de pantalla, inventario de apps, resultados y comandos. **Eliminar** (en la lista y en la ficha) lo quita del panel con su inventario y resultados; si la TV sigue encendida con el agente vuelve a aparecer como *Pendiente* (para bloquearla de verdad usa *Revocar*).
 - **Grupos.** Cada grupo define la **app principal** (paquete que se abre cuando no hay tareas), cada cuánto consulta, el texto y los colores de la pantalla de mantenimiento, el porcentaje, la ventana horaria de instalación (hora del equipo), si la pantalla se muestra también al descargar y el **giro** (0/90/180/270, para TV en vertical; un equipo puede tener el suyo).
 - **APK.** Sube el archivo; el paquete y la versión se leen del propio APK. **Despliegue** = instalar/actualizar ese APK o desinstalar un paquete en un grupo, con % de equipos (siempre los mismos), pausa y "Reintentar fallidos". Solo se descarga si el equipo tiene una versión inferior.
 - **El propio agente se actualiza igual**: sube su APK nuevo (versionCode mayor, misma firma) y despliégalo. Android cierra el agente al instalarse y lo vuelve a abrir; el agente vuelve a poner la app principal en pantalla (probado 2026-11-16 en la .137: ~20–40 s).
