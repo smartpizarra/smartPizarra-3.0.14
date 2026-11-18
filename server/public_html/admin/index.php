@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.5 (2026-11-16)
+// Versión del archivo: 1.0.6 (2026-11-17)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -623,23 +623,25 @@ try {
         // Sin configuración válida no se puede hacer nada más
         throw new RuntimeException($setupError);
     }
-    // Archivo de un usuario: vista previa (?file=ID) o descarga (&dl=1), solo administrador
-    if ($loggedIn && isset($_GET['file'])) {
-        $media = MediaRepository::find((int) param($_GET, 'file'));
+    // Archivo de un usuario: vista previa (?file=ID), descarga (&dl=1) o miniatura (?thumb=ID), solo administrador
+    if ($loggedIn && (isset($_GET['file']) || isset($_GET['thumb']))) {
+        $thumb = isset($_GET['thumb']);
+        $media = MediaRepository::find((int) param($_GET, $thumb ? 'thumb' : 'file'));
         if ($media === null) {
             http_response_code(404);
             exit('No encontrado');
         }
-        MediaRepository::send($media, param($_GET, 'dl') === '1');
+        $thumb ? MediaRepository::sendThumb($media) : MediaRepository::send($media, param($_GET, 'dl') === '1');
     }
-    // Archivo de un anuncio: vista previa (?ad=ID) o descarga (&dl=1), solo administrador
-    if ($loggedIn && isset($_GET['ad'])) {
-        $ad = AdRepository::find((int) param($_GET, 'ad'));
+    // Archivo de un anuncio: vista previa (?ad=ID), descarga (&dl=1) o miniatura (?adthumb=ID), solo administrador
+    if ($loggedIn && (isset($_GET['ad']) || isset($_GET['adthumb']))) {
+        $thumb = isset($_GET['adthumb']);
+        $ad = AdRepository::find((int) param($_GET, $thumb ? 'adthumb' : 'ad'));
         if ($ad === null) {
             http_response_code(404);
             exit('No encontrado');
         }
-        MediaRepository::send($ad, param($_GET, 'dl') === '1');
+        $thumb ? MediaRepository::sendThumb($ad) : MediaRepository::send($ad, param($_GET, 'dl') === '1');
     }
 
     // Imagen de un banner (del administrador o de un usuario): ?ov=ID
@@ -1830,7 +1832,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <section class="card device">
         <div class="media">
           <?php if ($isImg): ?>
-            <a href="?ad=<?= $aid ?>" target="_blank" rel="noopener"><img class="thumb" src="?ad=<?= $aid ?>" alt="" loading="lazy"></a>
+            <a href="?ad=<?= $aid ?>" target="_blank" rel="noopener"><img class="thumb" src="?adthumb=<?= $aid ?>" alt="" loading="lazy"></a>
           <?php else: ?>
             <a class="thumb" href="?ad=<?= $aid ?>" target="_blank" rel="noopener">&#9654; Video</a>
           <?php endif; ?>
@@ -2244,7 +2246,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <section class="card device">
         <div class="media">
           <?php if ($isImg): ?>
-            <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?file=<?= $mid ?>" alt="" loading="lazy"></a>
+            <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?thumb=<?= $mid ?>" alt="" loading="lazy"></a>
           <?php else: ?>
             <a class="thumb" href="?file=<?= $mid ?>" target="_blank" rel="noopener">&#9654; Video</a>
           <?php endif; ?>

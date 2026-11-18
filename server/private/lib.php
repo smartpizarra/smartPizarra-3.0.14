@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.4 (2026-11-13)
+// Versión del archivo: 1.0.5 (2026-11-17)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -1067,6 +1067,110 @@ final class MediaRepository
         return self::dir() . '/' . basename((string) $media['stored_name']);
     }
 
+    /*
+     * MINIATURAS (2026-11-17). Las listas del panel y de /cuenta/ mostraban cada imagen
+     * con el ARCHIVO ORIGINAL (fotos de 4-12 MB para un recuadro de 160x90): con la
+     * conexión lenta de la CDN la página se quedaba "cargando". Ahora usan una JPG
+     * pequeña (máx. THUMB_W x THUMB_H) creada la primera vez que se pide y guardada en
+     * media/thumbs/; al pulsar se sigue abriendo el original.
+     */
+    public const THUMB_W = 320;
+    public const THUMB_H = 180;
+
+    /** @return string Ruta de la miniatura (JPG) de un archivo guardado. */
+    public static function thumbPath(array $media): string
+    {
+        return self::dir() . '/thumbs/' . pathinfo(basename((string) $media['stored_name']), PATHINFO_FILENAME) . '.jpg';
+    }
+
+    /** Borra el archivo y su miniatura (si la hay). */
+    public static function deleteFiles(array $media): void
+    {
+        @unlink(self::path($media));
+        @unlink(self::thumbPath($media));
+    }
+
+    /**
+     * Envía la miniatura de una imagen (la crea si falta). Si no es imagen o no se puede
+     * crear (sin GD, formato raro), envía el original como antes.
+     */
+    public static function sendThumb(array $media): never
+    {
+        $thumb = self::thumbPath($media);
+        if (($media['kind'] ?? '') !== 'image' || (!is_file($thumb) && !self::makeThumb(self::path($media), $thumb))) {
+            self::send($media);
+        }
+        self::releaseSession();
+        while (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        header('Content-Type: image/jpeg');
+        header('Content-Length: ' . filesize($thumb));
+        header('X-Content-Type-Options: nosniff');
+        header('Cache-Control: private, max-age=31536000, immutable');
+        readfile($thumb);
+        exit;
+    }
+
+    /** Crea la miniatura JPG de $src en $dst (respeta el giro EXIF de las fotos del móvil). */
+    private static function makeThumb(string $src, string $dst): bool
+    {
+        if (!function_exists('imagecreatefromstring') || !is_file($src)) {
+            return false;
+        }
+        $info = @getimagesize($src);
+        // Más de 100 Mpx no se abre: GD usa ~4-5 bytes por píxel (las fotos reales de los
+        // usuarios llegan a 5698x10121 = 58 Mpx => ~250 MB, una sola vez por imagen)
+        if ($info === false || $info[0] < 1 || $info[1] < 1 || $info[0] * $info[1] > 100_000_000) {
+            return false;
+        }
+        $img = @imagecreatefromstring((string) file_get_contents($src));
+        if ($img === false) {
+            return false;
+        }
+        if (($info[2] ?? 0) === IMAGETYPE_JPEG && function_exists('exif_read_data')) {
+            $o = (int) ((@exif_read_data($src) ?: [])['Orientation'] ?? 1);
+            $deg = [3 => 180, 6 => -90, 8 => 90][$o] ?? 0;
+            if ($deg !== 0 && ($r = imagerotate($img, $deg, 0)) !== false) {
+                imagedestroy($img);
+                $img = $r;
+            }
+        }
+        $w = imagesx($img);
+        $h = imagesy($img);
+        $k = min(1, self::THUMB_W / $w, self::THUMB_H / $h);
+        $tw = max(1, (int) round($w * $k));
+        $th = max(1, (int) round($h * $k));
+        $out = imagecreatetruecolor($tw, $th);
+        imagefill($out, 0, 0, imagecolorallocate($out, 0, 0, 0)); // PNG transparente => fondo negro (como .thumb)
+        imagecopyresampled($out, $img, 0, 0, 0, 0, $tw, $th, $w, $h);
+        imagedestroy($img);
+        $dir = dirname($dst);
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            imagedestroy($out);
+            return false;
+        }
+        $tmp = $dst . '.' . bin2hex(random_bytes(4)) . '.tmp'; // escribir y renombrar: nunca media miniatura
+        $ok = imagejpeg($out, $tmp, 78) && rename($tmp, $dst);
+        imagedestroy($out);
+        if (!$ok) {
+            @unlink($tmp);
+        }
+        return $ok;
+    }
+
+    /**
+     * Libera la sesión antes de enviar un archivo: PHP la BLOQUEA durante toda la
+     * petición, y una descarga lenta (video, foto grande) dejaba esperando cualquier
+     * otra página de la misma sesión (el panel o /cuenta/ "se quedaban cargando").
+     */
+    private static function releaseSession(): void
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+    }
+
     /** Tamaño máximo de un archivo (bytes), config 'media_max_mb' (200). */
     public static function maxBytes(): int
     {
@@ -1521,7 +1625,7 @@ final class MediaRepository
             return;
         }
         Database::pdo()->prepare('DELETE FROM sp_media WHERE id = ?')->execute([$id]);
-        @unlink(self::path($media));
+        self::deleteFiles($media); // archivo + miniatura
     }
 
     /** @return array<string,mixed>|null Archivo (de cualquier usuario) con empresa/email del dueño. */
@@ -1579,7 +1683,7 @@ final class MediaRepository
             return null;
         }
         Database::pdo()->prepare('DELETE FROM sp_media WHERE id = ?')->execute([$id]);
-        @unlink(self::path($media));
+        self::deleteFiles($media); // archivo + miniatura
         return $media;
     }
 
@@ -1587,7 +1691,7 @@ final class MediaRepository
     public static function deleteAllForUser(int $userId): void
     {
         foreach (self::forUser($userId) as $media) {
-            @unlink(self::path($media));
+            self::deleteFiles($media); // archivo + miniatura
         }
         Database::pdo()->prepare('DELETE FROM sp_media WHERE user_id = ?')->execute([$userId]);
     }
@@ -1644,6 +1748,7 @@ final class MediaRepository
         if (!is_file($path)) {
             Http::json(['ok' => false, 'error' => 'missing_file'], 404);
         }
+        self::releaseSession(); // la descarga no bloquea las demás páginas de esta sesión
         while (ob_get_level() > 0) {
             ob_end_clean();
         }
@@ -1829,7 +1934,7 @@ final class AdRepository
             return null;
         }
         Database::pdo()->prepare('DELETE FROM sp_ads WHERE id = ?')->execute([$id]);
-        @unlink(MediaRepository::path($ad));
+        MediaRepository::deleteFiles($ad); // archivo + miniatura
         return $ad;
     }
 
@@ -2174,7 +2279,7 @@ final class OverlayRepository
         }
         Database::pdo()->prepare('DELETE FROM sp_overlays WHERE id = ?')->execute([$id]);
         if (!empty($o['stored_name'])) {
-            @unlink(MediaRepository::path($o));
+            MediaRepository::deleteFiles($o); // archivo + miniatura
         }
         return $o;
     }
@@ -2185,7 +2290,7 @@ final class OverlayRepository
         $stmt = Database::pdo()->prepare('SELECT stored_name FROM sp_overlays WHERE user_id = ? AND stored_name IS NOT NULL');
         $stmt->execute([$userId]);
         foreach ($stmt->fetchAll() as $o) {
-            @unlink(MediaRepository::path($o));
+            MediaRepository::deleteFiles($o); // archivo + miniatura
         }
     }
 

@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.3 (2026-11-13)
+// Versión del archivo: 1.0.4 (2026-11-17)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -259,14 +259,15 @@ try {
         }
     }
 
-    // Vista previa de un archivo propio (?file=ID): solo su dueño con sesión
-    if ($user !== null && isset($_GET['file'])) {
-        $media = MediaRepository::findForUser((int) param($_GET, 'file'), (int) $user['id']);
+    // Vista previa de un archivo propio (?file=ID) o su miniatura (?thumb=ID): solo su dueño con sesión
+    if ($user !== null && (isset($_GET['file']) || isset($_GET['thumb']))) {
+        $thumb = isset($_GET['thumb']);
+        $media = MediaRepository::findForUser((int) param($_GET, $thumb ? 'thumb' : 'file'), (int) $user['id']);
         if ($media === null) {
             http_response_code(404);
             exit('No encontrado');
         }
-        MediaRepository::send($media);
+        $thumb ? MediaRepository::sendThumb($media) : MediaRepository::send($media);
     }
     // Imagen de un banner propio (?ovfile=ID)
     if ($user !== null && isset($_GET['ovfile'])) {
@@ -939,7 +940,7 @@ if ($validity['state'] !== 'active') {
       <section class="card device">
         <div class="media">
           <?php if ($isImg): ?>
-            <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?file=<?= $mid ?>" alt="" loading="lazy"></a>
+            <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?thumb=<?= $mid ?>" alt="" loading="lazy"></a>
           <?php else: ?>
             <a class="thumb" href="?file=<?= $mid ?>" target="_blank" rel="noopener">&#9654; Video</a>
           <?php endif; ?>
