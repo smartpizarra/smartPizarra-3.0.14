@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.0 (2026-11-16) -->
+<!-- Versión del archivo: 1.0.1 (2026-11-17) -->
 # Agente SmartPizarra (launcher de las TV box)
 
 APK nativo `cloud.smartpizarra.agent` (Kotlin, sin librerías externas, ~80 KB en release). Es el **launcher (HOME)** de la TV: al encender abre la app principal que diga el servidor y, en segundo plano, instala / actualiza / desinstala APK y ejecuta comandos firmados. Servidor: `server/public_html/api/agent.php`; panel: `/admin/agentes.php` (ver `server/README.md`, sección *Agente de las TV*).
@@ -43,7 +43,7 @@ adb shell cmd package set-home-activity cloud.smartpizarra.agent/.HomeActivity  
 Modo de instalación silenciosa (el agente usa el mejor disponible; el panel lo muestra como *Modo*):
 
 - **Device Owner** (lo ideal): `adb shell dpm set-device-owner cloud.smartpizarra.agent/.AdminReceiver`. Solo funciona sin cuentas en el equipo y si existe la función `android.software.device_admin` (las box .137 y .201 **no** la tienen).
-- **adb local**: si el equipo tiene adb de red encendido (5555, 3222…). Sin autenticación (.137) funciona directo; con autenticación (.201) la primera vez hay que aceptar "¿Permitir depuración?" con el mando, marcando *Permitir siempre*.
+- **adb local**: si el equipo tiene adb de red encendido (5555, 3222…). Sin autenticación (.137) funciona directo; con autenticación (.201) la primera vez hay que aceptar "¿Permitir depuración?" con el mando, marcando *Permitir siempre* (el agente reintenta al minuto). **Cada instalación nueva del agente (o borrar sus datos) genera otra clave y vuelve a salir el aviso.** Desde la 1.0.1, si el equipo tiene `su` usable por el shell (userdebug, como la .201), el agente fija `persist.adb.tcp.port` para que el adb de red siga encendido tras reiniciar; si no, al reiniciar se pierde el modo silencioso hasta volver a abrir el puerto.
 - **root**: si existe `su`.
 - Si no hay ninguno, cada instalación pide confirmación en pantalla.
 

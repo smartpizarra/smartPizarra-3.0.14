@@ -1,4 +1,4 @@
-// Versión del archivo: 1.0.0 (2026-11-16)
+// Versión del archivo: 1.0.1 (2026-11-17)
 // App del agente. minSdk 24 (Android 7), targetSdk 34.
 //  - DEFAULT_SERVER: URL de la API (se puede cambiar en el equipo por adb, ver README).
 //  - COMMAND_PUBLIC_KEY: clave pública EC P-256 con la que el agente comprueba la firma
@@ -34,8 +34,9 @@ android {
         targetSdk = 34
         // Cada versión publicada del agente necesita un versionCode MAYOR (gradle -PagentVersionCode=N
         // lo cambia sin editar este archivo, útil para probar la autoactualización)
-        versionCode = (findProperty("agentVersionCode") as String?)?.toInt() ?: 1
-        versionName = "1.0.0" + ((findProperty("agentVersionCode") as String?)?.let { "-b$it" } ?: "")
+        // 2 (1.0.1, 2026-11-17): adb local fija el puerto tras reiniciar y reintenta al minuto tras el aviso de depuración
+        versionCode = (findProperty("agentVersionCode") as String?)?.toInt() ?: 2
+        versionName = "1.0.1" +((findProperty("agentVersionCode") as String?)?.let { "-b$it" } ?: "")
         buildConfigField("String", "DEFAULT_SERVER", "\"https://smartpizarra.cloud/api/agent.php\"")
         buildConfigField("String", "COMMAND_PUBLIC_KEY", "\"$commandKey\"")
     }

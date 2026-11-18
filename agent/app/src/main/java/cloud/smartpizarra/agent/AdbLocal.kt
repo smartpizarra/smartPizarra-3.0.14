@@ -1,4 +1,4 @@
-// Versión del archivo: 1.0.0 (2026-11-16)
+// Versión del archivo: 1.0.1 (2026-11-17)
 package cloud.smartpizarra.agent
 
 import android.util.Base64
@@ -50,22 +50,50 @@ object AdbLocal : PrivShell {
 
     @Volatile private var port = -1   // -1 sin probar, 0 no disponible
     @Volatile private var checkedAt = 0L
+    /** En la última prueba se envió la clave pública: la TV muestra "¿Permitir depuración?". */
+    @Volatile private var keyOffered = false
+    /** Ya se intentó fijar el puerto (persist.adb.tcp.port) en este proceso. */
+    @Volatile private var persistTried = false
 
     private class Msg(val cmd: Int, val arg0: Int, val arg1: Int, val data: ByteArray)
 
-    /** ¿Hay adbd local utilizable? Se vuelve a probar cada 10 min si no lo había. */
+    /**
+     * ¿Hay adbd local utilizable? Si no lo había se vuelve a probar cada 10 min, o al
+     * minuto si la última vez se mostró en la TV el aviso de depuración (alguien puede
+     * aceptarlo justo después: 2026-11-17 en la .201 se aceptó y el agente siguió 10 min
+     * en modo interactivo).
+     */
     override fun available(): Boolean {
         val now = System.currentTimeMillis()
         if (port > 0) return true
-        if (port == 0 && now - checkedAt < 10 * 60_000) return false
+        val wait = if (keyOffered) 60_000 else 10 * 60_000
+        if (port == 0 && now - checkedAt < wait) return false
         checkedAt = now
+        keyOffered = false
         port = 0
         for (p in candidatePorts()) {
             val r = exec(p, "echo ok", 20_000)
             if (r.code == 0 && r.out.trim() == "ok") { port = p; break }
         }
         Log.i(AgentApp.TAG, "adb local: " + if (port > 0) "puerto $port" else "no disponible")
+        if (port > 0) persistPort(port)
         return port > 0
+    }
+
+    /**
+     * Muchas box abren el adb de red solo hasta el siguiente reinicio (service.adb.tcp.port,
+     * p. ej. la .201): al reiniciar, el agente pierde la instalación silenciosa. Si el
+     * equipo tiene "su" usable por el shell (compilaciones userdebug/eng), se fija
+     * persist.adb.tcp.port para que adbd vuelva a escuchar en ese puerto tras reiniciar.
+     * adb sigue exigiendo una clave autorizada (ro.adb.secure). Una vez por proceso.
+     */
+    private fun persistPort(p: Int) {
+        if (persistTried) return
+        persistTried = true
+        val cur = exec(p, "getprop persist.adb.tcp.port", 10_000)
+        if (cur.code != 0 || cur.out.trim().toIntOrNull() == p) return
+        val r = exec(p, "su 0 setprop persist.adb.tcp.port $p && getprop persist.adb.tcp.port", 10_000)
+        Log.i(AgentApp.TAG, "adb local: fijar puerto $p => " + if (r.code == 0 && r.out.trim() == "$p") "ok" else "no (${r.out.take(80)})")
     }
 
     private fun candidatePorts(): List<Int> {
@@ -79,7 +107,11 @@ object AdbLocal : PrivShell {
 
     override fun run(args: List<String>, timeoutMs: Long): RootShell.Res {
         if (!available()) return RootShell.Res(-1, "sin adb local")
-        return exec(port, args.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }, timeoutMs)
+        val r = exec(port, args.joinToString(" ") { "'" + it.replace("'", "'\\''") + "'" }, timeoutMs)
+        // adbd desapareció (reinicio sin puerto fijo, depuración desactivada...): olvidar el
+        // puerto para que la próxima tarea vuelva a probar y, si no hay, use otro instalador
+        if (r.code == -1 && r.out.startsWith("adb:")) { port = -1; checkedAt = 0L }
+        return r
     }
 
     /** Ejecuta una línea de shell y devuelve su salida y su código (añade "echo $?"). */
@@ -125,6 +157,7 @@ object AdbLocal : PrivShell {
                 m.cmd == AUTH && m.arg0 == 1 && !sentKey -> {
                     // Clave no autorizada: Android muestra el diálogo en la TV (60 s para aceptar)
                     sentKey = true
+                    keyOffered = true // si no se acepta a tiempo, available() reintenta al minuto
                     send(out, AUTH, 3, 0, (publicKeyString() + "\u0000").toByteArray())
                 }
                 m.cmd == AUTH -> return false

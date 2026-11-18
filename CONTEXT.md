@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.16 (2026-11-17) -->
+<!-- Versión del archivo: 1.0.17 (2026-11-17) -->
 # CONTEXT — smartPizarra 3.0.14
 
 Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras cada cambio significativo.
@@ -130,6 +130,7 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
 - Código: `agent/` (Kotlin, `cloud.smartpizarra.agent`, minSdk 24), servidor `server/private/agent.php` + `api/agent.php` + `admin/agentes.php` (enlace *Agentes* en el panel) + `migrations/2026-11-16-agent.sql`. Detalle de uso: `agent/README.md` y `server/README.md` (sección *Agente de las TV*).
 - Decisiones: modelo DECLARATIVO por grupo (app principal + despliegues; ETag = revisión del grupo + `cmd_rev` del equipo); instalación silenciosa por Device Owner → system → root → **adb local** (las box .137/.201 no tienen `device_admin`; la .137 usa adbd sin autenticación) → interactiva; comandos solo de lista blanca y firmados ECDSA P-256 (privada `server/private/agent_command_key.pem`, fuera de git; pública `agent/keys/command_public.pem`); giro 0/90/180/270 por grupo o por equipo.
 - Probado en la .137 con el servidor local (PHP en 127.0.0.1:8098 + `adb reverse`, base `sp_agent_test`): instalación y actualización silenciosas con resultado informado, `ALREADY` si ya está, desinstalación, pantalla de mantenimiento, relanzar SmartPizarra tras cierre forzado, **autoactualización v1→v2→v3** (~20–40 s; arreglado que tras actualizarse quedaba a la vista el launcher de fábrica `com.basic.launcher`), **giro 90°** de la pantalla de mantenimiento. 22 MB RAM, 0 % CPU en reposo.
+- **.201 pedía confirmación al instalar** (2026-11-17): la .201 es Android 10 userdebug (`ro.adb.secure=1`, `/system/xbin/su` usable solo por el shell, SELinux permisivo). Causas: (1) el adb de red estaba apagado (puerto solo hasta reiniciar: `service.adb.tcp.port` sin `persist`) => modo `interactive`; (2) el agente release (instalado 20:13 sobre el debug) generó clave RSA nueva => aviso "¿Permitir depuración?"; se aceptó con "Permitir siempre" pero el agente ya había descartado adb y esperaba 10 min. Arreglo: `persist.adb.tcp.port=5555` en la .201 (con su) y agente **1.0.1 (versionCode 2)**: fija ese prop él solo si hay su, reintenta al minuto tras mostrar el aviso, y olvida el puerto si adbd desaparece. Probado en la .201 (release 1.0.1 por `adb install -r`): modo adb y `fijar puerto 5555 => ok`. Falta probar un reinicio de la .201.
 - Release: firmado con `agent/signing/` (fuera de git, **hacer copia de seguridad**), 77 KB. Solo acepta `https://`. La .137 tiene instalado el agente **debug** (v3, `1.0.0-b3`) como HOME, apuntando al servidor local de pruebas.
 
 ## Decisiones técnicas
