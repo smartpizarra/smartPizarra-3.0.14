@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.7 (2026-11-16) -->
+<!-- Versión del archivo: 1.0.8 (2026-11-17) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -335,6 +335,14 @@ Cómo funciona:
 - Un archivo pausado **sigue contando** para el límite de archivos del usuario.
 
 **Nombre del dispositivo en las pantallas** (2026-11-13; sube `api/device.php`, `api/media.php` y las 6 páginas a Kodular; sin migración): `api/device.php` y `api/media.php` devuelven `"deviceName"`, el nombre del equipo en el panel (el que pone el usuario en `/cuenta/` → *Dispositivos* o el administrador como alias; `""` si no tiene). **Nunca** el alias del administrador ni sus notas. Las 6 páginas lo guardan en `smartpizarra.deviceName` cada vez que el servidor responde; `loading`, `config`, `connection` y `fingerprint` lo muestran junto a la versión, la web y el email («Nombre: Local Centro» / «Name: …»). Sin nombre, la línea no aparece.
+
+## Imágenes reducidas y miniaturas — 2026-11-17
+
+- **Al subir** una imagen (contenido, anuncio o banner) de más de 1920×1080, el servidor la reduce a 1080×1920 (vertical) o 1920×1080 (horizontal), con el mismo formato y el giro de las fotos del móvil ya aplicado. Los GIF no se tocan. Motivo: había fotos de 5698×10121 (58 Mpx), que en la TV ocupan ~230 MB de memoria cada una.
+- **Miniaturas**: las listas del panel y de `/cuenta/` usan una JPG pequeña (≤ 320×180) que se crea la primera vez y se guarda en `private/media/thumbs/`. Antes cargaban la foto original y la página se quedaba "cargando".
+- **Descargas sin bloqueo**: al enviar un archivo se libera la sesión, así una descarga lenta no frena las demás páginas.
+- **Imágenes ya subidas**: por SSH, `cd ~/domains/smartpizarra.cloud/private && php shrink_images.php` (muestra) y `php shrink_images.php --apply` (las reduce y guarda los originales en `private/backup-originales-AAAAMMDD/`). Las pantallas descargan solas la versión nueva.
+- Requiere la extensión **GD** de PHP (Hostinger la trae). Sube `private/lib.php`, `admin/index.php` y `cuenta/index.php`; sin migración.
 
 ## Videos que las pantallas pueden mostrar fluidos — 2026-11-13
 
