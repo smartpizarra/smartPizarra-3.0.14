@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.5 (2026-11-17)
+// Versión del archivo: 1.0.6 (2026-11-17)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -1115,18 +1115,84 @@ final class MediaRepository
     /** Crea la miniatura JPG de $src en $dst (respeta el giro EXIF de las fotos del móvil). */
     private static function makeThumb(string $src, string $dst): bool
     {
-        if (!function_exists('imagecreatefromstring') || !is_file($src)) {
+        $img = self::openImage($src);
+        if ($img === null) {
             return false;
         }
-        $info = @getimagesize($src);
-        // Más de 100 Mpx no se abre: GD usa ~4-5 bytes por píxel (las fotos reales de los
-        // usuarios llegan a 5698x10121 = 58 Mpx => ~250 MB, una sola vez por imagen)
-        if ($info === false || $info[0] < 1 || $info[1] < 1 || $info[0] * $info[1] > 100_000_000) {
+        $out = self::fitImage($img, self::THUMB_W, self::THUMB_H, true); // PNG transparente => fondo negro (como .thumb)
+        imagedestroy($img);
+        $dir = dirname($dst);
+        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
+            imagedestroy($out);
             return false;
+        }
+        $ok = self::writeImage($out, 'image/jpeg', $dst, 78);
+        imagedestroy($out);
+        return $ok;
+    }
+
+    /*
+     * IMÁGENES DEMASIADO GRANDES (2026-11-17). Los usuarios subían fotos de 5698x10121
+     * (58 Mpx, 2-12 MB): la TV (1 GB de RAM, pantalla 720x1280) necesita ~230 MB para
+     * mostrar cada una. Al subirlas se reducen a MAX_IMAGE_LONG x MAX_IMAGE_SHORT (lado
+     * largo x lado corto: 1080x1920 en vertical, 1920x1080 en horizontal), con el mismo
+     * formato y el giro EXIF ya aplicado. Los GIF no se tocan (pueden ser animados).
+     */
+    public const MAX_IMAGE_LONG = 1920;
+    public const MAX_IMAGE_SHORT = 1080;
+
+    /**
+     * Reduce en su sitio una imagen guardada si supera MAX_IMAGE_LONG x MAX_IMAGE_SHORT.
+     * Si no se puede (sin GD, formato raro) la deja como está: nunca bloquea una subida.
+     * @return bool true si el archivo cambió (el llamador debe recalcular tamaño y sha256).
+     */
+    public static function shrinkImage(string $path, string $mime): bool
+    {
+        if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp'], true)) {
+            return false;
+        }
+        $info = @getimagesize($path);
+        if ($info === false) {
+            return false;
+        }
+        $long = max($info[0], $info[1]);
+        $short = min($info[0], $info[1]);
+        if ($long <= self::MAX_IMAGE_LONG && $short <= self::MAX_IMAGE_SHORT) {
+            return false; // ya cabe: no se re-comprime (no se pierde calidad)
+        }
+        $img = self::openImage($path);
+        if ($img === null) {
+            return false;
+        }
+        $portrait = imagesy($img) >= imagesx($img); // tras aplicar el giro EXIF
+        $out = $portrait
+            ? self::fitImage($img, self::MAX_IMAGE_SHORT, self::MAX_IMAGE_LONG, false)
+            : self::fitImage($img, self::MAX_IMAGE_LONG, self::MAX_IMAGE_SHORT, false);
+        imagedestroy($img);
+        $ok = self::writeImage($out, $mime, $path, 85);
+        imagedestroy($out);
+        if ($ok) {
+            @chmod($path, 0640);
+        }
+        return $ok;
+    }
+
+    /**
+     * Abre una imagen con GD y aplica el giro EXIF (fotos de móvil). null si no se puede.
+     * Más de 100 Mpx no se abre: GD usa ~4-5 bytes por píxel (58 Mpx => ~250 MB, una vez).
+     */
+    private static function openImage(string $src): ?\GdImage
+    {
+        if (!function_exists('imagecreatefromstring') || !is_file($src)) {
+            return null;
+        }
+        $info = @getimagesize($src);
+        if ($info === false || $info[0] < 1 || $info[1] < 1 || $info[0] * $info[1] > 100_000_000) {
+            return null;
         }
         $img = @imagecreatefromstring((string) file_get_contents($src));
         if ($img === false) {
-            return false;
+            return null;
         }
         if (($info[2] ?? 0) === IMAGETYPE_JPEG && function_exists('exif_read_data')) {
             $o = (int) ((@exif_read_data($src) ?: [])['Orientation'] ?? 1);
@@ -1136,23 +1202,42 @@ final class MediaRepository
                 $img = $r;
             }
         }
+        return $img;
+    }
+
+    /** Copia reducida (sin ampliar) que cabe en $maxW x $maxH. $blackBg: fondo negro; si no, conserva la transparencia. */
+    private static function fitImage(\GdImage $img, int $maxW, int $maxH, bool $blackBg): \GdImage
+    {
         $w = imagesx($img);
         $h = imagesy($img);
-        $k = min(1, self::THUMB_W / $w, self::THUMB_H / $h);
+        $k = min(1, $maxW / $w, $maxH / $h);
         $tw = max(1, (int) round($w * $k));
         $th = max(1, (int) round($h * $k));
         $out = imagecreatetruecolor($tw, $th);
-        imagefill($out, 0, 0, imagecolorallocate($out, 0, 0, 0)); // PNG transparente => fondo negro (como .thumb)
-        imagecopyresampled($out, $img, 0, 0, 0, 0, $tw, $th, $w, $h);
-        imagedestroy($img);
-        $dir = dirname($dst);
-        if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) {
-            imagedestroy($out);
-            return false;
+        if ($blackBg) {
+            imagefill($out, 0, 0, imagecolorallocate($out, 0, 0, 0));
+        } else {
+            imagealphablending($out, false);
+            imagesavealpha($out, true);
+            imagefill($out, 0, 0, imagecolorallocatealpha($out, 0, 0, 0, 127));
         }
-        $tmp = $dst . '.' . bin2hex(random_bytes(4)) . '.tmp'; // escribir y renombrar: nunca media miniatura
-        $ok = imagejpeg($out, $tmp, 78) && rename($tmp, $dst);
-        imagedestroy($out);
+        imagecopyresampled($out, $img, 0, 0, 0, 0, $tw, $th, $w, $h);
+        return $out;
+    }
+
+    /** Escribe en un temporal y renombra (nunca queda un archivo a medias). */
+    private static function writeImage(\GdImage $img, string $mime, string $dst, int $quality): bool
+    {
+        $tmp = $dst . '.' . bin2hex(random_bytes(4)) . '.tmp';
+        if ($mime === 'image/jpeg') {
+            imageinterlace($img, true); // JPEG progresivo: se ve antes en conexiones lentas
+        }
+        $ok = match ($mime) {
+            'image/png' => imagepng($img, $tmp, 6),
+            'image/webp' => imagewebp($img, $tmp, $quality),
+            default => imagejpeg($img, $tmp, $quality),
+        };
+        $ok = $ok && rename($tmp, $dst);
         if (!$ok) {
             @unlink($tmp);
         }
@@ -1511,6 +1596,9 @@ final class MediaRepository
             throw new RuntimeException('No se pudo guardar el archivo en ' . self::dir());
         }
         @chmod($target, 0640);
+        if ($kind === 'image') {
+            self::shrinkImage($target, $mime); // fotos enormes => máx. 1080x1920 (tamaño y sha256 se calculan después)
+        }
         $pdo = Database::pdo();
         try {
             $pdo->beginTransaction();
@@ -1823,6 +1911,9 @@ final class AdRepository
             throw new RuntimeException('No se pudo guardar el archivo en ' . MediaRepository::dir());
         }
         @chmod($target, 0640);
+        if ($kind === 'image') {
+            MediaRepository::shrinkImage($target, $mime); // fotos enormes => máx. 1080x1920
+        }
         $pdo = Database::pdo();
         try {
             $pdo->beginTransaction();
@@ -2136,6 +2227,7 @@ final class OverlayRepository
                 throw new RuntimeException('No se pudo guardar el archivo en ' . MediaRepository::dir());
             }
             @chmod($target, 0640);
+            MediaRepository::shrinkImage($target, $mime); // imagen enorme => máx. 1080x1920 (antes de tamaño y sha256)
             $file = [$mime, mb_substr($originalName, 0, 190), $stored, filesize($target), hash_file('sha256', $target)];
         }
         $pdo = Database::pdo();
