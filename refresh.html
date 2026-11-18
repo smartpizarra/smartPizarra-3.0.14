@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Versión del archivo: 1.0.2 (2026-11-15) -->
+<!-- Versión del archivo: 1.0.3 (2026-11-17) -->
 <!--
 =====================================================================
   SMART PIZARRA - ACTUALIZADOR EN SEGUNDO PLANO (refresh.html)
@@ -156,6 +156,18 @@
         font-size: 0.9em;
         opacity: 0.7;
       }
+
+      /* Nombre (panel) e ID del dispositivo: "Nombre: X · Id: SP-..." (vacío = oculto) */
+      #device {
+        margin-top: 1.4em;
+        font-size: 0.8em;
+        opacity: 0.7;
+        overflow-wrap: anywhere;
+      }
+
+      #device:empty {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -169,6 +181,8 @@
         </svg>
         <div id="title"></div>
         <div id="detail"></div>
+        <!-- Nombre del dispositivo en el panel + ID (lo llena notice.watch()) -->
+        <div id="device"></div>
       </div>
     </div>
 
@@ -220,10 +234,14 @@
           es: {
             title: "Intentando conectar con el servidor…",
             detail: "Se reintentará automáticamente.",
+            name: "Nombre: ", // nombre del dispositivo en el panel
+            id: "Id: ",
           },
           en: {
             title: "Trying to connect to the server…",
             detail: "It will retry automatically.",
+            name: "Name: ",
+            id: "Id: ",
           },
         };
         var DISPLAY_LANGUAGE = "es"; // si la clave aún no existe
@@ -505,6 +523,19 @@
               document.documentElement.lang = lang;
               document.getElementById("title").textContent = I18N[lang].title;
               document.getElementById("detail").textContent = I18N[lang].detail;
+              this.layout = ""; // el bloque cambió de tamaño: recolocar
+            }
+            // Nombre del dispositivo en el panel + ID (2026-11-17, petición: toda página
+            // que muestra información lleva el ID y el nombre puesto en el servidor).
+            // "Nombre: X · Id: SP-..."; sin nombre solo el ID. Solo toca el DOM si cambió.
+            var name = readDeviceName();
+            var id = readText(KEYS.deviceId);
+            var deviceText =
+              (name ? I18N[lang].name + name + (id ? " · " : "") : "") +
+              (id ? I18N[lang].id + id : "");
+            var deviceNode = document.getElementById("device");
+            if (deviceNode.textContent !== deviceText) {
+              deviceNode.textContent = deviceText; // textContent: sin riesgo de XSS
               this.layout = ""; // el bloque cambió de tamaño: recolocar
             }
             var orientation = readOrientation() || 0;
