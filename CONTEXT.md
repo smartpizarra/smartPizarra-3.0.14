@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.19 (2026-11-17) -->
+<!-- Versión del archivo: 1.0.20 (2026-11-19) -->
 # CONTEXT — smartPizarra 3.0.14
 
 Documento de memoria del proyecto. Leerlo antes de trabajar y actualizarlo tras cada cambio significativo.
@@ -125,6 +125,7 @@ SmartPizarra, versión 3.0.14. Proyecto desarrollado con Kodular (descripción f
 - App de Windows (Python + tkinter, compilada a un solo `.exe` con PyInstaller mediante `build_exe.bat`; ffmpeg incluido vía `imageio-ffmpeg`). El `.exe` (`dist/`, ~49 MB) no se versiona.
 - Convierte cualquier video a lo óptimo para el TV: **720×1280** (o 1280×720 / según el video), encaje con bordes, fondo difuminado o recorte; **H.264 High nivel 4.0** yuv420p; **fps constantes** (30; 25/24 si el original es 25/50 o 24/48); ~4 Mbps; GOP de 2 s; sin audio (opcional AAC); `faststart`; sin metadatos de giro.
 - Después verifica cada archivo con las mismas reglas que `MediaRepository::videoProblem` (lector MP4 portado a Python). Probado con videos de 60 fps, 4K HEVC, fps variables, girados 90° y .mov a 25 fps: las 20 salidas las acepta el lector PHP del servidor.
+- **v1.1.0 (2026-11-19) SIEMPRE A PANTALLA COMPLETA.** En la .201 (Allwinner "cupid", pantalla 1280×720, WebView 962×541 CSS, orientación 0) el video se veía en un recuadro de 405×228: era un 720×1280 del optimizador anterior (opción por defecto "Vertical con bordes negros") dentro de una TV horizontal, con `object-fit: contain` en mirror.html => doble franja. Además el video activo del servidor (#60) es WebM VP9 1920×1080 a 50 fps (las reglas de subida no revisan WebM) => saltos. Cambios: pantalla por defecto "TV horizontal 1280×720", "TV girada 720×1280" o "Las dos versiones" (`_horizontal`/`_vertical`); se quita "bordes negros"; encaje "auto" (`resolve_fit`: diferencia de proporción ≤ 15 % => recorta, si no fondo difuminado a 1/4 de resolución); `build_command()`/`describe_output()` separados de la interfaz. Probado: carrera 1920×1080 50 fps WebM 29 MB => 1280×720 25 fps H.264 4.0 16,5 MB (recorte 0 %), reproducida en la .201 por DevTools a pantalla completa con 4/509 cuadros perdidos. La .201 además tiene apps de "nodo de red" que consumen CPU (com.service.sfsz, com.titan.edgewise, com.systemguard.android, com.androidsub.processes; instaladas por com.android.netservice): carga media 17 en 4 núcleos.
 - Motivo de 720p: en el TV, un 1080×1920 con la pantalla girada pierde 15–30 % de los cuadros; uno de 1080×1620 no perdió ninguno.
 
 ## Agente de gestión remota (`agent/`, 2026-11-16)

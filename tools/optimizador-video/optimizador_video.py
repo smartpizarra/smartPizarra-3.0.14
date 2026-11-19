@@ -1,4 +1,4 @@
-# Versión del archivo: 1.0.0 (2026-11-15)
+# Versión del archivo: 1.1.0 (2026-11-19)
 """
 SMART PIZARRA · OPTIMIZADOR DE VIDEO (Windows)
 
@@ -6,15 +6,28 @@ Convierte cualquier video para que las pantallas (TV box Hi3798, Android 9,
 WebView 101) lo reproduzcan fluido y para que el servidor lo acepte al subirlo.
 
 QUÉ HACE CON CADA VIDEO
-  - Resolución 720x1280 (pantalla vertical) o 1280x720 (horizontal). Medido en
-    el TV: con la pantalla girada 90° un 1080x1920 pierde 15-30 % de los
-    cuadros; con menos píxeles la composición del giro es más ligera.
-  - Encaje sin deformar: con bordes negros, llenando (recorta) o con fondo
-    difuminado del propio video.
-  - H.264 perfil High nivel 4.0, yuv420p 8 bits (decodificador por hardware
-    OMX.hivendor.video.decoder.avc del TV).
+  - SIEMPRE A PANTALLA COMPLETA (2026-11-19). La salida tiene la forma EXACTA de
+    la pantalla donde se va a ver: 1280x720 si la TV está horizontal (la .201 y
+    la .137: 1280x720 físicos) o 720x1280 si la página se gira 90° (TV montada
+    en vertical). mirror.html encaja el video con object-fit: contain, así que
+    solo un video con la forma de la pantalla la llena. Antes la opción por
+    defecto era "Vertical 720x1280 con bordes negros": un video horizontal
+    quedaba con franjas negras y, en una TV horizontal, encogido en el centro
+    (405x228 de 1280x720 en la .201). Ya no hay bordes negros:
+      * Automático (recomendado): si el video casi tiene la forma de la pantalla
+        (diferencia <= 15 %), la llena recortando ese poco; si no (p. ej. video
+        vertical de celular en TV horizontal), lo muestra entero sobre un fondo
+        difuminado del propio video que ocupa toda la pantalla.
+      * Llenar recortando o Fondo difuminado, a elección.
+    "Las dos versiones" genera la horizontal y la vertical de cada video.
+  - 720p y no 1080p: medido en el TV, con la pantalla girada 90° un 1080x1920
+    pierde 15-30 % de los cuadros; con menos píxeles la composición es más ligera.
+  - H.264 perfil High nivel 4.0, yuv420p 8 bits: decodificador por hardware de
+    las dos cajas (OMX.hivendor.video.decoder.avc en la .137 HiSilicon,
+    OMX.allwinner.video.decoder.avc en la .201 Allwinner). Nunca VP9/WebM.
   - Fotogramas por segundo CONSTANTES: 30 (o 25/24 si el original es de 25/24
     o de 50/48; nunca 60). Corrige los videos de celular con fps variable.
+    (El video con saltos de la .201 era WebM VP9 1920x1080 a 50 fps.)
   - Bitrate limitado (unos 4 Mbps): un anuncio de 10 s queda en 3-5 MB, se
     descarga antes y alivia la cola de descargas del servidor.
   - Sin audio (las pantallas no lo usan). Opcional: conservarlo en AAC.
@@ -50,17 +63,20 @@ MAX_FPS = 30.5
 MAX_H264_LEVEL = 41
 MAX_LONG, MAX_SHORT = 1920, 1080
 
-# Orientación de la pantalla -> tamaño de salida (None = según el video)
+# Pantalla donde se verá -> tamaños de salida (uno o varios archivos por video)
 ORIENTATIONS = {
-    'Vertical 720x1280 (recomendado)': (720, 1280),
-    'Horizontal 1280x720': (1280, 720),
-    'Según cada video': None,
+    'TV horizontal 1280x720 (como la .201 y la .137)': [(1280, 720)],
+    'TV girada en vertical 720x1280': [(720, 1280)],
+    'Las dos versiones (horizontal y vertical)': [(1280, 720), (720, 1280)],
 }
+# Todas llenan la pantalla: nunca bordes negros
 FITS = {
-    'Ajustar con bordes negros (no recorta)': 'pad',
-    'Fondo difuminado (no recorta)': 'blur',
-    'Llenar la pantalla (recorta los bordes)': 'crop',
+    'Pantalla completa automática (recomendado)': 'auto',
+    'Llenar recortando los bordes': 'crop',
+    'Video entero sobre fondo difuminado': 'blur',
 }
+# "auto": si las proporciones difieren hasta este punto, se recorta; si más, fondo difuminado
+AUTO_CROP_MAX = 0.15
 # Calidad -> (crf, maxrate kbps)
 QUALITIES = {
     'Normal (recomendada, ~4 Mbps)': (23, 4000),
@@ -133,18 +149,49 @@ def target_fps(src):
     return '30', 30.0
 
 
+def resolve_fit(fit, info, w, h):
+    """'auto' => 'crop' si la forma del video casi coincide con la pantalla, si no 'blur'."""
+    if fit != 'auto':
+        return fit
+    if not info.get('width') or not info.get('height'):
+        return 'blur'
+    src = info['width'] / info['height']
+    dst = w / h
+    diff = max(src, dst) / min(src, dst) - 1  # 0 = misma forma; 16:9 vs 9:16 = 2.16
+    return 'crop' if diff <= AUTO_CROP_MAX else 'blur'
+
+
 def build_filter(fit, w, h, fps_expr):
-    """Cadena de filtros: escalar/encajar a WxH, fps constantes, píxeles cuadrados, yuv420p."""
+    """Cadena de filtros que LLENA WxH (recortando o con fondo difuminado), fps constantes, yuv420p."""
     tail = ',setsar=1,fps=%s,format=yuv420p' % fps_expr
     if fit == 'crop':
         return 'scale=%d:%d:force_original_aspect_ratio=increase:flags=lanczos,crop=%d:%d%s' % (w, h, w, h, tail)
-    if fit == 'blur':
-        return ('split=2[bg][fg];'
-                '[bg]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,boxblur=20:2,eq=brightness=-0.08[b];'
-                '[fg]scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[f];'
-                '[b][f]overlay=(W-w)/2:(H-h)/2%s') % (w, h, w, h, w, h, tail)
-    return ('scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,'
-            'pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black%s') % (w, h, w, h, tail)
+    # Fondo: el propio video ampliado hasta llenar, muy difuminado y algo oscurecido;
+    # encima, el video entero. Se difumina a 1/4 de tamaño (mismo aspecto, mucho menos cálculo).
+    return ('split=2[bg][fg];'
+            '[bg]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,boxblur=10:2,eq=brightness=-0.10,'
+            'scale=%d:%d[b];'
+            '[fg]scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[f];'
+            '[b][f]overlay=(W-w)/2:(H-h)/2%s') % (w // 4, h // 4, w // 4, h // 4, w, h, w, h, tail)
+
+
+def build_command(ffmpeg, src, info, w, h, fit, quality, audio, out):
+    """Línea de ffmpeg para convertir src a WxH (fit 'crop' o 'blur') en el archivo out."""
+    fps_expr, fps_val = target_fps(info['fps'])
+    crf, maxrate = quality
+    gop = max(1, int(round(fps_val * 2)))  # fotograma clave cada 2 s
+    cmd = [ffmpeg, '-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', '-i', src,
+           '-filter_complex', '[0:v:0]' + build_filter(fit, w, h, fps_expr) + '[v]', '-map', '[v]',
+           '-map_metadata', '-1', '-map_chapters', '-1',
+           '-c:v', 'libx264', '-preset', 'slow', '-profile:v', 'high', '-level:v', '4.0',
+           '-crf', str(crf), '-maxrate', '%dk' % maxrate, '-bufsize', '%dk' % (maxrate * 2),
+           '-g', str(gop), '-keyint_min', str(max(1, gop // 2)), '-pix_fmt', 'yuv420p',
+           '-fps_mode', 'cfr', '-movflags', '+faststart']
+    if audio and info['audio']:
+        cmd += ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-ar', '44100']
+    else:
+        cmd += ['-an']
+    return cmd + ['-sn', '-dn', out]
 
 
 # ---------------------------------------------------------------- verificación MP4 (igual que el servidor)
@@ -254,6 +301,20 @@ def server_problems(info):
     return p
 
 
+def describe_output(out, fit):
+    """(texto del resultado, cumple las reglas del servidor) de un MP4 ya convertido."""
+    res = mp4_info(out)
+    size = os.path.getsize(out)
+    if not res:
+        return 'No se pudo verificar · ' + human_size(size), False
+    problems = server_problems(res)
+    desc = '%dx%d %s · %s fps · H.264 %.1f · %s' % (
+        res['width'], res['height'], 'recortado' if fit == 'crop' else 'fondo difuminado',
+        ('%.2f' % res['fps']).rstrip('0').rstrip('.') if res['fps'] else '?',
+        (res['level'] or 0) / 10, human_size(size))
+    return (desc + (' · ' + ', '.join(problems) if problems else '')), not problems
+
+
 # ---------------------------------------------------------------- utilidades
 
 def human_size(n):
@@ -296,8 +357,9 @@ class App:
         top.pack(fill='x')
         ttk.Label(top, text='Optimiza videos para las pantallas Smart Pizarra',
                   font=('Segoe UI', 13, 'bold')).pack(anchor='w')
-        ttk.Label(top, text='H.264 nivel 4.0 · fps constantes (30 máx.) · 720p · sin audio · '
-                            'verificado con las reglas del servidor', foreground='#555').pack(anchor='w')
+        ttk.Label(top, text='Siempre a pantalla completa (sin bordes negros) · H.264 nivel 4.0 · '
+                            'fps constantes (30 máx.) · 720p · sin audio · verificado con las reglas del servidor',
+                  foreground='#555').pack(anchor='w')
 
         bar = ttk.Frame(root, padding=(12, 6))
         bar.pack(fill='x')
@@ -336,7 +398,7 @@ class App:
         for label, var, values in (('Pantalla:', self.v_orient, ORIENTATIONS), ('Encaje:', self.v_fit, FITS),
                                    ('Calidad:', self.v_quality, QUALITIES)):
             ttk.Label(opts, text=label).grid(row=row, column=0, sticky='w', pady=2)
-            ttk.Combobox(opts, textvariable=var, values=list(values), state='readonly', width=42).grid(
+            ttk.Combobox(opts, textvariable=var, values=list(values), state='readonly', width=50).grid(
                 row=row, column=1, sticky='w', padx=6)
             row += 1
         ttk.Checkbutton(opts, text='Conservar el audio (no recomendado: las pantallas no lo usan)',
@@ -439,7 +501,7 @@ class App:
             messagebox.showinfo(APP_TITLE, 'Agrega al menos un video válido.')
             return
         opts = {
-            'size': ORIENTATIONS[self.v_orient.get()],
+            'sizes': ORIENTATIONS[self.v_orient.get()],
             'fit': FITS[self.v_fit.get()],
             'quality': QUALITIES[self.v_quality.get()],
             'audio': self.v_audio.get(),
@@ -469,36 +531,34 @@ class App:
         self.events.put(('done',))
 
     def convert(self, iid, opts, n, total):
+        """Convierte un video a cada tamaño elegido (1 o 2 archivos) y muestra el resultado."""
         item = self.items[iid]
         src, info = item['path'], item['info']
-        if opts['size']:
-            w, h = opts['size']
-        else:
-            w, h = (720, 1280) if (info['height'] or 0) >= (info['width'] or 0) else (1280, 720)
-        fps_expr, fps_val = target_fps(info['fps'])
-        crf, maxrate = opts['quality']
         outdir = opts['outdir'] or os.path.join(os.path.dirname(src), 'optimizados')
         os.makedirs(outdir, exist_ok=True)
-        out = unique_path(os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + SUFFIX + '.mp4'))
+        sizes = opts['sizes']
+        results = []
+        for k, (w, h) in enumerate(sizes):
+            # Con dos versiones el nombre dice cuál es cuál
+            tag = '' if len(sizes) == 1 else ('_horizontal' if w > h else '_vertical')
+            out = unique_path(os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + SUFFIX + tag + '.mp4'))
+            fit = resolve_fit(opts['fit'], info, w, h)
+            # progreso total: este video ocupa 1/total, repartido entre sus versiones
+            part = (n + k / len(sizes)) / total, 1 / (total * len(sizes))
+            res = self.encode(iid, src, info, w, h, fit, opts, out, part)
+            if res is None:
+                return  # error o cancelado: ya se mostró
+            results.append(res)
+        tag = 'ok' if all(r[1] for r in results) else 'err'
+        state = 'Listo ✓ cumple' if tag == 'ok' else 'No cumple'
+        self.events.put(('state', iid, state, '  |  '.join(r[0] for r in results), tag))
+
+    def encode(self, iid, src, info, w, h, fit, opts, out, part):
+        """Ejecuta ffmpeg para una versión. Devuelve (descripción, cumple) o None si falló/canceló."""
         tmp = out[:-4] + '.parcial.mp4'
-        gop = max(1, int(round(fps_val * 2)))  # fotograma clave cada 2 s
-
-        cmd = [self.ffmpeg, '-hide_banner', '-y', '-nostats', '-progress', 'pipe:1', '-i', src,
-               '-filter_complex' if opts['fit'] == 'blur' else '-vf', build_filter(opts['fit'], w, h, fps_expr),
-               '-map_metadata', '-1', '-map_chapters', '-1',
-               '-c:v', 'libx264', '-preset', 'slow', '-profile:v', 'high', '-level:v', '4.0',
-               '-crf', str(crf), '-maxrate', '%dk' % maxrate, '-bufsize', '%dk' % (maxrate * 2),
-               '-g', str(gop), '-keyint_min', str(max(1, gop // 2)), '-pix_fmt', 'yuv420p',
-               '-fps_mode', 'cfr', '-movflags', '+faststart']
-        if opts['fit'] != 'blur':
-            cmd[cmd.index('-vf'):cmd.index('-vf')] = ['-map', '0:v:0']
-        if opts['audio'] and info['audio']:
-            cmd += ['-map', '0:a:0?', '-c:a', 'aac', '-b:a', '128k', '-ac', '2', '-ar', '44100']
-        else:
-            cmd += ['-an']
-        cmd += ['-sn', '-dn', tmp]
-
-        self.events.put(('state', iid, 'Optimizando 0 %', '', ''))
+        cmd = build_command(self.ffmpeg, src, info, w, h, fit, opts['quality'], opts['audio'], tmp)
+        label = '%s %dx%d' % ('horizontal' if w > h else 'vertical', w, h)
+        self.events.put(('state', iid, 'Optimizando 0 %', label, ''))
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                      encoding='utf-8', errors='replace', creationflags=NO_WINDOW)
         err_tail = []
@@ -518,7 +578,7 @@ class App:
                 except ValueError:
                     continue
                 pct = max(0.0, min(100.0, t / dur * 100))
-                self.events.put(('progress', iid, pct, (n + pct / 100) / total * 100))
+                self.events.put(('progress', iid, pct, (part[0] + part[1] * pct / 100) * 100))
         code = self.proc.wait()
         if self.cancel.is_set() or code != 0:
             try:
@@ -530,23 +590,10 @@ class App:
             else:
                 msg = next((l.strip() for l in reversed(err_tail) if l.strip()), 'ffmpeg terminó con error %d' % code)
                 self.events.put(('state', iid, 'Error', msg[:150], 'err'))
-            return
+            return None
         os.replace(tmp, out)
-        self.last_output = outdir
-
-        res = mp4_info(out)
-        size = os.path.getsize(out)
-        if not res:
-            self.events.put(('state', iid, 'Revisar', 'No se pudo verificar · ' + human_size(size), 'err'))
-            return
-        problems = server_problems(res)
-        desc = '%dx%d · %s fps · H.264 %.1f · %s' % (res['width'], res['height'],
-                                                     ('%.2f' % res['fps']).rstrip('0').rstrip('.') if res['fps'] else '?',
-                                                     (res['level'] or 0) / 10, human_size(size))
-        if problems:
-            self.events.put(('state', iid, 'No cumple', desc + ' · ' + ', '.join(problems), 'err'))
-        else:
-            self.events.put(('state', iid, 'Listo ✓ cumple', desc, 'ok'))
+        self.last_output = os.path.dirname(out)
+        return describe_output(out, fit)
 
     # ---- eventos del hilo de trabajo -> interfaz
     def pump(self):

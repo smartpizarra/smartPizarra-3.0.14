@@ -1,8 +1,29 @@
-<!-- Versión del archivo: 1.0.0 (2026-11-15) -->
+<!-- Versión del archivo: 1.0.1 (2026-11-19) -->
 # Smart Pizarra · Optimizador de video (Windows)
 
-Convierte cualquier video para que las pantallas (TV box Hi3798, Android 9) lo
-reproduzcan fluido y para que el panel lo acepte al subirlo.
+Convierte cualquier video para que las pantallas (TV box HiSilicon .137 y Allwinner .201)
+lo reproduzcan fluido **a pantalla completa** y para que el panel lo acepte al subirlo.
+
+## Elige la pantalla correcta
+
+El video sale con la **forma exacta de la pantalla** donde se va a ver; así llena la TV de
+borde a borde. Nunca se añaden bordes negros.
+
+| Pantalla | Cuándo |
+|---|---|
+| **TV horizontal 1280×720** (por defecto) | TV colgada normal, como la .201 y la .137 |
+| **TV girada en vertical 720×1280** | TV montada de pie (orientación 90°/270° en config) |
+| **Las dos versiones** | Si tienes TV de los dos tipos: crea `_horizontal` y `_vertical` |
+
+| Encaje | Resultado |
+|---|---|
+| **Pantalla completa automática** (por defecto) | Si el video casi tiene la forma de la pantalla, la llena recortando ese poco; si no, muestra el video entero sobre un fondo difuminado del propio video |
+| Llenar recortando los bordes | Siempre llena; corta lo que sobra por los lados o arriba/abajo |
+| Video entero sobre fondo difuminado | Nunca corta; el fondo difuminado ocupa el resto |
+
+Ejemplo real (2026-11-19, .201): un video horizontal convertido con la versión anterior a
+"vertical con bordes negros" se veía en un recuadro de 405×228 en el centro de la TV. La
+misma carrera convertida para "TV horizontal" ocupa los 1280×720 y perdió 4 de 509 cuadros (0,8 %).
 
 ## Uso
 
@@ -19,9 +40,9 @@ que usa el servidor. "Listo ✓ cumple" significa que el panel lo aceptará.
 
 | Parámetro | Valor |
 |---|---|
-| Resolución | 720×1280 vertical (o 1280×720 horizontal, o según cada video) |
-| Encaje | bordes negros, fondo difuminado o llenar recortando (nunca deforma) |
-| Códec | H.264 perfil High, nivel 4.0, yuv420p 8 bits |
+| Resolución | 1280×720 (TV horizontal) o 720×1280 (TV girada), siempre a pantalla completa |
+| Encaje | automático, recortando o con fondo difuminado (nunca deforma ni deja bordes negros) |
+| Códec | H.264 perfil High, nivel 4.0, yuv420p 8 bits (decodificador por hardware de las dos cajas; nunca WebM/VP9) |
 | FPS | constantes: 30 (25 o 24 si el original es de 25/50 o 24/48; nunca 60) |
 | Bitrate | ~4 Mbps (Normal), ~5 (Alta), ~2.5 (Ligera) |
 | Fotograma clave | cada 2 s |
