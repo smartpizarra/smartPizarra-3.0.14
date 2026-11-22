@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.7 (2026-11-22)
+// Versión del archivo: 1.0.8 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -647,6 +647,8 @@ foreach ($devices as $d) {
 $planState = $user !== null ? PlanRepository::forUser($user) : ['state' => 'none', 'plan' => null, 'days' => 0, 'until' => null];
 $planLimits = $user !== null ? PlanRepository::limits($user) : null;
 $planHistory = $user !== null && $section === 'plan' ? PlanRepository::history((int) $user['id']) : [];
+// Todos los planes disponibles con sus características y comentario (Mi plan; solo lectura)
+$allPlans = $user !== null && $section === 'plan' ? PlanRepository::all() : [];
 $quota = $planLimits['bytes'] ?? 0;
 $maxFiles = $planLimits['files'] ?? 0;
 $atFileLimit = count($mediaList) >= $maxFiles;
@@ -729,6 +731,16 @@ if ($validity['state'] !== 'active') {
     dl.plan-data dt { color: var(--muted); }
     dl.plan-data dd { margin: 0; overflow-wrap: anywhere; }
     .table-wrap { overflow-x: auto; }
+    /* Planes disponibles: tarjetas en rejilla (1 columna en móvil); el plan del usuario resaltado */
+    .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 12px; }
+    .plan-card { display: flex; flex-direction: column; gap: 6px; }
+    .plan-card.mine { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok) inset; }
+    .plan-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .plan-name { font-size: 1.15rem; }
+    .plan-price { font-size: 1.3rem; font-weight: 700; }
+    .plan-features { margin: 0; padding-left: 18px; }
+    .plan-features li { margin: 2px 0; }
+    .plan-comment { margin: 4px 0 0; color: var(--muted); font-size: .9rem; overflow-wrap: anywhere; }
     table.history { width: 100%; border-collapse: collapse; font-size: .92rem; }
     table.history th, table.history td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.25)); white-space: nowrap; }
     table.history th { color: var(--muted); font-weight: 600; }
@@ -1135,6 +1147,31 @@ if ($validity['state'] !== 'active') {
       <?php endif; ?>
       <p class="hint">La vigencia del contenido en tus pantallas: <?= $validity['text'] ?>. Al renovar el plan se suman sus días.</p>
     </section>
+    <!-- PLANES DISPONIBLES (2026-11-22): todos, con sus características y el comentario del
+         administrador; el suyo va marcado. Para cambiar de plan, el usuario se lo pide al administrador. -->
+    <?php if ($allPlans): ?>
+      <div class="section-head">
+        <h2>Planes disponibles</h2>
+        <span class="hint">Para cambiar de plan, escríbele al administrador en <a href="?s=mensajes">Mensajes</a>.</span>
+      </div>
+      <div class="plan-grid">
+        <?php foreach ($allPlans as $ap): $mine = $planState['plan'] !== null && (int) $planState['plan']['id'] === (int) $ap['id']; ?>
+          <section class="card plan-card<?= $mine ? ' mine' : '' ?>">
+            <div class="plan-head">
+              <strong class="plan-name"><?= h($ap['name']) ?></strong>
+              <?php if ($mine): ?><span class="badge authorized">Tu plan</span><?php endif; ?>
+            </div>
+            <div class="plan-price"><?= h(PlanRepository::priceText($ap)) ?> <span class="hint">/ <?= (int) $ap['days'] ?> días</span></div>
+            <ul class="plan-features">
+              <li><?= (int) $ap['max_files'] ?> archivo(s) de contenido</li>
+              <li><?= h(PlanRepository::storageText((int) $ap['storage_mb'])) ?> de almacenamiento</li>
+              <li><?= (int) $ap['days'] ?> días por periodo</li>
+            </ul>
+            <?php if (!empty($ap['comment'])): ?><p class="plan-comment"><?= nl2br(h((string) $ap['comment'])) ?></p><?php endif; ?>
+          </section>
+        <?php endforeach; ?>
+      </div>
+    <?php endif; ?>
     <!-- Historial de asignaciones y renovaciones (datos del plan en ese momento) -->
     <section class="card block">
       <h2>Historial de renovaciones</h2>

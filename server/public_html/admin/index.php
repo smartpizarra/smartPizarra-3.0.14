@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.12 (2026-11-22)
+// Versión del archivo: 1.0.13 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -2226,7 +2226,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php elseif ($view === 'plans' && !$historyDevice):
       // Campos de un plan (crear o editar); el almacenamiento se escribe en GB
       $planFields = static function (?array $pl, string $px): string {
-          $v = $pl ?? ['name' => '', 'days' => 30, 'max_files' => 5, 'storage_mb' => 1024, 'price' => '10.00', 'currency' => 'USD'];
+          $v = $pl ?? ['name' => '', 'days' => 30, 'max_files' => 5, 'storage_mb' => 1024, 'price' => '10.00', 'currency' => 'USD', 'comment' => ''];
           return '<div class="user-grid">'
               . '<div><label for="' . $px . 'name">Nombre del plan</label><input type="text" id="' . $px . 'name" name="name" maxlength="60" required value="' . h((string) $v['name']) . '" placeholder="p. ej. Lite"></div>'
               . '<div><label for="' . $px . 'days">Duración (días)</label><input type="number" id="' . $px . 'days" name="days" min="1" max="' . PlanRepository::MAX_DAYS . '" required value="' . (int) $v['days'] . '"></div>'
@@ -2234,7 +2234,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               . '<div><label for="' . $px . 'gb">Almacenamiento (GB)</label><input type="text" id="' . $px . 'gb" name="storage_gb" inputmode="decimal" required value="' . h(PlanRepository::storageGbValue((int) $v['storage_mb'])) . '" placeholder="1 o 0.5"></div>'
               . '<div><label for="' . $px . 'price">Costo</label><input type="text" id="' . $px . 'price" name="price" inputmode="decimal" required value="' . h(rtrim(rtrim((string) $v['price'], '0'), '.') ?: '0') . '" placeholder="10"></div>'
               . '<div><label for="' . $px . 'cur">Moneda</label><input type="text" id="' . $px . 'cur" name="currency" maxlength="3" required value="' . h((string) $v['currency']) . '" data-upper autocapitalize="characters"></div>'
-              . '</div>';
+              . '</div>'
+              // Comentario (opcional): lo ven los usuarios en /cuenta/ → Mi plan, con todos los planes
+              . '<label for="' . $px . 'cm">Comentario (opcional, lo ven los usuarios)</label>'
+              . '<textarea id="' . $px . 'cm" name="comment" rows="2" maxlength="500" placeholder="p. ej. Ideal para 1 pantalla con pocas promociones">' . h((string) ($v['comment'] ?? '')) . '</textarea>';
       };
   ?>
     <!-- ================= PLANES DE CONTENIDO (2026-11-22) =================
@@ -2260,6 +2263,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <div class="meta">
           <?= (int) $pl['days'] ?> días · <?= (int) $pl['max_files'] ?> archivos · <?= h(PlanRepository::storageText((int) $pl['storage_mb'])) ?>
           · <strong><?= h(PlanRepository::priceText($pl)) ?></strong>
+          <?php if (!empty($pl['comment'])): ?>
+            <!-- Comentario del plan (lo ven los usuarios) -->
+            <div class="admin-notes"><?= nl2br(h((string) $pl['comment'])) ?></div>
+          <?php endif; ?>
         </div>
         <details class="edit">
           <summary>Editar</summary>

@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.12 (2026-11-22) -->
+<!-- Versión del archivo: 1.0.13 (2026-11-22) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -316,16 +316,17 @@ Para los **PLANES de contenido** (2026-11-22; **sustituye al límite de archivos
 
 1. Ejecuta una vez `migrations/2026-11-22-plans.sql` (tablas `sp_plans` y `sp_plan_renewals`, columnas `sp_users.plan_id` y `plan_until`). Si sale _Duplicate column name 'plan_id'_, ya estaba hecha.
 2. Sube `private/lib.php`, `admin/index.php` y `cuenta/index.php`.
-3. **Crea los planes y asígnalos**: desde ese momento, un usuario **sin plan no puede subir archivos nuevos** (lo que ya tiene se conserva y se sigue mostrando mientras tenga vigencia).
+3. **Comentario de los planes** (2026-11-22): ejecuta también `migrations/2026-11-22-plans-comment.sql` (columna `sp_plans.comment`). Si sale _Duplicate column name 'comment'_, ya estaba hecha.
+4. **Crea los planes y asígnalos**: desde ese momento, un usuario **sin plan no puede subir archivos nuevos** (lo que ya tiene se conserva y se sigue mostrando mientras tenga vigencia).
 
 Cómo funciona:
 
-- Botón **Planes** del panel: crear, editar y eliminar planes con **nombre** (p. ej. *Lite*), **duración en días** (30), **cantidad de contenido** (5 archivos), **almacenamiento** en GB (1; admite decimales como 0.5) y **costo** con su moneda (10 USD). El nombre no se repite.
+- Botón **Planes** del panel: crear, editar y eliminar planes con **nombre** (p. ej. *Lite*), **duración en días** (30), **cantidad de contenido** (5 archivos), **almacenamiento** en GB (1; admite decimales como 0.5) y **costo** con su moneda (10 USD), y un **comentario** opcional (hasta 500 caracteres, p. ej. «Ideal para 1 pantalla») que ven los usuarios. El nombre no se repite.
 - Ficha del usuario → **Plan** (antes *Contenido*): **Asignar** un plan (o **Cambiar** a otro), **Renovar plan** y **Quitar plan**, más el **historial**. Solo el administrador ve estos botones; al pulsar *Renovar plan* el usuario queda renovado al momento.
 - **Asignar o renovar suma los días del plan** a la fecha de fin del plan y a la **vigencia del contenido**: desde hoy si estaba vencido, o desde su fecha de fin si sigue vigente (no se pierden días). Cada vez queda una línea en el historial con los datos del plan en ese momento (nombre, días, archivos, espacio, costo y hasta cuándo).
 - Con el plan **vigente**, el usuario puede tener hasta la cantidad de archivos y el espacio del plan; con el plan **vencido** o sin plan no sube nada nuevo. Editar un plan cambia los límites al momento para quien lo tenga (el historial conserva los datos antiguos). Eliminar un plan deja a sus usuarios sin plan.
 - **Vigencia del contenido**: se sigue sumando o restando días a mano en la ficha, tenga el usuario plan o no, y esté vencido o no.
-- El **usuario** ve en `/cuenta/` la pestaña **Mi plan** (nombre, estado, cuándo vence, duración, archivos, almacenamiento, costo y uso) y el **historial de renovaciones**; *Inicio* y *Contenido* muestran su plan y sus límites.
+- El **usuario** ve en `/cuenta/` la pestaña **Mi plan** (nombre, estado, cuándo vence, duración, archivos, almacenamiento, costo y uso) y el **historial de renovaciones**, más **Planes disponibles**: todos los planes con sus características (precio, días, archivos, almacenamiento) y su comentario, con el suyo marcado como *Tu plan*. Para cambiar de plan se lo pide al administrador por *Mensajes*. *Inicio* y *Contenido* muestran su plan y sus límites.
 
 Para el **límite de archivos por usuario** (sustituido el 2026-11-22 por los planes; la columna `max_files` ya no se usa):
 

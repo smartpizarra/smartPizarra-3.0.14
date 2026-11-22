@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.5 (2026-11-22)
+-- Versión del archivo: 1.0.6 (2026-11-22)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -344,6 +344,7 @@ CREATE TABLE IF NOT EXISTS sp_plans (
   storage_mb  INT UNSIGNED  NOT NULL,                 -- almacenamiento en MB (1 GB = 1024 MB)
   price       DECIMAL(10,2) NOT NULL DEFAULT 0.00,    -- costo del periodo
   currency    CHAR(3)       NOT NULL DEFAULT 'USD',   -- moneda del costo
+  comment     VARCHAR(500)  NULL DEFAULT NULL,        -- comentario visible para los usuarios (opcional). Ver migrations/2026-11-22-plans-comment.sql
   created_at  DATETIME      NOT NULL,                 -- UTC
   updated_at  DATETIME      NOT NULL,                 -- UTC
   PRIMARY KEY (id),

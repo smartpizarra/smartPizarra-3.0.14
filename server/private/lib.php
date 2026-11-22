@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.11 (2026-11-22)
+// Versión del archivo: 1.0.12 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -286,6 +286,12 @@ final class Database
         if (!in_array('sp_plans', $tables, true) || !in_array('sp_plan_renewals', $tables, true) || !in_array('plan_id', $userCols, true)) {
             return 'Faltan los planes de contenido (tablas sp_plans / sp_plan_renewals, columna sp_users.plan_id): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans.sql.';
+        }
+        // Comentario de los planes (2026-11-22)
+        $planCols = $pdo->query('SHOW COLUMNS FROM sp_plans')->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('comment', $planCols, true)) {
+            return 'Falta el comentario de los planes (columna sp_plans.comment): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans-comment.sql.';
         }
         // S/N del perfil (2026-11-22)
         $profileCols = $pdo->query('SHOW COLUMNS FROM sp_device_profiles')->fetchAll(PDO::FETCH_COLUMN);
@@ -3145,7 +3151,7 @@ final class PlanRepository
 
     /**
      * Valida el formulario de un plan.
-     * @param array<string,mixed> $in name, days, max_files, storage_gb (admite decimales), price, currency.
+     * @param array<string,mixed> $in name, days, max_files, storage_gb (admite decimales), price, currency, comment (opcional).
      * @return array{name:string,days:int,max_files:int,storage_mb:int,price:string,currency:string}|string Datos o error.
      */
     public static function clean(array $in): array|string
@@ -3184,8 +3190,16 @@ final class PlanRepository
         if (!preg_match('/^[A-Z]{3}$/', $currency)) {
             return 'La moneda son 3 letras (p. ej. USD).';
         }
+        // Comentario (opcional, lo ve el usuario): conserva los saltos de línea, máx. 500
+        $comment = (string) ($in['comment'] ?? '');
+        if (!mb_check_encoding($comment, 'UTF-8')) {
+            $comment = mb_convert_encoding($comment, 'UTF-8', 'Windows-1252');
+        }
+        $comment = str_replace(["\r\n", "\r"], "\n", $comment);
+        $comment = mb_substr(trim((string) preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/u', ' ', $comment)), 0, 500);
         return ['name' => $name, 'days' => $days, 'max_files' => $files, 'storage_mb' => $mb,
-            'price' => number_format((float) $price, 2, '.', ''), 'currency' => $currency];
+            'price' => number_format((float) $price, 2, '.', ''), 'currency' => $currency,
+            'comment' => $comment === '' ? null : $comment];
     }
 
     /** ¿Otro plan tiene ya ese nombre? */
@@ -3218,8 +3232,8 @@ final class PlanRepository
         $now = Database::now();
         $pdo = Database::pdo();
         $pdo->prepare(
-            'INSERT INTO sp_plans (name, days, max_files, storage_mb, price, currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-        )->execute([$d['name'], $d['days'], $d['max_files'], $d['storage_mb'], $d['price'], $d['currency'], $now, $now]);
+            'INSERT INTO sp_plans (name, days, max_files, storage_mb, price, currency, comment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$d['name'], $d['days'], $d['max_files'], $d['storage_mb'], $d['price'], $d['currency'], $d['comment'], $now, $now]);
         return (int) $pdo->lastInsertId();
     }
 
@@ -3230,8 +3244,8 @@ final class PlanRepository
     public static function update(int $id, array $d): void
     {
         Database::pdo()->prepare(
-            'UPDATE sp_plans SET name = ?, days = ?, max_files = ?, storage_mb = ?, price = ?, currency = ?, updated_at = ? WHERE id = ?'
-        )->execute([$d['name'], $d['days'], $d['max_files'], $d['storage_mb'], $d['price'], $d['currency'], Database::now(), $id]);
+            'UPDATE sp_plans SET name = ?, days = ?, max_files = ?, storage_mb = ?, price = ?, currency = ?, comment = ?, updated_at = ? WHERE id = ?'
+        )->execute([$d['name'], $d['days'], $d['max_files'], $d['storage_mb'], $d['price'], $d['currency'], $d['comment'], Database::now(), $id]);
     }
 
     /** Borra un plan: sus usuarios quedan sin plan (FK SET NULL); el historial se conserva. */
