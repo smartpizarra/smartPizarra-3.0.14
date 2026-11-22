@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.9 (2026-11-22)
+// Versión del archivo: 1.0.10 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -840,7 +840,7 @@ try {
                         redirectWith($data, $back);
                     }
                     if (ProfileRepository::macTaken($data['case_mac'], $profileId)) {
-                        redirectWith("Ya hay un perfil con la MAC del case {$data['case_mac']}: búscala y asígnala en lugar de crear otro.", $back);
+                        redirectWith("Ya hay un perfil con la MAC Case {$data['case_mac']}: búscalo y asígnalo en lugar de crear otro.", $back);
                     }
                     // El S/N (opcional) tampoco se puede repetir
                     if (ProfileRepository::serialTaken($data['serial'], $profileId)) {
@@ -2031,7 +2031,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
           return '<div class="user-grid">'
               . '<div><label for="' . $px . 'brand">Marca</label><input type="text" id="' . $px . 'brand" name="brand" maxlength="60" required value="' . h((string) $v['brand']) . '" placeholder="p. ej. Hisilicon"></div>'
               . '<div><label for="' . $px . 'model">Modelo</label><input type="text" id="' . $px . 'model" name="model" maxlength="60" required value="' . h((string) $v['model']) . '" placeholder="p. ej. TVBOX Hi3798"></div>'
-              . '<div><label for="' . $px . 'mac">MAC que sale en el case</label><input type="text" id="' . $px . 'mac" name="case_mac" maxlength="17" required value="' . h((string) $v['case_mac']) . '" placeholder="E8:BB:3E:C8:FB:5A" autocapitalize="characters" spellcheck="false"></div>'
+              // MAC Case: data-mac => el JS del pie pone los ":" solo (escrita a mano o con lector de
+              // código de barras, con o sin separadores), pasa a mayúsculas y exige 12 caracteres hex
+              . '<div><label for="' . $px . 'mac">MAC Case</label><input type="text" id="' . $px . 'mac" name="case_mac" maxlength="17" required data-mac value="' . h((string) $v['case_mac']) . '" placeholder="E8:BB:3E:C8:FB:5A" autocapitalize="characters" autocomplete="off" spellcheck="false" inputmode="text">'
+              . '<small class="owner" data-mac-hint>12 caracteres (0-9, A-F); los «:» se ponen solos</small></div>'
               // S/N de la caja (opcional, único; también se busca por él)
               . '<div><label for="' . $px . 'sn">S/N (opcional)</label><input type="text" id="' . $px . 'sn" name="serial" maxlength="60" value="' . h((string) ($v['serial'] ?? '')) . '" placeholder="Número de serie de la caja" autocapitalize="characters" spellcheck="false"></div>'
               . '<div><label for="' . $px . 'date">Fecha de instalación</label><input type="date" id="' . $px . 'date" name="installed_on" required value="' . h((string) $v['installed_on']) . '"></div>'
@@ -2478,7 +2481,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <!-- PERFIL (caja física): marca, modelo, MAC del case, instalación; sin perfil => selector de perfiles libres -->
         <?php if (!empty($d['profile_id'])): ?>
           Perfil: <strong><?= h($d['profile_brand'] . ' ' . $d['profile_model']) ?></strong>
-          · MAC del case <span class="device-mac"><?= h($d['profile_case_mac']) ?></span>
+          · MAC Case <span class="device-mac"><?= h($d['profile_case_mac']) ?></span>
           <?= !empty($d['profile_serial']) ? '· S/N <span class="device-mac">' . h($d['profile_serial']) . '</span>' : '' ?>
           · instalado el <?= h(date('d/m/Y', strtotime((string) $d['profile_installed_on']))) ?>
           · <a href="./?<?= h(http_build_query(['view' => 'profiles', 'pq' => $d['profile_case_mac']])) ?>">editar</a><br>
@@ -2637,6 +2640,80 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       form.addEventListener("input", update);
       form.addEventListener("change", update);
       update();
+    });
+  })();
+  </script>
+  <script nonce="<?= h($nonce) ?>">
+  /*
+   * MAC Case del perfil (input[data-mac]), 2026-11-22:
+   *  - Escrita a mano o con LECTOR DE CÓDIGO DE BARRAS, con o sin separadores
+   *    ("e8bb3ec8fb5a", "E8-BB-3E-C8-FB-5A"...): se pasa a mayúsculas y se ponen
+   *    los ":" solos cada 2 caracteres (E8:BB:3E:C8:FB:5A), sin mover el cursor.
+   *  - Valida: solo 0-9 / A-F y exactamente 12 caracteres; si no, el formulario
+   *    no se envía y el aviso dice qué falta. El servidor lo vuelve a comprobar.
+   *  - El lector suele terminar con Enter: si la MAC está completa, pasa al
+   *    siguiente campo en lugar de enviar el formulario; si no, muestra el aviso.
+   */
+  (function () {
+    "use strict";
+    document.querySelectorAll("input[data-mac]").forEach(function (input) {
+      var hint = input.parentNode.querySelector("[data-mac-hint]");
+      var HINT = hint ? hint.textContent : "";
+      // Caracteres que se aceptan como separadores (se quitan antes de formatear)
+      function strip(v) { return v.replace(/[\s:.\-]/g, "").toUpperCase(); }
+      // Comprueba y explica; devuelve true si la MAC es válida
+      function check() {
+        var raw = strip(input.value), msg = "";
+        if (raw === "") msg = input.required ? "Escribe la MAC Case (12 caracteres)." : "";
+        else if (/[^0-9A-F]/.test(raw)) msg = "La MAC Case solo puede tener 0-9 y A-F (hay: " + raw.replace(/[0-9A-F]/g, "") + ").";
+        else if (raw.length !== 12) msg = "La MAC Case debe tener 12 caracteres: llevas " + raw.length + ".";
+        input.setCustomValidity(msg);
+        if (hint) {
+          hint.textContent = msg || (raw.length === 12 ? "MAC completa ✓" : HINT);
+          hint.style.color = msg && raw !== "" ? "var(--bad, #c0392b)" : "";
+        }
+        return msg === "";
+      }
+      function format() {
+        var v = input.value, caret = input.selectionStart == null ? v.length : input.selectionStart;
+        // Caracteres útiles (sin separadores) que hay antes del cursor
+        var before = strip(v.slice(0, caret)).length;
+        var raw = strip(v);
+        // Con caracteres no hex no se reformatea (se ve lo escrito y el aviso dice cuál sobra)
+        if (/^[0-9A-F]*$/.test(raw)) {
+          raw = raw.slice(0, 12);
+          var out = raw.replace(/(..)(?=.)/g, "$1:");
+          if (out !== v) {
+            input.value = out;
+            // Cursor tras el mismo carácter útil (cada par previo añade un ":")
+            var pos = before + Math.floor(Math.max(0, before - 1) / 2);
+            if (before > 0 && before % 2 === 0 && before < raw.length) pos++;
+            try { input.setSelectionRange(pos, pos); } catch (e) { /* tipo sin selección */ }
+          }
+        } else if (input.value !== input.value.toUpperCase()) {
+          input.value = input.value.toUpperCase();
+        }
+        check();
+      }
+      input.addEventListener("input", format);
+      // Pegar un texto con 12 hex y separadores raros: el maxlength (17) no debe cortarlo
+      input.addEventListener("paste", function (e) {
+        var text = (e.clipboardData || window.clipboardData).getData("text");
+        if (text) { e.preventDefault(); input.value = text; format(); }
+      });
+      input.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        format();
+        if (!check()) { input.reportValidity(); return; }
+        // Siguiente campo del formulario (el lector manda Enter al terminar)
+        var fields = Array.prototype.filter.call(input.form.elements, function (el) {
+          return !el.disabled && el.type !== "hidden" && el.offsetParent !== null;
+        });
+        var next = fields[fields.indexOf(input) + 1];
+        if (next) next.focus();
+      });
+      format();
     });
   })();
   </script>

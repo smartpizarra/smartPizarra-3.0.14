@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.9 (2026-11-22)
+// Versión del archivo: 1.0.10 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -3143,7 +3143,7 @@ final class ProfileRepository
         }
         $mac = DeviceRepository::cleanMac(mb_substr((string) ($in['case_mac'] ?? ''), 0, 40));
         if ($mac === null) {
-            return 'Escribe la MAC del case completa (12 dígitos hexadecimales, p. ej. E8:BB:3E:C8:FB:5A).';
+            return 'Escribe la MAC Case completa: 12 caracteres (0-9, A-F), con o sin «:» (p. ej. E8:BB:3E:C8:FB:5A o E8BB3EC8FB5A).';
         }
         $date = (string) ($in['installed_on'] ?? '');
         $d = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
