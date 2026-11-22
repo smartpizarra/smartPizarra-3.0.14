@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.8 (2026-11-22)
+// Versión del archivo: 1.0.9 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -313,7 +313,7 @@ function adFields(?array $ad, array $users, array $devices): string
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $d['admin_alias'] ?? null, $id, $d['user_company']], [$d['mac'] ?? null, $d['profile_case_mac'] ?? null])
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $d['admin_alias'] ?? null, $id, $d['user_company'], $d['profile_serial'] ?? null], [$d['mac'] ?? null, $d['profile_case_mac'] ?? null])
             . '><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
             . ($d['label'] ? h($d['label']) . ' ' : '') . '<span class="mono">' . h($id) . '</span>'
             . ($d['user_company'] ? ' <span class="owner">(' . h($d['user_company']) . ')</span>' : '') . '</label>';
@@ -414,7 +414,7 @@ function overlayAdminTargets(array $o, array $users, array $devices): string
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $d['admin_alias'] ?? null, $id, $d['user_company']], [$d['mac'] ?? null, $d['profile_case_mac'] ?? null])
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $d['admin_alias'] ?? null, $id, $d['user_company'], $d['profile_serial'] ?? null], [$d['mac'] ?? null, $d['profile_case_mac'] ?? null])
             . '><input type="checkbox" name="devices[]" value="' . h($id) . '"' . (isset($chosenDevices[$id]) ? ' checked' : '') . '> '
             . ($d['label'] ? h($d['label']) . ' ' : '') . '<span class="mono">' . h($id) . '</span>'
             . ($d['user_company'] ? ' <span class="owner">(' . h($d['user_company']) . ')</span>' : '') . '</label>';
@@ -841,6 +841,10 @@ try {
                     }
                     if (ProfileRepository::macTaken($data['case_mac'], $profileId)) {
                         redirectWith("Ya hay un perfil con la MAC del case {$data['case_mac']}: búscala y asígnala en lugar de crear otro.", $back);
+                    }
+                    // El S/N (opcional) tampoco se puede repetir
+                    if (ProfileRepository::serialTaken($data['serial'], $profileId)) {
+                        redirectWith("Ya hay un perfil con el S/N {$data['serial']}: búscalo y asígnalo en lugar de crear otro.", $back);
                     }
                     if ($action === 'profile_update') {
                         ProfileRepository::update($profileId, $data);
@@ -1599,7 +1603,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
   <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages'], true) ? ' hidden-tools' : '' ?>" method="get">
-    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, alias del admin, empresa, email, MAC o MAC del case' ?>" aria-label="Buscar">
+    <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, alias del admin, empresa, email, MAC, MAC del case o S/N' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
       <option value="">Todos los usuarios</option>
@@ -2023,11 +2027,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php elseif ($view === 'profiles' && !$historyDevice):
       // Campos de un perfil (crear o editar)
       $profileFields = static function (?array $pr, string $px): string {
-          $v = $pr ?? ['brand' => '', 'model' => '', 'case_mac' => '', 'installed_on' => gmdate('Y-m-d')];
+          $v = $pr ?? ['brand' => '', 'model' => '', 'case_mac' => '', 'serial' => '', 'installed_on' => gmdate('Y-m-d')];
           return '<div class="user-grid">'
               . '<div><label for="' . $px . 'brand">Marca</label><input type="text" id="' . $px . 'brand" name="brand" maxlength="60" required value="' . h((string) $v['brand']) . '" placeholder="p. ej. Hisilicon"></div>'
               . '<div><label for="' . $px . 'model">Modelo</label><input type="text" id="' . $px . 'model" name="model" maxlength="60" required value="' . h((string) $v['model']) . '" placeholder="p. ej. TVBOX Hi3798"></div>'
               . '<div><label for="' . $px . 'mac">MAC que sale en el case</label><input type="text" id="' . $px . 'mac" name="case_mac" maxlength="17" required value="' . h((string) $v['case_mac']) . '" placeholder="E8:BB:3E:C8:FB:5A" autocapitalize="characters" spellcheck="false"></div>'
+              // S/N de la caja (opcional, único; también se busca por él)
+              . '<div><label for="' . $px . 'sn">S/N (opcional)</label><input type="text" id="' . $px . 'sn" name="serial" maxlength="60" value="' . h((string) ($v['serial'] ?? '')) . '" placeholder="Número de serie de la caja" autocapitalize="characters" spellcheck="false"></div>'
               . '<div><label for="' . $px . 'date">Fecha de instalación</label><input type="date" id="' . $px . 'date" name="installed_on" required value="' . h((string) $v['installed_on']) . '"></div>'
               . '</div>';
       };
@@ -2054,13 +2060,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <?= $profileFields(null, 'pnew-') ?>
         <?= $deviceSelect('pnew-', $profileDevice !== '' ? $profileDevice : null) ?>
         <p><button class="primary" type="submit">Crear perfil</button>
-          <span class="owner">Todos los campos son obligatorios. Para autorizar un equipo por primera vez, debe tener perfil.</span></p>
+          <span class="owner">Todos los campos son obligatorios salvo el S/N. Para autorizar un equipo por primera vez, debe tener perfil.</span></p>
       </form>
     </details>
-    <!-- Búsqueda de perfiles: marca, modelo, equipo o MAC del case (sin importar ":" o "-") -->
+    <!-- Búsqueda de perfiles: marca, modelo, equipo, S/N o MAC del case (sin importar ":" o "-") -->
     <form class="profile-search" method="get">
       <input type="hidden" name="view" value="profiles">
-      <input type="search" name="pq" value="<?= h($pq) ?>" placeholder="Buscar por MAC, marca, modelo o equipo" aria-label="Buscar perfil">
+      <input type="search" name="pq" value="<?= h($pq) ?>" placeholder="Buscar por MAC, S/N, marca, modelo o equipo" aria-label="Buscar perfil">
       <button type="submit">Buscar</button>
       <?php if ($pq !== ''): ?><a class="btn" href="?view=profiles">Ver todos</a><?php endif; ?>
     </form>
@@ -2073,6 +2079,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         </div>
         <div class="meta">
           MAC: <span class="device-mac"><?= h($pr['case_mac']) ?></span>
+          · S/N <?= !empty($pr['serial']) ? '<span class="device-mac">' . h($pr['serial']) . '</span>' : '<em>sin registrar</em>' ?>
           · Instalado el <?= h(date('d/m/Y', strtotime((string) $pr['installed_on']))) ?><br>
           <?php if ($pr['device_id']): ?>
             Equipo: <a href="./?<?= h(http_build_query(['filter' => 'all', 'q' => $pr['device_id']])) ?>"><?= h($pr['device_id']) ?></a>
@@ -2472,6 +2479,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <?php if (!empty($d['profile_id'])): ?>
           Perfil: <strong><?= h($d['profile_brand'] . ' ' . $d['profile_model']) ?></strong>
           · MAC del case <span class="device-mac"><?= h($d['profile_case_mac']) ?></span>
+          <?= !empty($d['profile_serial']) ? '· S/N <span class="device-mac">' . h($d['profile_serial']) . '</span>' : '' ?>
           · instalado el <?= h(date('d/m/Y', strtotime((string) $d['profile_installed_on']))) ?>
           · <a href="./?<?= h(http_build_query(['view' => 'profiles', 'pq' => $d['profile_case_mac']])) ?>">editar</a><br>
         <?php else:

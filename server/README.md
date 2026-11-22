@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.10 (2026-11-22) -->
+<!-- Versión del archivo: 1.0.11 (2026-11-22) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).

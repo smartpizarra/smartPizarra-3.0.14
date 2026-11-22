@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.5 (2026-11-22)
+// Versión del archivo: 1.0.6 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -114,7 +114,7 @@ function targetFields(array $devices, bool $all, array $selected, string $uid): 
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="d-' . h($uid . $id) . '"'
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id, $d['profile_serial'] ?? null], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="d-' . h($uid . $id) . '"'
             . (in_array($id, $selected, true) ? ' checked' : '') . '> '
             . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
             . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
@@ -211,7 +211,7 @@ function overlayAssignFields(array $o, array $devices): string
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
-        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="' . h($p . $id) . '"'
+        $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id, $d['profile_serial'] ?? null], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="' . h($p . $id) . '"'
             . (in_array($id, $o['devices'], true) ? ' checked' : '') . '> '
             . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
             . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
@@ -832,7 +832,7 @@ if ($validity['state'] !== 'active') {
         <input type="hidden" name="s" value="equipos">
         <label for="dq" class="sr">Buscar dispositivo</label>
         <input type="search" id="dq" name="q" value="<?= h($deviceQuery) ?>" maxlength="40"
-               placeholder="Buscar por MAC (p. ej. E8:BB:3E:C8:FB:5A), nombre o ID" spellcheck="false">
+               placeholder="Buscar por MAC (p. ej. E8:BB:3E:C8:FB:5A), S/N, nombre o ID" spellcheck="false">
         <button type="submit">Buscar</button>
         <?php if ($deviceQuery !== ''): ?><a class="btn" href="?s=equipos">Ver todos</a><?php endif; ?>
       </form>
@@ -859,6 +859,10 @@ if ($validity['state'] !== 'active') {
           MAC: <?= !empty($d['profile_case_mac'])
             ? '<span class="case-mac">' . h($d['profile_case_mac']) . '</span>'
             : '<em>sin registrar</em> <span class="hint">(la registra el administrador)</span>' ?><br>
+          <?php if (!empty($d['profile_serial'])): ?>
+            <!-- S/N de la caja (del perfil que registra el administrador; se puede buscar por él) -->
+            S/N: <span class="case-mac"><?= h($d['profile_serial']) ?></span><br>
+          <?php endif; ?>
           Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
           Registrado el <?= dateTag($d['created_at']) ?>
           · Arranques: <?= (int) ($d['boots'] ?? 0) ?>

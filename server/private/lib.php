@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.8 (2026-11-22)
+// Versión del archivo: 1.0.9 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -281,6 +281,12 @@ final class Database
         if (!in_array('sp_device_profiles', $tables, true) || !in_array('first_authorized_at', $cols, true)) {
             return 'Faltan los perfiles de equipo (tabla sp_device_profiles / columna first_authorized_at): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-profiles.sql.';
+        }
+        // S/N del perfil (2026-11-22)
+        $profileCols = $pdo->query('SHOW COLUMNS FROM sp_device_profiles')->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('serial', $profileCols, true)) {
+            return 'Falta el S/N de los perfiles (columna sp_device_profiles.serial): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-profile-serial.sql.';
         }
         return null;
     }
@@ -749,7 +755,7 @@ final class DeviceRepository
         // profile_*: PERFIL del equipo (marca, modelo, MAC del case, instalación) o NULL
         $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,
                   p.id AS profile_id, p.brand AS profile_brand, p.model AS profile_model,
-                  p.case_mac AS profile_case_mac, p.installed_on AS profile_installed_on,
+                  p.case_mac AS profile_case_mac, p.serial AS profile_serial, p.installed_on AS profile_installed_on,
                   -- mac_from_exists: el equipo anterior ("antes en SP-…") sigue en la base; si se
                   -- eliminó, el panel muestra el ID sin enlace (el enlace llevaba a una lista vacía)
                   (d.mac_from IS NOT NULL AND EXISTS (SELECT 1 FROM sp_devices o WHERE o.device_id = d.mac_from)) AS mac_from_exists,
@@ -796,10 +802,10 @@ final class DeviceRepository
             $args[] = $userId;
         }
         if ($search !== '') {
-            // También la MARCA y el MODELO de su perfil
-            $match = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ? OR p.brand LIKE ? OR p.model LIKE ?';
+            // También la MARCA, el MODELO y el S/N de su perfil
+            $match = '(d.device_id LIKE ? OR d.label LIKE ? OR u.company LIKE ? OR u.email LIKE ? OR p.brand LIKE ? OR p.model LIKE ? OR p.serial LIKE ?';
             $like = '%' . addcslashes($search, '%_\\') . '%';
-            array_push($args, $like, $like, $like, $like, $like, $like);
+            array_push($args, $like, $like, $like, $like, $like, $like, $like);
             if ($admin) {
                 $match .= ' OR d.admin_alias LIKE ?';
                 $args[] = $like;
@@ -3147,7 +3153,24 @@ final class ProfileRepository
         if ($d > new DateTimeImmutable('tomorrow')) {
             return 'La fecha de instalación no puede ser futura.';
         }
-        return ['brand' => $brand, 'model' => $model, 'case_mac' => $mac, 'installed_on' => $date];
+        // S/N (opcional): se guarda en mayúsculas y sin espacios por fuera; "" = sin S/N (NULL)
+        $serial = strtoupper($text($in['serial'] ?? ''));
+        if ($serial !== '' && !preg_match('/^[A-Z0-9][A-Z0-9 ._\/\-]*$/', $serial)) {
+            return 'El S/N solo puede llevar letras, números, espacios y los signos . _ / -';
+        }
+        return ['brand' => $brand, 'model' => $model, 'case_mac' => $mac, 'serial' => $serial === '' ? null : $serial,
+            'installed_on' => $date];
+    }
+
+    /** ¿Otro perfil tiene ya ese S/N? (el S/N es único cuando se escribe) */
+    public static function serialTaken(?string $serial, int $exceptId = 0): bool
+    {
+        if ($serial === null || $serial === '') {
+            return false;
+        }
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_device_profiles WHERE serial = ? AND id <> ?');
+        $stmt->execute([$serial, $exceptId]);
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     /**
@@ -3161,8 +3184,9 @@ final class ProfileRepository
         $args = [];
         if ($search !== '') {
             $like = '%' . addcslashes($search, '%_\\') . '%';
-            $where = ' WHERE (p.brand LIKE ? OR p.model LIKE ? OR p.device_id LIKE ? OR d.label LIKE ?';
-            array_push($args, $like, $like, $like, $like);
+            // También por el S/N (trozo, sin importar mayúsculas)
+            $where = ' WHERE (p.brand LIKE ? OR p.model LIKE ? OR p.device_id LIKE ? OR d.label LIKE ? OR p.serial LIKE ?';
+            array_push($args, $like, $like, $like, $like, $like);
             $hex = strtoupper((string) preg_replace('/[\s:.\-]/', '', $search));
             if (strlen($hex) >= 2 && ctype_xdigit($hex)) {
                 $where .= " OR REPLACE(p.case_mac, ':', '') LIKE ?";
@@ -3213,23 +3237,23 @@ final class ProfileRepository
         return (int) $stmt->fetchColumn() > 0;
     }
 
-    /** @param array{brand:string,model:string,case_mac:string,installed_on:string} $d Datos de clean(). */
+    /** @param array{brand:string,model:string,case_mac:string,serial:?string,installed_on:string} $d Datos de clean(). */
     public static function create(array $d): int
     {
         $now = Database::now();
         $pdo = Database::pdo();
         $pdo->prepare(
-            'INSERT INTO sp_device_profiles (brand, model, case_mac, installed_on, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-        )->execute([$d['brand'], $d['model'], $d['case_mac'], $d['installed_on'], $now, $now]);
+            'INSERT INTO sp_device_profiles (brand, model, case_mac, serial, installed_on, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$d['brand'], $d['model'], $d['case_mac'], $d['serial'], $d['installed_on'], $now, $now]);
         return (int) $pdo->lastInsertId();
     }
 
-    /** @param array{brand:string,model:string,case_mac:string,installed_on:string} $d Datos de clean(). */
+    /** @param array{brand:string,model:string,case_mac:string,serial:?string,installed_on:string} $d Datos de clean(). */
     public static function update(int $id, array $d): void
     {
         Database::pdo()->prepare(
-            'UPDATE sp_device_profiles SET brand = ?, model = ?, case_mac = ?, installed_on = ?, updated_at = ? WHERE id = ?'
-        )->execute([$d['brand'], $d['model'], $d['case_mac'], $d['installed_on'], Database::now(), $id]);
+            'UPDATE sp_device_profiles SET brand = ?, model = ?, case_mac = ?, serial = ?, installed_on = ?, updated_at = ? WHERE id = ?'
+        )->execute([$d['brand'], $d['model'], $d['case_mac'], $d['serial'], $d['installed_on'], Database::now(), $id]);
     }
 
     /**
@@ -3266,10 +3290,11 @@ final class ProfileRepository
         Database::pdo()->prepare('DELETE FROM sp_device_profiles WHERE id = ?')->execute([$id]);
     }
 
-    /** @return string "Marca Modelo · case E8:BB:..." para mensajes y selectores. */
+    /** @return string "Marca Modelo · case E8:BB:... · S/N X" para mensajes y selectores (S/N si lo tiene). */
     public static function text(array $p): string
     {
-        return $p['brand'] . ' ' . $p['model'] . ' · case ' . $p['case_mac'];
+        return $p['brand'] . ' ' . $p['model'] . ' · case ' . $p['case_mac']
+            . (!empty($p['serial']) ? ' · S/N ' . $p['serial'] : '');
     }
 }
 

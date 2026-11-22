@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.3 (2026-11-13)
+-- Versión del archivo: 1.0.4 (2026-11-22)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -285,12 +285,14 @@ CREATE TABLE IF NOT EXISTS sp_device_profiles (
   brand        VARCHAR(60)  NOT NULL,                 -- marca (p. ej. "Hisilicon")
   model        VARCHAR(60)  NOT NULL,                 -- modelo (p. ej. "TVBOX Hi3798")
   case_mac     VARCHAR(17)  NOT NULL,                 -- MAC impresa en el case "E8:BB:3E:C8:FB:5A" (única)
+  serial       VARCHAR(60)  NULL DEFAULT NULL,        -- S/N de la caja (opcional; único si se escribe). Ver migrations/2026-11-22-profile-serial.sql
   installed_on DATE         NOT NULL,                 -- fecha de instalación
   device_id    VARCHAR(32)  NULL,                     -- equipo al que está asignado (uno a la vez); NULL = libre
   created_at   DATETIME     NOT NULL,                 -- UTC
   updated_at   DATETIME     NOT NULL,                 -- UTC
   PRIMARY KEY (id),
   UNIQUE KEY uq_profile_case_mac (case_mac),          -- una caja física = un perfil
+  UNIQUE KEY uq_profile_serial (serial),              -- un S/N = una caja física (NULL se puede repetir)
   UNIQUE KEY uq_profile_device (device_id),           -- un equipo tiene como mucho un perfil
   CONSTRAINT fk_profile_device FOREIGN KEY (device_id) REFERENCES sp_devices (device_id)
     ON DELETE SET NULL ON UPDATE CASCADE              -- borrar el equipo deja el perfil libre
