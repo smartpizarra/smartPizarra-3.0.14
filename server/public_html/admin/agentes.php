@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-22)
+// Versión del archivo: 1.0.3 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DEL AGENTE (launcher de gestión remota)
@@ -114,7 +114,8 @@ if ($setupError === '' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
                 back('Grupo borrado; sus equipos pasaron a General.', 'tab=groups');
             case 'dep_create':
                 $err = AgentDeployments::create((int) param($_POST, 'group'), param($_POST, 'kind'),
-                    (int) param($_POST, 'apk'), trim(param($_POST, 'package')), (int) param($_POST, 'percent'));
+                    (int) param($_POST, 'apk'), trim(param($_POST, 'package')), (int) param($_POST, 'percent'),
+                    param($_POST, 'as_main') === '1');
                 back($err ?? 'Despliegue creado.', 'tab=groups');
             case 'dep_percent':
                 AgentDeployments::setPercent((int) param($_POST, 'dep'), (int) param($_POST, 'percent'));
@@ -352,25 +353,8 @@ if ($setupError !== '') {
             $newestApk = $p;
         }
     }
-    // App principal sugerida para un grupo NUEVO: la del grupo General si está puesta;
-    // si no, el paquete del último APK subido (que no sea el agente). Se puede cambiar.
-    $defaultMain = '';
-    foreach ($groups as $g) {
-        if ((int) $g['id'] === 1 && (string) $g['main_package'] !== '') {
-            $defaultMain = (string) $g['main_package'];
-        }
-    }
-    if ($defaultMain === '' && $newestApk !== null) {
-        $defaultMain = (string) $newestApk['package'];
-    }
-    // Lista de sugerencias (datalist) con los paquetes subidos y las apps principales de los grupos
-    $mainSuggestions = $apkPackages;
-    foreach ($groups as $g) {
-        if ((string) $g['main_package'] !== '') {
-            $mainSuggestions[(string) $g['main_package']] = true;
-        }
-    }
-    unset($mainSuggestions[AGENT_SELF_PACKAGE]);
+    // La app principal del grupo ya no se escribe en el formulario del grupo: la fija el
+    // despliegue con "App principal del grupo" marcada (paquete leído del APK).
     $datalist = static function (string $id, array $packages): string {
         $o = '<datalist id="' . h($id) . '">';
         foreach ($packages as $pkg => $label) {
@@ -378,16 +362,13 @@ if ($setupError !== '') {
         }
         return $o . '</datalist>';
     };
-    echo $datalist('main-packages', $mainSuggestions);
-    $groupForm = static function (?array $g) use ($defaultMain): string {
+    $groupForm = static function (?array $g): string {
         $v = static fn($k, $d = '') => h((string) ($g[$k] ?? $d));
         return '<form method="post" class="grid">' . csrfField() . '<input type="hidden" name="action" value="group_save">'
             . '<input type="hidden" name="group" value="' . (int) ($g['id'] ?? 0) . '">'
             . '<label>Nombre<input type="text" name="name" value="' . $v('name') . '" required></label>'
-            // Grupo nuevo: viene relleno con $defaultMain; al editar, el que tenga el grupo
-            . '<label>App principal (paquete)<input type="text" name="main_package" list="main-packages" value="'
-            . ($g === null ? h($defaultMain) : $v('main_package')) . '" placeholder="io.kodular.smartpizarra.smartPizarra_3_0_14"></label>'
-            . '<label>Actividad (opcional)<input type="text" name="main_activity" value="' . $v('main_activity') . '"></label>'
+            // Sin campo de paquete: la app principal se elige al crear un despliegue
+            . '<label>Actividad de la app principal (opcional)<input type="text" name="main_activity" value="' . $v('main_activity') . '"></label>'
             . '<label>Consulta cada (s)<input type="text" name="poll_seconds" value="' . $v('poll_seconds', '300') . '"></label>'
             . '<label>Texto de mantenimiento<input type="text" name="maintenance_text" value="' . $v('maintenance_text', 'Actualizando librerías del sistema...') . '"></label>'
             . '<label>Color de fondo<input type="color" name="brand_color" value="' . $v('brand_color', '#002B4F') . '"></label>'
@@ -401,7 +382,7 @@ if ($setupError !== '') {
     foreach ($groups as $g) {
         $gid = (int) $g['id'];
         echo '<div class="card"><div class="device-head"><h2>' . h($g['name']) . '</h2><span class="meta">' . (int) $g['agents'] . ' equipos · revisión ' . (int) $g['revision'] . '</span></div>'
-            . '<p class="meta">App principal: ' . h($g['main_package'] ?: '— (sin configurar)') . '</p>'
+            . '<p class="meta">App principal: ' . h($g['main_package'] ?: '— (sin configurar: crea un despliegue con «App principal del grupo» marcada)') . '</p>'
             . '<details><summary>Editar grupo</summary>' . $groupForm($g)
             . ($gid > 1 ? postButton('group_delete', ['group' => $gid], 'Borrar grupo', 'bad', '¿Borrar el grupo? Sus equipos pasan a General.') : '')
             . '</details><h3>Despliegues</h3>';
@@ -431,12 +412,31 @@ if ($setupError !== '') {
             $installed[$r['package']] = 'en ' . (int) $r['agents'] . ' equipo' . ((int) $r['agents'] === 1 ? '' : 's');
         }
         echo $datalist('dep-packages-' . $gid, $installed + $apkPackages);
-        // data-dep: el JS del pie rellena "Paquete" con el del APK elegido
-        echo '<details><summary>Nuevo despliegue</summary><form method="post" class="grid" data-dep>' . csrfField()
+        // APK que sale elegido: el último de la app principal del grupo; si no tiene, el último
+        // subido que no sea el agente. Así "Paquete" ya viene relleno al abrir el formulario.
+        $preApk = null;
+        foreach ($apks as $p) {
+            if ((string) $p['package'] === (string) $g['main_package'] && ($preApk === null || (int) $p['id'] > (int) $preApk['id'])) {
+                $preApk = $p;
+            }
+        }
+        $preApk = $preApk ?? $newestApk;
+        $prePkg = $preApk !== null ? (string) $preApk['package'] : '';
+        $groupApkOptions = $preApk !== null
+            ? str_replace('<option value="' . (int) $preApk['id'] . '"', '<option value="' . (int) $preApk['id'] . '" selected', $apkOptions)
+            : $apkOptions;
+        // "App principal del grupo" marcada si el grupo aún no tiene o si el APK elegido es la suya
+        $asMain = $prePkg !== '' && ((string) $g['main_package'] === '' || $prePkg === (string) $g['main_package']);
+        // data-dep: el JS del pie rellena "Paquete" con el del APK elegido (solo lectura al instalar)
+        // data-main: app principal actual del grupo, para marcar la casilla al elegir su APK
+        echo '<details><summary>Nuevo despliegue</summary><form method="post" class="grid" data-dep data-main="' . h((string) $g['main_package']) . '">' . csrfField()
             . '<input type="hidden" name="action" value="dep_create"><input type="hidden" name="group" value="' . $gid . '">'
             . '<label>Acción<select name="kind"><option value="install">Instalar / actualizar APK</option><option value="uninstall">Desinstalar paquete</option></select></label>'
-            . '<label>APK (para instalar)<select name="apk"><option value="0">—</option>' . $apkOptions . '</select></label>'
-            . '<label>Paquete<input type="text" name="package" list="dep-packages-' . $gid . '" placeholder="se rellena al elegir el APK"></label>'
+            . '<label>APK (para instalar)<select name="apk"><option value="0">—</option>' . $groupApkOptions . '</select></label>'
+            . '<label>Paquete<input type="text" name="package" list="dep-packages-' . $gid . '" value="' . h($prePkg) . '"'
+            . ($preApk !== null ? ' readonly' : '') . ' placeholder="se rellena solo al elegir el APK"></label>'
+            . '<label class="check" data-main-box><input type="checkbox" name="as_main" value="1"' . ($asMain ? ' checked' : '')
+            . '> App principal del grupo (el agente la abre y la mantiene instalada)</label>'
             . '<label>Fase inicial<select name="percent"><option value="100">100 %</option><option value="1">1 %</option><option value="10">10 %</option><option value="50">50 %</option></select></label>'
             . '<button type="submit" class="primary">Crear despliegue</button></form></details>'
             . '<details><summary>Comando a todo el grupo</summary>' . commandForm('', $gid, 'tab=groups') . '</details></div>';
@@ -496,6 +496,8 @@ select, input[type=file], input[type=color] { font: inherit; padding: 8px; borde
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 12px; align-items: end; margin: 8px 0; }
 .grid label { margin: 0; }
 .grid label.check { display: flex; gap: 8px; align-items: center; color: var(--text); }
+.grid label.check[hidden] { display: none; } /* casilla de app principal oculta al desinstalar */
+.grid input[readonly] { opacity: .75; cursor: default; } /* paquete leído del APK */
 table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
 .dep { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 6px 0; }
@@ -522,29 +524,43 @@ a.device-id { color: var(--text); }
 <script nonce="<?= h($nonce) ?>">
 // Confirmaciones (form[data-confirm]), fechas locales y "hace X" (web.php)
 <?= timeScript(900) ?>
-// Nuevo despliegue: al elegir un APK, "Paquete" se rellena con el suyo (y al cambiar a
-// "Desinstalar" se conserva, por si se quiere quitar esa misma app). Con "Instalar", el
-// servidor usa siempre el paquete del APK, así que el campo es solo informativo.
+// Nuevo despliegue: el paquete se rellena SOLO con el del APK elegido (ya viene elegido el
+// último APK de la app principal del grupo). Con "Instalar" el campo es de solo lectura (el
+// servidor usa siempre el paquete del APK). Con "Desinstalar" se puede escribir (se conserva
+// el último, por si se quiere quitar esa misma app) y la casilla de app principal se oculta.
 (function () {
   var forms = document.querySelectorAll('form[data-dep]');
   for (var i = 0; i < forms.length; i++) {
     (function (f) {
       var apk = f.querySelector('select[name=apk]'), kind = f.querySelector('select[name=kind]'), pkg = f.querySelector('input[name=package]');
+      var box = f.querySelector('[data-main-box]'), main = f.getAttribute('data-main') || '';
       if (!apk || !kind || !pkg) return;
+      var mainCheck = box ? box.querySelector('input') : null;
       // Copia el paquete del APK elegido (no pisa lo escrito a mano si el APK es "—")
       function fill() {
         var o = apk.options[apk.selectedIndex];
         var p = o ? o.getAttribute('data-package') : '';
         if (p) pkg.value = p;
+        // Casilla marcada si el grupo no tiene app principal o si el APK es la suya
+        if (p && mainCheck) mainCheck.checked = (main === '' || main === p);
+        return p;
+      }
+      // Solo lectura al instalar con un APK elegido; casilla solo al instalar
+      function sync() {
+        var install = kind.value === 'install';
+        pkg.readOnly = install && apk.value !== '0';
+        if (box) box.hidden = !install;
       }
       apk.addEventListener('change', function () {
         // Elegir un APK implica instalar
         if (apk.value !== '0') kind.value = 'install';
-        fill();
+        fill(); sync();
       });
       kind.addEventListener('change', function () {
         if (kind.value === 'install') fill();
+        sync();
       });
+      sync();
     })(forms[i]);
   }
 })();

@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-22)
+// Versión del archivo: 1.0.2 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - AGENTE DE GESTIÓN REMOTA (código del servidor)
@@ -222,10 +222,8 @@ final class AgentGroupRepository
         if ($name === '') {
             return 'El grupo necesita un nombre.';
         }
-        $pkg = trim((string) ($in['main_package'] ?? ''));
-        if ($pkg !== '' && !AgentApkRepository::isValidPackage($pkg)) {
-            return 'El paquete de la app principal no es válido (ej.: io.kodular.smartpizarra.smartPizarra_3_0_14).';
-        }
+        // La app principal (main_package) ya no se escribe aquí: la fija un despliegue
+        // con "App principal del grupo" marcada (AgentDeployments::create).
         $act = trim((string) ($in['main_activity'] ?? ''));
         if ($act !== '' && !preg_match('/^[a-zA-Z0-9_.$]{1,200}$/', $act)) {
             return 'La actividad no es válida.';
@@ -238,7 +236,6 @@ final class AgentGroupRepository
         $text = mb_substr(trim((string) ($in['maintenance_text'] ?? '')), 0, 120);
         return [
             'name' => $name,
-            'main_package' => $pkg === '' ? null : $pkg,
             'main_activity' => $act === '' ? null : $act,
             'poll_seconds' => max(30, min(3600, (int) ($in['poll_seconds'] ?? 300))),
             'maintenance_text' => $text === '' ? 'Actualizando librerías del sistema...' : $text,
@@ -247,32 +244,46 @@ final class AgentGroupRepository
             'show_percent' => !empty($in['show_percent']) ? 1 : 0,
             'install_window' => $win,
             'foreground_downloads' => !empty($in['foreground_downloads']) ? 1 : 0,
-            'rotation' => in_array((int) ($in['rotation'] ?? 0), [0, 90, 180, 270], true) ? (int) $in['rotation'] : 0,
+            // Sin campo o con valor raro => 0 (antes avisaba "Undefined array key" si faltaba)
+            'rotation' => in_array((int) ($in['rotation'] ?? 0), [90, 180, 270], true) ? (int) $in['rotation'] : 0,
         ];
     }
 
+    /** Crea un grupo SIN app principal (se fija después desde un despliegue). */
     public static function create(array $d): int
     {
         $now = Database::now();
         Database::pdo()->prepare(
             'INSERT INTO sp_agent_groups (name, main_package, main_activity, poll_seconds, maintenance_text, brand_color,
                text_color, show_percent, install_window, foreground_downloads, rotation, revision, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
-        )->execute([$d['name'], $d['main_package'], $d['main_activity'], $d['poll_seconds'], $d['maintenance_text'],
+             VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
+        )->execute([$d['name'], $d['main_activity'], $d['poll_seconds'], $d['maintenance_text'],
             $d['brand_color'], $d['text_color'], $d['show_percent'], $d['install_window'], $d['foreground_downloads'],
             $d['rotation'], $now, $now]);
         return (int) Database::pdo()->lastInsertId();
     }
 
+    /** Guarda el formulario del grupo; NO toca main_package (eso lo hace setMainPackage). */
     public static function update(int $id, array $d): void
     {
         Database::pdo()->prepare(
-            'UPDATE sp_agent_groups SET name = ?, main_package = ?, main_activity = ?, poll_seconds = ?, maintenance_text = ?,
+            'UPDATE sp_agent_groups SET name = ?, main_activity = ?, poll_seconds = ?, maintenance_text = ?,
                brand_color = ?, text_color = ?, show_percent = ?, install_window = ?, foreground_downloads = ?, rotation = ?,
                revision = revision + 1, updated_at = ? WHERE id = ?'
-        )->execute([$d['name'], $d['main_package'], $d['main_activity'], $d['poll_seconds'], $d['maintenance_text'],
+        )->execute([$d['name'], $d['main_activity'], $d['poll_seconds'], $d['maintenance_text'],
             $d['brand_color'], $d['text_color'], $d['show_percent'], $d['install_window'], $d['foreground_downloads'],
             $d['rotation'], Database::now(), $id]);
+    }
+
+    /**
+     * Fija (o quita con null) la app principal del grupo: la que el agente abre y
+     * mantiene instalada. La llama AgentDeployments::create. Sube la revisión.
+     */
+    public static function setMainPackage(int $id, ?string $package): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_agent_groups SET main_package = ?, revision = revision + 1, updated_at = ? WHERE id = ?'
+        )->execute([$package, Database::now(), $id]);
     }
 
     /** Borra un grupo (no el 1): sus equipos pasan al grupo 1. */
@@ -702,10 +713,17 @@ final class AgentDeployments
         return $stmt->fetch() ?: null;
     }
 
-    /** @return string|null error */
-    public static function create(int $groupId, string $action, int $apkId, string $package, int $percent): ?string
+    /**
+     * Crea un despliegue. Al instalar, el paquete sale SIEMPRE del APK elegido (el campo del
+     * formulario se ignora). $asMain = "App principal del grupo": al instalar, ese paquete pasa
+     * a ser la app principal del grupo (la que el agente abre). Al desinstalar la app principal,
+     * el grupo se queda sin ella (si no, el agente la volvería a instalar sola).
+     * @return string|null error
+     */
+    public static function create(int $groupId, string $action, int $apkId, string $package, int $percent, bool $asMain = false): ?string
     {
-        if (AgentGroupRepository::find($groupId) === null) {
+        $group = AgentGroupRepository::find($groupId);
+        if ($group === null) {
             return 'El grupo no existe.';
         }
         $percent = max(1, min(100, $percent));
@@ -730,7 +748,14 @@ final class AgentDeployments
             'INSERT INTO sp_agent_deployments (group_id, action, package, apk_id, rollout_percent, active, created_at)
              VALUES (?, ?, ?, ?, ?, 1, ?)'
         )->execute([$groupId, $action, $package, $apkId ?: null, $percent, Database::now()]);
-        AgentGroupRepository::bump($groupId);
+        if ($action === 'install' && $asMain && $package !== AGENT_SELF_PACKAGE) {
+            // setMainPackage ya sube la revisión del grupo
+            AgentGroupRepository::setMainPackage($groupId, $package);
+        } elseif ($action === 'uninstall' && $package === (string) ($group['main_package'] ?? '')) {
+            AgentGroupRepository::setMainPackage($groupId, null);
+        } else {
+            AgentGroupRepository::bump($groupId);
+        }
         return null;
     }
 
