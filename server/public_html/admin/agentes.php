@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.3 (2026-11-22)
+// Versión del archivo: 1.0.4 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DEL AGENTE (launcher de gestión remota)
@@ -368,7 +368,9 @@ if ($setupError !== '') {
             . '<input type="hidden" name="group" value="' . (int) ($g['id'] ?? 0) . '">'
             . '<label>Nombre<input type="text" name="name" value="' . $v('name') . '" required></label>'
             // Sin campo de paquete: la app principal se elige al crear un despliegue
-            . '<label>Actividad de la app principal (opcional)<input type="text" name="main_activity" value="' . $v('main_activity') . '"></label>'
+            // Casi nunca hace falta: vacía = actividad de inicio de la app (lo mismo que abrirla a mano)
+            . '<label>Actividad de la app principal (opcional, normalmente vacía)<input type="text" name="main_activity" value="' . $v('main_activity')
+            . '" placeholder="vacía = la de inicio de la app"></label>'
             . '<label>Consulta cada (s)<input type="text" name="poll_seconds" value="' . $v('poll_seconds', '300') . '"></label>'
             . '<label>Texto de mantenimiento<input type="text" name="maintenance_text" value="' . $v('maintenance_text', 'Actualizando librerías del sistema...') . '"></label>'
             . '<label>Color de fondo<input type="color" name="brand_color" value="' . $v('brand_color', '#002B4F') . '"></label>'

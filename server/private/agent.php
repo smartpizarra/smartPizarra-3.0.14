@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-22)
+// Versión del archivo: 1.0.3 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - AGENTE DE GESTIÓN REMOTA (código del servidor)
@@ -225,8 +225,12 @@ final class AgentGroupRepository
         // La app principal (main_package) ya no se escribe aquí: la fija un despliegue
         // con "App principal del grupo" marcada (AgentDeployments::create).
         $act = trim((string) ($in['main_activity'] ?? ''));
-        if ($act !== '' && !preg_match('/^[a-zA-Z0-9_.$]{1,200}$/', $act)) {
-            return 'La actividad no es válida.';
+        // Nombre de clase Java: ".Screen1" o "paquete.Clase"; cada parte empieza por letra, _ o $.
+        // Antes valía cualquier mezcla de [a-zA-Z0-9_.$] y un número suelto ("6555454") hacía que
+        // el agente intentara abrir una actividad inexistente (2026-11-22, grupo Out27 Sport).
+        if ($act !== '' && (mb_strlen($act) > 200 || !preg_match('/^\.?[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/', $act))) {
+            return 'La actividad no es válida: déjala vacía (recomendado, se abre la actividad de inicio de la app) '
+                . 'o escribe el nombre de la clase, p. ej. io.kodular.smartpizarra.smartPizarra_3_0_14.Screen1.';
         }
         $win = trim((string) ($in['install_window'] ?? ''));
         if ($win !== '' && !preg_match('/^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/', $win)) {
