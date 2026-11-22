@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.10 (2026-11-22)
+// Versión del archivo: 1.0.11 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -2036,7 +2036,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               . '<div><label for="' . $px . 'mac">MAC Case</label><input type="text" id="' . $px . 'mac" name="case_mac" maxlength="17" required data-mac value="' . h((string) $v['case_mac']) . '" placeholder="E8:BB:3E:C8:FB:5A" autocapitalize="characters" autocomplete="off" spellcheck="false" inputmode="text">'
               . '<small class="owner" data-mac-hint>12 caracteres (0-9, A-F); los «:» se ponen solos</small></div>'
               // S/N de la caja (opcional, único; también se busca por él)
-              . '<div><label for="' . $px . 'sn">S/N (opcional)</label><input type="text" id="' . $px . 'sn" name="serial" maxlength="60" value="' . h((string) ($v['serial'] ?? '')) . '" placeholder="Número de serie de la caja" autocapitalize="characters" spellcheck="false"></div>'
+              . '<div><label for="' . $px . 'sn">S/N (opcional)</label><input type="text" id="' . $px . 'sn" name="serial" maxlength="60" data-upper value="' . h((string) ($v['serial'] ?? '')) . '" placeholder="Número de serie de la caja" autocapitalize="characters" spellcheck="false"></div>'
               . '<div><label for="' . $px . 'date">Fecha de instalación</label><input type="date" id="' . $px . 'date" name="installed_on" required value="' . h((string) $v['installed_on']) . '"></div>'
               . '</div>';
       };
@@ -2714,6 +2714,22 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         if (next) next.focus();
       });
       format();
+    });
+    /*
+     * S/N del perfil (input[data-upper]), 2026-11-22: se pasa a MAYÚSCULAS mientras
+     * se escribe, se pega o lo teclea un lector de código de barras (el servidor
+     * también lo guarda en mayúsculas). El cursor se queda donde estaba.
+     */
+    document.querySelectorAll("input[data-upper]").forEach(function (input) {
+      function upper() {
+        var v = input.value, up = v.toUpperCase();
+        if (v === up) return;
+        var a = input.selectionStart, b = input.selectionEnd;
+        input.value = up;
+        try { if (a != null) input.setSelectionRange(a, b); } catch (e) { /* tipo sin selección */ }
+      }
+      input.addEventListener("input", upper);
+      upper();
     });
   })();
   </script>
