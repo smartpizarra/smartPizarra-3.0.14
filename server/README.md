@@ -257,17 +257,18 @@ Para los **perfiles de equipo** (botón *Perfiles* del panel):
 
 1. Ejecuta una vez `migrations/2026-11-12-device-profiles.sql` (tabla `sp_device_profiles` y columna `sp_devices.first_authorized_at`), **después** de la de la MAC. Si sale _Duplicate column name 'first_authorized_at'_, ya estaba hecha.
 2. Sube `private/lib.php` y `admin/index.php`.
+3. **S/N** (2026-11-22): ejecuta una vez `migrations/2026-11-22-profile-serial.sql` (columna `sp_device_profiles.serial`) y sube `private/lib.php`, `admin/index.php` y `cuenta/index.php`. Si sale _Duplicate column name 'serial'_, ya estaba hecha. Hasta aplicarla, el panel avisa de que falta.
 
 Cómo funciona:
 
-- Un **perfil** es la ficha de la caja física: **marca, modelo, MAC que sale en el case y fecha de instalación**. Todos los campos son obligatorios. La MAC del case no se puede repetir entre perfiles y se escribe con `:`, con `-` o sin separadores. La fecha no puede ser futura.
+- Un **perfil** es la ficha de la caja física: **marca, modelo, MAC que sale en el case, S/N y fecha de instalación**. Todos los campos son obligatorios salvo el **S/N** (número de serie de la caja), que se guarda en mayúsculas y tampoco se puede repetir entre perfiles. La MAC del case no se puede repetir entre perfiles y se escribe con `:`, con `-` o sin separadores. La fecha no puede ser futura.
 - Se crea en *Perfiles* (con o sin equipo) o desde la tarjeta del equipo (*Crear perfil*, que abre el formulario con ese equipo ya elegido). Cada perfil está en **un solo equipo** y cada equipo tiene **un solo perfil**: al asignar uno, el que tenía el equipo queda libre, y si el perfil estaba en otro equipo pasa al nuevo.
 - La tarjeta de un equipo sin perfil muestra un selector con los perfiles libres y **preselecciona el que tenga como MAC del case la MAC que envía la TV**. La MAC del case puede no coincidir con la que envía la TV (cable o wifi), por eso se guardan aparte.
 - **Autorizar un equipo por primera vez exige perfil.** Sin perfil, el botón sale como *Autorizar (falta perfil)* desactivado y el servidor rechaza la autorización. *Autorizar todos sus equipos* se salta los que no tienen perfil y dice cuántos. Un equipo que **ya estuvo autorizado** alguna vez (también los que ya existían al aplicar la migración) se puede volver a autorizar sin perfil.
 - **TV restablecida** (ID nuevo): busca su perfil por la MAC del case en *Perfiles* y asígnalo al equipo nuevo; con eso ya se puede autorizar.
-- El **buscador de equipos** encuentra un equipo también por la **MAC del case** (completa o un trozo, sin importar `:` o `-`), la **marca** o el **modelo** de su perfil. *Perfiles* tiene su propio buscador.
+- El **buscador de equipos** encuentra un equipo también por la **MAC del case** (completa o un trozo, sin importar `:` o `-`), la **marca**, el **modelo** o el **S/N** (completo o un trozo) de su perfil. *Perfiles* tiene su propio buscador, que también busca por S/N.
 - Borrar un equipo deja su perfil libre.
-- El **usuario**, en `/cuenta/` → *Equipos*, ve la **MAC del case** de cada uno de sus equipos (*sin registrar* si aún no tiene perfil) y puede **buscar sus equipos** por esa MAC (completa o un trozo, sin importar `:` o `-`), por su nombre o por su ID. Solo encuentra los suyos. Para esto basta con subir `public_html/cuenta/index.php`.
+- El **usuario**, en `/cuenta/` → *Equipos*, ve la **MAC del case** de cada uno de sus equipos (*sin registrar* si aún no tiene perfil) y su **S/N** si lo tiene, y puede **buscar sus equipos** por esa MAC (completa o un trozo, sin importar `:` o `-`), por el S/N, por su nombre o por su ID. Solo encuentra los suyos. Para esto basta con subir `public_html/cuenta/index.php`.
 
 Para el **alias y las notas del administrador**:
 
