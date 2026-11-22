@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-12)
+// Versión del archivo: 1.0.1 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - UTILIDADES DE LAS PÁGINAS WEB
@@ -722,4 +722,67 @@ function overlayScript(): string
     });
   })();
 JS;
+}
+
+/*
+ * HISTORIAL DE PLANES con búsqueda (2026-11-22): lo usan /cuenta/ → Mi plan, la
+ * ficha del usuario y la vista Planes del panel. Parámetros GET: tq (ID de
+ * transacción o un trozo), tf / tt (Desde / Hasta, AAAA-MM-DD) y tz (diferencia
+ * del navegador con UTC en minutos; la rellena el JS de input[data-tz]).
+ */
+
+/** @return array{tq:string,tf:string,tt:string,tz:int} Filtros del historial leídos de $_GET. */
+function planHistoryParams(): array
+{
+    $tq = mb_substr(trim(param($_GET, 'tq')), 0, 20);
+    $tf = param($_GET, 'tf');
+    $tt = param($_GET, 'tt');
+    return ['tq' => $tq, 'tf' => PlanRepository::validDate($tf) ? $tf : '', 'tt' => PlanRepository::validDate($tt) ? $tt : '',
+        'tz' => (int) param($_GET, 'tz')];
+}
+
+/**
+ * Formulario de búsqueda del historial (GET).
+ * @param array<string,string> $keep Parámetros que se conservan (p. ej. ['s' => 'plan'] o ['view' => 'users', 'user' => '3']).
+ * @param array{tq:string,tf:string,tt:string,tz:int} $f Filtros actuales.
+ * @param string $anchor Ancla a la que vuelve la página (#historial).
+ */
+function planHistoryFilter(array $keep, array $f, string $anchor = 'historial'): string
+{
+    $html = '<form method="get" class="history-filter" action="#' . h($anchor) . '">';
+    foreach ($keep as $k => $v) {
+        $html .= '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">';
+    }
+    $html .= '<input type="hidden" name="tz" value="0" data-tz>'
+        . '<label>ID de transacción<input type="search" name="tq" value="' . h($f['tq']) . '" maxlength="20" placeholder="TX-20261122-4F7A2C" autocapitalize="characters" spellcheck="false"></label>'
+        . '<label>Desde<input type="date" name="tf" value="' . h($f['tf']) . '"></label>'
+        . '<label>Hasta<input type="date" name="tt" value="' . h($f['tt']) . '"></label>'
+        . '<button type="submit">Buscar</button>';
+    if ($f['tq'] !== '' || $f['tf'] !== '' || $f['tt'] !== '') {
+        $html .= ' <a class="btn" href="?' . h(http_build_query($keep)) . '#' . h($anchor) . '">Ver todo</a>';
+    }
+    return $html . '</form>';
+}
+
+/**
+ * Tabla del historial (con el ID de transacción).
+ * @param array<int,array<string,mixed>> $rows Filas de PlanRepository::searchHistory().
+ * @param bool $withUser true = columna Usuario (búsqueda en todos los usuarios del panel).
+ * @param string $class Clase de la tabla (boots en el panel, history en /cuenta/).
+ */
+function planHistoryTable(array $rows, bool $withUser, string $class): string
+{
+    $html = '<div class="table-wrap"><table class="' . h($class) . '"><tr><th>ID de transacción</th><th>Fecha</th>'
+        . ($withUser ? '<th>Usuario</th>' : '') . '<th>Movimiento</th><th>Plan</th><th>Días</th><th>Costo</th><th>Plan hasta</th></tr>';
+    foreach ($rows as $r) {
+        $html .= '<tr><td><code class="txn">' . h((string) ($r['txn_id'] ?? '—')) . '</code></td><td>' . dateTag($r['created_at']) . '</td>'
+            . ($withUser ? '<td>' . ($r['user_company'] !== null
+                ? '<a href="./?' . h(http_build_query(['view' => 'users', 'user' => (int) $r['user_id']])) . '">' . h((string) $r['user_company']) . '</a>'
+                : '<em>usuario eliminado</em>') . '</td>' : '')
+            . '<td>' . ($r['kind'] === 'renew' ? 'Renovación' : 'Asignación') . '</td>'
+            . '<td>' . h((string) $r['plan_name']) . ' <span class="owner">(' . (int) $r['max_files'] . ' archivos · '
+            . h(PlanRepository::storageText((int) $r['storage_mb'])) . ')</span></td>'
+            . '<td>+' . (int) $r['days'] . '</td><td>' . h(PlanRepository::priceText($r)) . '</td><td>' . dateTag($r['plan_until']) . '</td></tr>';
+    }
+    return $html . '</table></div>';
 }

@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.6 (2026-11-22)
+-- Versión del archivo: 1.0.7 (2026-11-22)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -361,6 +361,7 @@ ALTER TABLE sp_users
 -- HISTORIAL de asignaciones y renovaciones (con los datos del plan en ese momento)
 CREATE TABLE IF NOT EXISTS sp_plan_renewals (
   id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  txn_id        VARCHAR(20)   NULL DEFAULT NULL,      -- ID de transacción "TX-AAAAMMDD-XXXXXX" (único). Ver migrations/2026-11-22-plan-txn.sql
   user_id       INT UNSIGNED  NOT NULL,               -- usuario
   plan_id       INT UNSIGNED  NULL,                   -- plan (NULL si luego se borró; quedan sus datos abajo)
   kind          VARCHAR(8)    NOT NULL,               -- assign (asignación) | renew (renovación)
@@ -375,6 +376,8 @@ CREATE TABLE IF NOT EXISTS sp_plan_renewals (
   created_at    DATETIME      NOT NULL,               -- cuándo se renovó (UTC)
   PRIMARY KEY (id),
   KEY idx_renewal_user (user_id, id),
+  UNIQUE KEY uq_renewal_txn (txn_id),
+  KEY idx_renewal_date (created_at),
   CONSTRAINT fk_renewal_user FOREIGN KEY (user_id) REFERENCES sp_users (id) ON DELETE CASCADE,
   CONSTRAINT fk_renewal_plan FOREIGN KEY (plan_id) REFERENCES sp_plans (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

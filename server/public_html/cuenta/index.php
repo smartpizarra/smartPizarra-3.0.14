@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.8 (2026-11-22)
+// Versión del archivo: 1.0.9 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -646,7 +646,10 @@ foreach ($devices as $d) {
 // Sin plan vigente: límites 0 (no puede subir; lo ya subido sigue ahí).
 $planState = $user !== null ? PlanRepository::forUser($user) : ['state' => 'none', 'plan' => null, 'days' => 0, 'until' => null];
 $planLimits = $user !== null ? PlanRepository::limits($user) : null;
-$planHistory = $user !== null && $section === 'plan' ? PlanRepository::history((int) $user['id']) : [];
+// Historial con búsqueda por ID de transacción y fechas (?tq= &tf= &tt=)
+$planFilter = planHistoryParams();
+$planHistory = $user !== null && $section === 'plan'
+    ? PlanRepository::searchHistory((int) $user['id'], $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz']) : [];
 // Todos los planes disponibles con sus características y comentario (Mi plan; solo lectura)
 $allPlans = $user !== null && $section === 'plan' ? PlanRepository::all() : [];
 $quota = $planLimits['bytes'] ?? 0;
@@ -731,6 +734,10 @@ if ($validity['state'] !== 'active') {
     dl.plan-data dt { color: var(--muted); }
     dl.plan-data dd { margin: 0; overflow-wrap: anywhere; }
     .table-wrap { overflow-x: auto; }
+    /* Búsqueda del historial (ID de transacción y fechas) */
+    .history-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 8px 0 12px; }
+    .history-filter label { display: flex; flex-direction: column; gap: 2px; font-size: .85rem; color: var(--muted); flex: 1 1 150px; min-width: 0; }
+    code.txn { font-size: .85rem; white-space: nowrap; }
     /* Planes disponibles: tarjetas en rejilla (1 columna en móvil); el plan del usuario resaltado */
     .plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 12px; }
     .plan-card { display: flex; flex-direction: column; gap: 6px; }
@@ -1172,25 +1179,16 @@ if ($validity['state'] !== 'active') {
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
-    <!-- Historial de asignaciones y renovaciones (datos del plan en ese momento) -->
-    <section class="card block">
+    <!-- Historial de asignaciones y renovaciones, con su ID de transacción; se busca por ID y fechas -->
+    <section class="card block" id="historial">
       <h2>Historial de renovaciones</h2>
+      <?= planHistoryFilter(['s' => 'plan'], $planFilter) ?>
+      <?php $filtering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
       <?php if (!$planHistory): ?>
-        <p class="hint">Todavía no hay renovaciones.</p>
+        <p class="hint"><?= $filtering ? 'Ninguna transacción coincide con la búsqueda.' : 'Todavía no hay renovaciones.' ?></p>
       <?php else: ?>
-        <div class="table-wrap"><table class="history">
-          <tr><th>Fecha</th><th>Movimiento</th><th>Plan</th><th>Días</th><th>Costo</th><th>Vigente hasta</th></tr>
-          <?php foreach ($planHistory as $r): ?>
-            <tr>
-              <td><?= dateTag($r['created_at']) ?></td>
-              <td><?= $r['kind'] === 'renew' ? 'Renovación' : 'Asignación' ?></td>
-              <td><?= h($r['plan_name']) ?> <span class="hint">(<?= (int) $r['max_files'] ?> archivos · <?= h(PlanRepository::storageText((int) $r['storage_mb'])) ?>)</span></td>
-              <td>+<?= (int) $r['days'] ?></td>
-              <td><?= h(PlanRepository::priceText($r)) ?></td>
-              <td><?= dateTag($r['plan_until']) ?></td>
-            </tr>
-          <?php endforeach; ?>
-        </table></div>
+        <?= $filtering ? '<p class="hint">' . count($planHistory) . ' transacción(es) encontrada(s).</p>' : '' ?>
+        <?= planHistoryTable($planHistory, false, 'history') ?>
       <?php endif; ?>
     </section>
 

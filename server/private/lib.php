@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.12 (2026-11-22)
+// Versión del archivo: 1.0.13 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -286,6 +286,12 @@ final class Database
         if (!in_array('sp_plans', $tables, true) || !in_array('sp_plan_renewals', $tables, true) || !in_array('plan_id', $userCols, true)) {
             return 'Faltan los planes de contenido (tablas sp_plans / sp_plan_renewals, columna sp_users.plan_id): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans.sql.';
+        }
+        // ID de transacción del historial de planes (2026-11-22)
+        $renewalCols = $pdo->query('SHOW COLUMNS FROM sp_plan_renewals')->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('txn_id', $renewalCols, true)) {
+            return 'Falta el ID de transacción del historial de planes (columna sp_plan_renewals.txn_id): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plan-txn.sql.';
         }
         // Comentario de los planes (2026-11-22)
         $planCols = $pdo->query('SHOW COLUMNS FROM sp_plans')->fetchAll(PDO::FETCH_COLUMN);
@@ -3312,9 +3318,27 @@ final class PlanRepository
         return self::extend($userId, (int) $user['plan_id'], 'renew');
     }
 
-    /** Asignar y renovar: misma operación, en una transacción. */
+    /** ID de transacción de la última asignación/renovación correcta (para el mensaje del panel). */
+    public static ?string $lastTxnId = null;
+
+    /**
+     * ID de TRANSACCIÓN nuevo: "TX-AAAAMMDD-XXXXXX" (fecha UTC + 6 caracteres hex al azar),
+     * comprobando que no exista (único en sp_plan_renewals.txn_id).
+     */
+    public static function newTxnId(): string
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_plan_renewals WHERE txn_id = ?');
+        do {
+            $id = 'TX-' . gmdate('Ymd') . '-' . strtoupper(bin2hex(random_bytes(3)));
+            $stmt->execute([$id]);
+        } while ((int) $stmt->fetchColumn() > 0);
+        return $id;
+    }
+
+    /** Asignar y renovar: misma operación, en una transacción (con su ID de transacción). */
     private static function extend(int $userId, int $planId, string $kind): ?string
     {
+        self::$lastTxnId = null;
         $user = UserRepository::find($userId);
         $plan = self::find($planId);
         if ($user === null) {
@@ -3333,12 +3357,14 @@ final class PlanRepository
             $pdo->prepare('UPDATE sp_users SET plan_id = ?, plan_until = ? WHERE id = ?')->execute([$planId, $planUntil, $userId]);
             // Vigencia del contenido: misma regla (addContentDays)
             $contentUntil = UserRepository::addContentDays($userId, $days);
+            $txn = self::newTxnId();
             $pdo->prepare(
-                'INSERT INTO sp_plan_renewals (user_id, plan_id, kind, plan_name, days, max_files, storage_mb, price, currency,
-                   plan_until, content_until, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            )->execute([$userId, $planId, $kind, $plan['name'], $days, (int) $plan['max_files'], (int) $plan['storage_mb'],
+                'INSERT INTO sp_plan_renewals (txn_id, user_id, plan_id, kind, plan_name, days, max_files, storage_mb, price, currency,
+                   plan_until, content_until, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute([$txn, $userId, $planId, $kind, $plan['name'], $days, (int) $plan['max_files'], (int) $plan['storage_mb'],
                 $plan['price'], $plan['currency'], $planUntil, $contentUntil, Database::now()]);
             $pdo->commit();
+            self::$lastTxnId = $txn;
         } catch (Throwable $e) {
             $pdo->rollBack();
             error_log('smartpizarra plan ' . $kind . ' usuario ' . $userId . ': ' . $e->getMessage());
@@ -3356,9 +3382,55 @@ final class PlanRepository
     /** @return array<int,array<string,mixed>> Historial del usuario, lo más reciente primero (máx. 200). */
     public static function history(int $userId): array
     {
-        $stmt = Database::pdo()->prepare('SELECT * FROM sp_plan_renewals WHERE user_id = ? ORDER BY id DESC LIMIT 200');
-        $stmt->execute([$userId]);
+        return self::searchHistory($userId, '', '', '', 0);
+    }
+
+    /**
+     * BÚSQUEDA en el historial (2026-11-22). Por ID de transacción (completo o un trozo, sin
+     * importar mayúsculas) y por fechas "Desde"/"Hasta" (AAAA-MM-DD, días completos en la
+     * hora del navegador: $tzOffset = getTimezoneOffset() en minutos).
+     * @param int|null $userId Un usuario (/cuenta/ y su ficha) o null = TODOS (panel, con la empresa).
+     * @return array<int,array<string,mixed>> Lo más reciente primero (máx. 500).
+     */
+    public static function searchHistory(?int $userId, string $txn, string $from, string $to, int $tzOffset): array
+    {
+        $where = [];
+        $args = [];
+        if ($userId !== null) {
+            $where[] = 'r.user_id = ?';
+            $args[] = $userId;
+        }
+        $txn = strtoupper((string) preg_replace('/[^A-Za-z0-9\-]/', '', $txn));
+        if ($txn !== '') {
+            $where[] = 'r.txn_id LIKE ?';
+            $args[] = '%' . $txn . '%';
+        }
+        $tzOffset = max(-900, min(900, $tzOffset));
+        // Fecha local => UTC: UTC = local + getTimezoneOffset()
+        $utc = static fn(string $d, string $time) => gmdate('Y-m-d H:i:s', (int) strtotime($d . ' ' . $time . ' UTC') + $tzOffset * 60);
+        if (self::validDate($from)) {
+            $where[] = 'r.created_at >= ?';
+            $args[] = $utc($from, '00:00:00');
+        }
+        if (self::validDate($to)) {
+            $where[] = 'r.created_at <= ?';
+            $args[] = $utc($to, '23:59:59');
+        }
+        $stmt = Database::pdo()->prepare(
+            'SELECT r.*, u.company AS user_company, u.email AS user_email FROM sp_plan_renewals r
+             LEFT JOIN sp_users u ON u.id = r.user_id'
+            . ($where ? ' WHERE ' . implode(' AND ', $where) : '')
+            . ' ORDER BY r.id DESC LIMIT 500'
+        );
+        $stmt->execute($args);
         return $stmt->fetchAll();
+    }
+
+    /** ¿"AAAA-MM-DD" válida? */
+    public static function validDate(string $d): bool
+    {
+        $dt = DateTimeImmutable::createFromFormat('!Y-m-d', $d);
+        return $dt !== false && $dt->format('Y-m-d') === $d;
     }
 
     /** "10.00 USD" => "10 USD"; "9.99 USD" igual. */

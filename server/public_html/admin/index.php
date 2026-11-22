@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.13 (2026-11-22)
+// Versión del archivo: 1.0.14 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -1092,7 +1092,7 @@ try {
                     }
                     $fresh = UserRepository::find($uid) ?? $user;
                     $ps = PlanRepository::forUser($fresh);
-                    redirectWith(($renew ? 'Plan renovado' : 'Plan asignado') . " a «{$user['company']}»: «{$ps['plan']['name']}» +{$ps['plan']['days']} días,"
+                    redirectWith(($renew ? 'Plan renovado' : 'Plan asignado') . ' (transacción ' . PlanRepository::$lastTxnId . ") a «{$user['company']}»: «{$ps['plan']['name']}» +{$ps['plan']['days']} días,"
                         . ' vigente hasta el ' . gmdate('d/m/Y H:i', (int) strtotime($ps['until'] . ' UTC')) . ' UTC.'
                         . ' La vigencia del contenido también suma esos días. Queda en su historial.', $back);
                 case 'user_plan_remove':
@@ -1346,7 +1346,13 @@ try {
     // PLANES (2026-11-22): la vista ?view=plans y el selector de la ficha del usuario; su plan e historial
     $plans = $loggedIn && ($view === 'plans' || $userCard) ? PlanRepository::all() : [];
     $userPlan = $loggedIn && $userCard ? PlanRepository::forUser($userCard) : null;
-    $userPlanHistory = $loggedIn && $userCard ? PlanRepository::history((int) $userCard['id']) : [];
+    // Historial con búsqueda (?tq= ID de transacción, ?tf= / ?tt= fechas): de un usuario en su ficha,
+    // de TODOS en la vista Planes (sección "Buscar transacciones")
+    $planFilter = planHistoryParams();
+    $userPlanHistory = $loggedIn && $userCard
+        ? PlanRepository::searchHistory((int) $userCard['id'], $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz']) : [];
+    $allPlanHistory = $loggedIn && $view === 'plans'
+        ? PlanRepository::searchHistory(null, $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz']) : [];
     $routesById = array_column($routes, null, 'id');
     $routeNames = array_column($routes, 'name', 'id');
     usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
@@ -1415,6 +1421,8 @@ try {
     $plans = [];
     $userPlan = null;
     $userPlanHistory = [];
+    $allPlanHistory = [];
+    $planFilter = ['tq' => '', 'tf' => '', 'tt' => '', 'tz' => 0];
     $routeNames = [];
     $leagueTypes = [];
     $leagues = [];
@@ -1596,6 +1604,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .boots th { color: var(--muted); font-weight: 500; }
     .boots td.n { color: var(--muted); width: 1%; white-space: nowrap; }
     .table-wrap { overflow-x: auto; }
+    /* Búsqueda del historial de planes (ID de transacción y fechas) */
+    .history-filter { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 8px 0 12px; }
+    .history-filter label { display: flex; flex-direction: column; gap: 2px; font-size: .85rem; color: var(--muted); flex: 1 1 150px; min-width: 0; }
+    code.txn { font-size: .85rem; white-space: nowrap; }
     /* Escáner de QR (pantalla completa) */
     #scanner { position: fixed; inset: 0; background: #000; display: none; flex-direction: column;
       align-items: center; justify-content: center; z-index: 10; padding: 16px; }
@@ -1769,20 +1781,15 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <?php else: ?>
         <div class="meta">Todavía no hay planes: créalos en <a href="?view=plans">Planes</a>.</div>
       <?php endif; ?>
-      <!-- Historial (lo mismo que ve el usuario en /cuenta/ → Mi plan) -->
-      <details class="edit">
-        <summary>Historial de renovaciones (<?= count($userPlanHistory) ?>)</summary>
+      <!-- Historial (lo mismo que ve el usuario en /cuenta/ → Mi plan), con ID de transacción y búsqueda -->
+      <?php $planFiltering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
+      <details class="edit" id="historial" <?= $planFiltering ? 'open' : '' ?>>
+        <summary>Historial de renovaciones (<?= count($userPlanHistory) ?><?= $planFiltering ? ' encontrada(s)' : '' ?>)</summary>
+        <?= planHistoryFilter(['view' => 'users', 'user' => (string) $uid], $planFilter) ?>
         <?php if (!$userPlanHistory): ?>
-          <p class="owner">Sin renovaciones todavía.</p>
+          <p class="owner"><?= $planFiltering ? 'Ninguna transacción coincide con la búsqueda.' : 'Sin renovaciones todavía.' ?></p>
         <?php else: ?>
-          <div class="table-wrap"><table class="boots">
-            <tr><th>Fecha</th><th>Movimiento</th><th>Plan</th><th>Días</th><th>Costo</th><th>Plan hasta</th></tr>
-            <?php foreach ($userPlanHistory as $r): ?>
-              <tr><td><?= dateTag($r['created_at']) ?></td><td><?= $r['kind'] === 'renew' ? 'Renovación' : 'Asignación' ?></td>
-                <td><?= h($r['plan_name']) ?></td><td>+<?= (int) $r['days'] ?></td><td><?= h(PlanRepository::priceText($r)) ?></td>
-                <td><?= dateTag($r['plan_until']) ?></td></tr>
-            <?php endforeach; ?>
-          </table></div>
+          <?= planHistoryTable($userPlanHistory, false, 'boots') ?>
         <?php endif; ?>
       </details>
       <div class="actions">
@@ -2284,6 +2291,19 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         </div>
       </section>
     <?php endforeach; ?>
+    <!-- BUSCAR TRANSACCIONES de todos los usuarios (ID de transacción y fechas), 2026-11-22 -->
+    <?php $planFiltering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
+    <section class="card" id="historial">
+      <h2>Buscar transacciones</h2>
+      <div class="meta">Asignaciones y renovaciones de todos los usuarios, por ID de transacción o por fechas (máx. 500).</div>
+      <?= planHistoryFilter(['view' => 'plans'], $planFilter) ?>
+      <?php if (!$allPlanHistory): ?>
+        <p class="owner"><?= $planFiltering ? 'Ninguna transacción coincide con la búsqueda.' : 'Todavía no hay transacciones.' ?></p>
+      <?php else: ?>
+        <p class="owner"><?= count($allPlanHistory) ?> transacción(es)<?= $planFiltering ? ' encontrada(s)' : '' ?>.</p>
+        <?= planHistoryTable($allPlanHistory, true, 'boots') ?>
+      <?php endif; ?>
+    </section>
 
   <?php elseif ($view === 'routes' && !$historyDevice): ?>
     <!-- ================= GESTIÓN DE RUTAS =================
