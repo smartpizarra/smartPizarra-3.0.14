@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-16)
+// Versión del archivo: 1.0.2 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DEL AGENTE (launcher de gestión remota)
@@ -340,16 +340,53 @@ if ($setupError !== '') {
 } elseif ($tab === 'groups') {
     $apks = AgentApkRepository::all();
     $apkOptions = '';
+    // Paquetes de los APK subidos (sin repetir) y el del APK subido más reciente que no sea el propio agente
+    $apkPackages = [];
+    $newestApk = null;
     foreach ($apks as $p) {
-        $apkOptions .= '<option value="' . (int) $p['id'] . '">' . h($p['package'] . ' · v' . $p['version_code']
+        // data-package: el JS del pie rellena con él el campo "Paquete" del despliegue al elegir el APK
+        $apkOptions .= '<option value="' . (int) $p['id'] . '" data-package="' . h($p['package']) . '">' . h($p['package'] . ' · v' . $p['version_code']
             . ($p['version_name'] !== '' ? ' (' . $p['version_name'] . ')' : '') . ($p['label'] !== '' ? ' · ' . $p['label'] : '')) . '</option>';
+        $apkPackages[$p['package']] = true;
+        if ($p['package'] !== AGENT_SELF_PACKAGE && ($newestApk === null || (int) $p['id'] > (int) $newestApk['id'])) {
+            $newestApk = $p;
+        }
     }
-    $groupForm = static function (?array $g): string {
+    // App principal sugerida para un grupo NUEVO: la del grupo General si está puesta;
+    // si no, el paquete del último APK subido (que no sea el agente). Se puede cambiar.
+    $defaultMain = '';
+    foreach ($groups as $g) {
+        if ((int) $g['id'] === 1 && (string) $g['main_package'] !== '') {
+            $defaultMain = (string) $g['main_package'];
+        }
+    }
+    if ($defaultMain === '' && $newestApk !== null) {
+        $defaultMain = (string) $newestApk['package'];
+    }
+    // Lista de sugerencias (datalist) con los paquetes subidos y las apps principales de los grupos
+    $mainSuggestions = $apkPackages;
+    foreach ($groups as $g) {
+        if ((string) $g['main_package'] !== '') {
+            $mainSuggestions[(string) $g['main_package']] = true;
+        }
+    }
+    unset($mainSuggestions[AGENT_SELF_PACKAGE]);
+    $datalist = static function (string $id, array $packages): string {
+        $o = '<datalist id="' . h($id) . '">';
+        foreach ($packages as $pkg => $label) {
+            $o .= '<option value="' . h((string) $pkg) . '"' . (is_string($label) ? ' label="' . h($label) . '"' : '') . '>';
+        }
+        return $o . '</datalist>';
+    };
+    echo $datalist('main-packages', $mainSuggestions);
+    $groupForm = static function (?array $g) use ($defaultMain): string {
         $v = static fn($k, $d = '') => h((string) ($g[$k] ?? $d));
         return '<form method="post" class="grid">' . csrfField() . '<input type="hidden" name="action" value="group_save">'
             . '<input type="hidden" name="group" value="' . (int) ($g['id'] ?? 0) . '">'
             . '<label>Nombre<input type="text" name="name" value="' . $v('name') . '" required></label>'
-            . '<label>App principal (paquete)<input type="text" name="main_package" value="' . $v('main_package') . '" placeholder="io.kodular.smartpizarra.smartPizarra_3_0_14"></label>'
+            // Grupo nuevo: viene relleno con $defaultMain; al editar, el que tenga el grupo
+            . '<label>App principal (paquete)<input type="text" name="main_package" list="main-packages" value="'
+            . ($g === null ? h($defaultMain) : $v('main_package')) . '" placeholder="io.kodular.smartpizarra.smartPizarra_3_0_14"></label>'
             . '<label>Actividad (opcional)<input type="text" name="main_activity" value="' . $v('main_activity') . '"></label>'
             . '<label>Consulta cada (s)<input type="text" name="poll_seconds" value="' . $v('poll_seconds', '300') . '"></label>'
             . '<label>Texto de mantenimiento<input type="text" name="maintenance_text" value="' . $v('maintenance_text', 'Actualizando librerías del sistema...') . '"></label>'
@@ -388,11 +425,18 @@ if ($setupError !== '') {
                 . postButton('dep_retry', ['dep' => $did], 'Reintentar fallidos')
                 . postButton('dep_delete', ['dep' => $did], 'Borrar', 'bad', '¿Borrar el despliegue?') . '</div></div>';
         }
-        echo '<details><summary>Nuevo despliegue</summary><form method="post" class="grid">' . csrfField()
+        // Sugerencias para desinstalar: apps instaladas en los equipos de este grupo (con en cuántos están)
+        $installed = [];
+        foreach (AgentResults::groupPackages($gid) as $r) {
+            $installed[$r['package']] = 'en ' . (int) $r['agents'] . ' equipo' . ((int) $r['agents'] === 1 ? '' : 's');
+        }
+        echo $datalist('dep-packages-' . $gid, $installed + $apkPackages);
+        // data-dep: el JS del pie rellena "Paquete" con el del APK elegido
+        echo '<details><summary>Nuevo despliegue</summary><form method="post" class="grid" data-dep>' . csrfField()
             . '<input type="hidden" name="action" value="dep_create"><input type="hidden" name="group" value="' . $gid . '">'
             . '<label>Acción<select name="kind"><option value="install">Instalar / actualizar APK</option><option value="uninstall">Desinstalar paquete</option></select></label>'
             . '<label>APK (para instalar)<select name="apk"><option value="0">—</option>' . $apkOptions . '</select></label>'
-            . '<label>Paquete (para desinstalar)<input type="text" name="package" placeholder="com.ejemplo.app"></label>'
+            . '<label>Paquete<input type="text" name="package" list="dep-packages-' . $gid . '" placeholder="se rellena al elegir el APK"></label>'
             . '<label>Fase inicial<select name="percent"><option value="100">100 %</option><option value="1">1 %</option><option value="10">10 %</option><option value="50">50 %</option></select></label>'
             . '<button type="submit" class="primary">Crear despliegue</button></form></details>'
             . '<details><summary>Comando a todo el grupo</summary>' . commandForm('', $gid, 'tab=groups') . '</details></div>';
@@ -478,6 +522,32 @@ a.device-id { color: var(--text); }
 <script nonce="<?= h($nonce) ?>">
 // Confirmaciones (form[data-confirm]), fechas locales y "hace X" (web.php)
 <?= timeScript(900) ?>
+// Nuevo despliegue: al elegir un APK, "Paquete" se rellena con el suyo (y al cambiar a
+// "Desinstalar" se conserva, por si se quiere quitar esa misma app). Con "Instalar", el
+// servidor usa siempre el paquete del APK, así que el campo es solo informativo.
+(function () {
+  var forms = document.querySelectorAll('form[data-dep]');
+  for (var i = 0; i < forms.length; i++) {
+    (function (f) {
+      var apk = f.querySelector('select[name=apk]'), kind = f.querySelector('select[name=kind]'), pkg = f.querySelector('input[name=package]');
+      if (!apk || !kind || !pkg) return;
+      // Copia el paquete del APK elegido (no pisa lo escrito a mano si el APK es "—")
+      function fill() {
+        var o = apk.options[apk.selectedIndex];
+        var p = o ? o.getAttribute('data-package') : '';
+        if (p) pkg.value = p;
+      }
+      apk.addEventListener('change', function () {
+        // Elegir un APK implica instalar
+        if (apk.value !== '0') kind.value = 'install';
+        fill();
+      });
+      kind.addEventListener('change', function () {
+        if (kind.value === 'install') fill();
+      });
+    })(forms[i]);
+  }
+})();
 </script>
 </body>
 </html>

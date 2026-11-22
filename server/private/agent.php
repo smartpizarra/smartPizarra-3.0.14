@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-16)
+// Versión del archivo: 1.0.1 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - AGENTE DE GESTIÓN REMOTA (código del servidor)
@@ -23,6 +23,9 @@
  */
 
 declare(strict_types=1);
+
+/** Paquete del propio agente: el panel no lo sugiere como "app principal" de un grupo. */
+const AGENT_SELF_PACKAGE = 'cloud.smartpizarra.agent';
 
 /** Ajustes del agente en config.php (con valores por defecto). */
 final class AgentConfig
@@ -1173,6 +1176,22 @@ final class AgentResults
     {
         $stmt = Database::pdo()->prepare('SELECT package, version_code FROM sp_agent_packages WHERE agent_id = ? ORDER BY package');
         $stmt->execute([$agentId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Paquetes instalados en los equipos de un grupo (sugerencias para "Desinstalar paquete"
+     * en el panel), con en cuántos equipos está cada uno; los más extendidos primero.
+     * @return array<int,array{package:string,agents:int}>
+     */
+    public static function groupPackages(int $groupId, int $limit = 300): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT p.package, COUNT(*) AS agents FROM sp_agent_packages p
+             JOIN sp_agents a ON a.agent_id = p.agent_id WHERE a.group_id = ?
+             GROUP BY p.package ORDER BY agents DESC, p.package LIMIT ' . max(1, min(1000, $limit))
+        );
+        $stmt->execute([$groupId]);
         return $stmt->fetchAll();
     }
 
