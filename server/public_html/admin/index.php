@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.7 (2026-11-22)
+// Versión del archivo: 1.0.8 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -1157,6 +1157,21 @@ try {
                     $league = $leagueId === null ? null : LeagueRepository::find($leagueId);
                     redirectWith(($league === null ? "$id queda sin liga." : "$id usará la liga «{$league['name']}».")
                         . ' La TV recibe su URL en la próxima consulta (≈ 1 min si está mostrando contenido).', $back);
+                case 'take_over':
+                    // TV restablecida: el equipo NUEVO toma todo lo del ANTERIOR (el de mac_from)
+                    $oldId = strtoupper(trim(param($_POST, 'oldId')));
+                    if (!DeviceRepository::isValidId($oldId)) {
+                        redirectWith('ID del equipo anterior inválido.', $back);
+                    }
+                    $deleteOld = param($_POST, 'deleteOld') === '1';
+                    $err = DeviceRepository::takeOver($id, $oldId, $deleteOld);
+                    if ($err !== null) {
+                        redirectWith($err, $back);
+                    }
+                    // Volver mostrando el equipo nuevo (si estaba en "Pendientes" puede haber cambiado de pestaña)
+                    redirectWith("$id tiene ahora los datos de $oldId (estado, usuario, alias, notas, liga, contenido, perfil, anuncios y tiras)"
+                        . ($deleteOld ? " y $oldId se eliminó." : '; el anterior sigue en la lista.')
+                        . ' La TV lo recibe en su próxima consulta.', http_build_query(['filter' => 'all', 'q' => $id]));
                 case 'delete':
                     DeviceRepository::delete($id);
                     redirectWith("$id eliminado. Si el equipo vuelve a consultar, se registrará como pendiente.", $back);
@@ -1427,6 +1442,9 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .conv-last { display: block; margin-top: 4px; overflow-wrap: anywhere; }
     /* Perfiles de equipo */
     .need-profile { color: var(--bad, #c0392b); }
+    /* Recuadro "Misma TV que SP-…" (tomar los datos del equipo anterior) */
+    .takeover { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; padding: 8px 10px;
+      border: 1px solid var(--ok, #2e7d32); border-radius: 8px; }
     input[type=date] { padding: 9px 10px; font: inherit; color: var(--text); background: var(--bg);
       border: 1px solid var(--line); border-radius: 8px; width: 100%; color-scheme: light; }
     @media (prefers-color-scheme: dark) { input[type=date] { color-scheme: dark; } }
@@ -2490,6 +2508,17 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
                   : h($d['mac_from']) . ' (equipo restablecido, ya eliminado)')
               . '</span>' : '')
           : '<em>sin MAC</em>' ?><br>
+        <?php if (!empty($d['mac_from']) && !empty($d['mac_from_exists'])): $oldId = (string) $d['mac_from']; ?>
+          <!-- TV RESTABLECIDA: el equipo anterior (misma MAC) sigue en la base => tomar todos sus datos -->
+          <form method="post" class="takeover" data-confirm="¿Pasar a <?= h($id) ?> todos los datos de <?= h($oldId) ?> (estado, usuario, alias, notas, liga, contenido, perfil, anuncios y tiras)?"><?= csrfField() ?>
+            <input type="hidden" name="action" value="take_over">
+            <input type="hidden" name="deviceId" value="<?= h($id) ?>"><input type="hidden" name="oldId" value="<?= h($oldId) ?>">
+            <input type="hidden" name="back" value="<?= h($back) ?>">
+            <strong>Misma TV que <?= h($oldId) ?>.</strong>
+            <button class="ok" type="submit">Tomar los datos de <?= h($oldId) ?></button>
+            <label class="inline"><input type="checkbox" name="deleteOld" value="1" checked> y eliminar <?= h($oldId) ?> (ya no se usa)</label>
+          </form>
+        <?php endif; ?>
         <!-- Última conexión: cualquier consulta de las páginas de la TV (device.php / media.php) o señal de la app nativa (ping.php) -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
         Registrado el <?= dateTag($d['created_at']) ?>

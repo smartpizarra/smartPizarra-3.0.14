@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.7 (2026-11-22)
+// Versión del archivo: 1.0.8 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -661,6 +661,73 @@ final class DeviceRepository
     public static function delete(string $id): void
     {
         Database::pdo()->prepare('DELETE FROM sp_devices WHERE device_id = ?')->execute([$id]);
+    }
+
+    /**
+     * TOMAR LOS DATOS DEL EQUIPO ANTERIOR (2026-11-22). Una TV restablecida vuelve con un
+     * ID nuevo; su MAC pasa al nuevo y mac_from apunta al anterior. Esto copia al NUEVO todo
+     * lo que el servidor guarda del ANTERIOR:
+     *   - estado (y primera autorización), usuario, alias, alias y notas del administrador,
+     *     liga y permiso de contenido (sp_devices);
+     *   - el PERFIL (se mueve: un perfil solo puede estar en un equipo);
+     *   - el contenido, anuncios y tiras asignados a ese equipo en concreto (sp_media_devices,
+     *     sp_ad_devices, sp_overlay_devices; se suman a los que ya tuviera el nuevo).
+     * Con $deleteOld, además mueve el historial de arranques y BORRA el anterior (ya no
+     * se usa: su TV ahora es el nuevo). Todo en una transacción.
+     * La configuración local de la TV (orientación, escala…) vive en la TV, no aquí.
+     * @return string|null Error para mostrar, o null si salió bien.
+     */
+    public static function takeOver(string $newId, string $oldId, bool $deleteOld): ?string
+    {
+        if ($newId === $oldId) {
+            return 'Es el mismo equipo.';
+        }
+        $new = self::find($newId);
+        $old = self::find($oldId);
+        if ($new === null || $old === null) {
+            return 'El equipo anterior ya no existe: no hay datos que tomar.';
+        }
+        // Solo el equipo que recibió su MAC (misma TV restablecida)
+        if ((string) ($new['mac_from'] ?? '') !== $oldId) {
+            return "$newId no viene de $oldId (su MAC no era de ese equipo).";
+        }
+        $pdo = Database::pdo();
+        $now = Database::now();
+        $pdo->beginTransaction();
+        try {
+            // 1) Datos del equipo (status_at = ahora: el cambio lo hace el administrador)
+            $pdo->prepare(
+                'UPDATE sp_devices SET status = ?, status_at = ?, first_authorized_at = COALESCE(first_authorized_at, ?),
+                   user_id = ?, label = ?, admin_alias = ?, admin_notes = ?, league_id = ?,
+                   media_enabled = ?, media_enabled_at = ?
+                 WHERE device_id = ?'
+            )->execute([$old['status'], $now, $old['first_authorized_at'], $old['user_id'], $old['label'],
+                $old['admin_alias'], $old['admin_notes'], $old['league_id'], (int) $old['media_enabled'],
+                $old['media_enabled_at'], $newId]);
+            // 2) Perfil: se MUEVE (único por equipo); el que tuviera el nuevo queda libre
+            $hasOldProfile = $pdo->prepare('SELECT COUNT(*) FROM sp_device_profiles WHERE device_id = ?');
+            $hasOldProfile->execute([$oldId]);
+            if ((int) $hasOldProfile->fetchColumn() > 0) {
+                $pdo->prepare('UPDATE sp_device_profiles SET device_id = NULL WHERE device_id = ?')->execute([$newId]);
+                $pdo->prepare('UPDATE sp_device_profiles SET device_id = ? WHERE device_id = ?')->execute([$newId, $oldId]);
+            }
+            // 3) Contenido, anuncios y tiras asignados a ESE equipo (INSERT IGNORE: sin duplicar)
+            foreach (['sp_media_devices' => 'media_id', 'sp_ad_devices' => 'ad_id', 'sp_overlay_devices' => 'overlay_id'] as $table => $col) {
+                $pdo->prepare("INSERT IGNORE INTO $table ($col, device_id) SELECT $col, ? FROM $table WHERE device_id = ?")
+                    ->execute([$newId, $oldId]);
+            }
+            if ($deleteOld) {
+                // 4) Historial de arranques al nuevo y fuera el anterior (CASCADE borra sus asignaciones)
+                $pdo->prepare('UPDATE sp_boots SET device_id = ? WHERE device_id = ?')->execute([$newId, $oldId]);
+                $pdo->prepare('DELETE FROM sp_devices WHERE device_id = ?')->execute([$oldId]);
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            error_log('smartpizarra takeOver ' . $oldId . ' -> ' . $newId . ': ' . $e->getMessage());
+            return 'No se pudieron pasar los datos (no se cambió nada): ' . $e->getMessage();
+        }
+        return null;
     }
 
     /**
