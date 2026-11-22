@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.6 (2026-11-22)
+// Versión del archivo: 1.0.7 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -17,10 +17,13 @@
  *    "Activar", como las tiras (acciones media_pause / media_resume,
  *    MediaRepository::setActive). Pausado no se envía a las pantallas pero
  *    se conserva (sigue contando para el límite de archivos).
- *  - LÍMITE DE ARCHIVOS (2026-11-12): solo puede tener UserRepository::
- *    maxFiles() archivos de contenido (por defecto 5; lo amplía el
- *    administrador). Contenido muestra "N de límite" y, al llegar al
- *    límite, desactiva la subida; media_upload también lo comprueba.
+ *  - LÍMITES DEL PLAN (2026-11-22; sustituye al límite de archivos fijo):
+ *    con el PLAN vigente puede tener hasta max_files archivos y storage_mb
+ *    de espacio (PlanRepository::limits); sin plan o con el plan vencido no
+ *    sube nada nuevo (lo ya subido se conserva). Contenido e Inicio lo
+ *    muestran; media_upload lo comprueba. Pestaña "Mi plan" (?s=plan):
+ *    datos del plan (nombre, estado, vence, días, archivos, espacio, costo)
+ *    e HISTORIAL de renovaciones. Solo lectura: asigna y renueva el admin.
  *  - MENSAJES (pestaña ?s=mensajes, 2026-11-12): su conversación con el
  *    administrador (MessageRepository). Abrir la pestaña marca como leídos
  *    los mensajes del administrador; la pestaña e Inicio avisan de los no
@@ -518,14 +521,20 @@ try {
                     if ($size > MediaRepository::maxBytes()) {
                         redirectWith('El archivo supera el máximo de ' . formatBytes(MediaRepository::maxBytes()) . '.', 's=contenido');
                     }
-                    // LÍMITE de archivos del usuario (lo pone el administrador; por defecto 5)
-                    $maxFiles = UserRepository::maxFiles($user);
-                    if (MediaRepository::countForUser($uid) >= $maxFiles) {
-                        redirectWith("Llegaste a tu límite de {$maxFiles} archivo(s). Borra alguno o pide al administrador que te permita más.", 's=contenido');
+                    // LÍMITES del PLAN (2026-11-22): sin plan vigente no se suben archivos nuevos;
+                    // con plan, hasta su cantidad de archivos y su almacenamiento
+                    $limits = PlanRepository::limits($user);
+                    if ($limits === null) {
+                        $ps = PlanRepository::forUser($user);
+                        redirectWith(($ps['state'] === 'expired' ? 'Tu plan está vencido' : 'No tienes un plan asignado')
+                            . ': no puedes subir archivos nuevos. Pide al administrador que ' . ($ps['state'] === 'expired' ? 'lo renueve.' : 'te asigne uno.'), 's=contenido');
                     }
-                    if (MediaRepository::usedBytes($uid) + $size > MediaRepository::quotaBytes()) {
-                        redirectWith('No queda espacio: tu límite es ' . formatBytes(MediaRepository::quotaBytes())
-                            . '. Borra algún archivo.', 's=contenido');
+                    if (MediaRepository::countForUser($uid) >= $limits['files']) {
+                        redirectWith("Llegaste al límite de tu plan: {$limits['files']} archivo(s). Borra alguno o pide al administrador un plan mayor.", 's=contenido');
+                    }
+                    if (MediaRepository::usedBytes($uid) + $size > $limits['bytes']) {
+                        redirectWith('No queda espacio en tu plan: tu límite es ' . formatBytes($limits['bytes'])
+                            . ' y usas ' . formatBytes(MediaRepository::usedBytes($uid)) . '. Borra algún archivo.', 's=contenido');
                     }
                     $mime = MediaRepository::detectMime((string) $f['tmp_name']);
                     if ($mime === null) {
@@ -598,10 +607,11 @@ try {
 $statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
 
 /*
- * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | tiras | cuenta.
+ * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | tiras | plan | mensajes | cuenta.
  * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
+ * "plan" (Mi plan, 2026-11-22): datos del plan, uso e historial de renovaciones (solo lectura).
  */
-$sections = ['inicio' => 'Inicio', 'equipos' => 'Dispositivos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'mensajes' => 'Mensajes', 'cuenta' => 'Mi cuenta'];
+$sections = ['inicio' => 'Inicio', 'equipos' => 'Dispositivos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'plan' => 'Mi plan', 'mensajes' => 'Mensajes', 'cuenta' => 'Mi cuenta'];
 $section = param($_GET, 's');
 if (!isset($sections[$section])) {
     $section = 'inicio';
@@ -632,9 +642,13 @@ foreach ($devices as $d) {
     $mediaOnCount += ($d['status'] === 'authorized' && DeviceRepository::mediaEnabled($d)) ? 1 : 0;
     $onlineCount += (!empty($d['online_at']) && time() - utcTs($d['online_at']) < $onlineTimeout) ? 1 : 0;
 }
-$quota = MediaRepository::quotaBytes();
-// Límite de archivos del usuario (por defecto 5; lo cambia el administrador)
-$maxFiles = $user !== null ? UserRepository::maxFiles($user) : UserRepository::DEFAULT_MAX_FILES;
+// PLAN del usuario (2026-11-22): estado, límites (archivos y espacio) e historial.
+// Sin plan vigente: límites 0 (no puede subir; lo ya subido sigue ahí).
+$planState = $user !== null ? PlanRepository::forUser($user) : ['state' => 'none', 'plan' => null, 'days' => 0, 'until' => null];
+$planLimits = $user !== null ? PlanRepository::limits($user) : null;
+$planHistory = $user !== null && $section === 'plan' ? PlanRepository::history((int) $user['id']) : [];
+$quota = $planLimits['bytes'] ?? 0;
+$maxFiles = $planLimits['files'] ?? 0;
 $atFileLimit = count($mediaList) >= $maxFiles;
 // Ligas que le asignó el administrador (solo lectura; llegan a sus TV)
 $myLeagues = $user !== null && in_array($section, ['cuenta', 'equipos'], true) ? LeagueRepository::forUser((int) $user['id']) : [];
@@ -710,6 +724,14 @@ if ($validity['state'] !== 'active') {
     dl.data { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; }
     dl.data dt { color: var(--muted); }
     dl.data dd { margin: 0; overflow-wrap: anywhere; }
+    /* Mi plan: datos del plan e historial de renovaciones (tabla con scroll propio en móvil) */
+    dl.plan-data { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0 12px; }
+    dl.plan-data dt { color: var(--muted); }
+    dl.plan-data dd { margin: 0; overflow-wrap: anywhere; }
+    .table-wrap { overflow-x: auto; }
+    table.history { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    table.history th, table.history td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.25)); white-space: nowrap; }
+    table.history th { color: var(--muted); font-weight: 600; }
     /* Fechas del contenido (Permanente / Con fechas) */
     .dates { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 12px; }
     .dates[hidden] { display: none; }
@@ -790,7 +812,7 @@ if ($validity['state'] !== 'active') {
       <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Dispositivos</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl">Autorizados</div></a>
       <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl">En línea ahora</div></a>
-      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?>/<?= $maxFiles ?></div><div class="lbl">Archivos de contenido</div></a>
+      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?><?= $planLimits !== null ? '/' . $maxFiles : '' ?></div><div class="lbl">Archivos de contenido</div></a>
     </div>
     <!-- Vigencia: hasta cuándo se muestra el contenido en las pantallas -->
     <section class="card block validity <?= h($validity['state']) ?>">
@@ -801,10 +823,22 @@ if ($validity['state'] !== 'active') {
             ? 'Tus pantallas muestran tu contenido hasta esa fecha.'
             : 'Tus pantallas no muestran tu contenido. Para renovarla, contacta al administrador.' ?></div>
     </section>
-    <section class="card block">
-      <h2>Espacio para contenido</h2>
-      <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
-      <div class="meta">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?></div>
+    <!-- Plan: nombre, días que quedan y espacio usado (detalle e historial en "Mi plan") -->
+    <section class="card block validity <?= h($planState['state']) ?>">
+      <h2>Mi plan</h2>
+      <?php if ($planState['plan'] === null): ?>
+        <div class="vnum">Sin plan</div>
+        <div class="meta">No puedes subir archivos nuevos hasta que el administrador te asigne un plan.</div>
+      <?php else: $pl = $planState['plan']; ?>
+        <div class="vnum"><?= h($pl['name']) ?> · <?= $planState['state'] === 'active' ? (int) $planState['days'] . ($planState['days'] === 1 ? ' día' : ' días') : 'Vencido' ?></div>
+        <?php if ($quota > 0): ?>
+          <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
+          <div class="meta">Espacio: usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?></div>
+        <?php else: ?>
+          <div class="meta">Plan vencido: no puedes subir archivos nuevos. Pide al administrador que lo renueve.</div>
+        <?php endif; ?>
+      <?php endif; ?>
+      <div class="actions"><a class="btn" href="?s=plan">Ver mi plan e historial</a></div>
     </section>
     <section class="card block">
       <h2>¿Qué muestran mis pantallas?</h2>
@@ -923,9 +957,15 @@ if ($validity['state'] !== 'active') {
       <p class="hint">Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
         Los videos se reproducen sin sonido. <strong>Videos: 30 fps como máximo</strong>, H.264 y hasta 1920×1080
         (los de 60 fps o 4K se ven a saltos en las pantallas y no se aceptan).</p>
-      <!-- Límite de archivos (lo pone el administrador) -->
-      <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>">Archivos: <strong><?= count($mediaList) ?> de <?= $maxFiles ?></strong>
-        <?= $atFileLimit ? '· Llegaste a tu límite: borra alguno o pide al administrador que te permita más.' : '· Puedes subir ' . ($maxFiles - count($mediaList)) . ' más.' ?></p>
+      <!-- Límites del PLAN (cantidad de archivos y espacio); sin plan vigente no se sube nada nuevo -->
+      <?php if ($planLimits === null): ?>
+        <p class="file-limit full"><strong><?= $planState['state'] === 'expired' ? 'Tu plan «' . h($planState['plan']['name']) . '» está vencido' : 'No tienes un plan asignado' ?>:</strong>
+          no puedes subir archivos nuevos. Pide al administrador que <?= $planState['state'] === 'expired' ? 'lo renueve' : 'te asigne uno' ?>. <a href="?s=plan">Mi plan</a></p>
+      <?php else: ?>
+        <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>">Plan <?= h($planState['plan']['name']) ?> · Archivos: <strong><?= count($mediaList) ?> de <?= $maxFiles ?></strong>
+          · Espacio: <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?>
+          <?= $atFileLimit ? '· Llegaste al límite de tu plan: borra alguno o pide al administrador un plan mayor.' : '· Puedes subir ' . ($maxFiles - count($mediaList)) . ' más.' ?></p>
+      <?php endif; ?>
       <input type="hidden" name="action" value="media_upload">
       <div class="row">
         <div>
@@ -943,8 +983,8 @@ if ($validity['state'] !== 'active') {
     </form>
 
     <div class="section-head">
-      <h2>Mis archivos (<?= count($mediaList) ?> de <?= $maxFiles ?>)</h2>
-      <span class="hint">Usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?> · se muestran en este orden</span>
+      <h2>Mis archivos (<?= count($mediaList) ?><?= $planLimits !== null ? ' de ' . $maxFiles : '' ?>)</h2>
+      <span class="hint">Usado <?= h(formatBytes($usedBytes)) ?><?= $planLimits !== null ? ' de ' . h(formatBytes($quota)) : '' ?> · se muestran en este orden</span>
     </div>
     <?php if (!$mediaList): ?>
       <div class="card empty block">Todavía no has subido nada. Usa «Subir un archivo».</div>
@@ -1068,6 +1108,54 @@ if ($validity['state'] !== 'active') {
         </details>
       </section>
     <?php endforeach; ?>
+
+  <?php elseif ($section === 'plan'): ?>
+    <!-- ============ MI PLAN (solo lectura; lo asigna y renueva el administrador) ============ -->
+    <section class="card block validity <?= h($planState['state']) ?>">
+      <h2>Mi plan</h2>
+      <?php if ($planState['plan'] === null): ?>
+        <div class="vnum">Sin plan</div>
+        <div class="meta">No tienes un plan asignado: puedes ver y ordenar lo que ya subiste, pero no subir archivos nuevos.
+          Pide al administrador que te asigne uno.</div>
+      <?php else: $pl = $planState['plan']; ?>
+        <div class="vnum"><?= h($pl['name']) ?></div>
+        <dl class="plan-data">
+          <dt>Estado</dt><dd><?= $planState['state'] === 'active'
+              ? '<strong>Vigente</strong> · quedan ' . (int) $planState['days'] . ($planState['days'] === 1 ? ' día' : ' días')
+              : '<strong>Vencido</strong>: pide al administrador que lo renueve' ?></dd>
+          <dt><?= $planState['state'] === 'active' ? 'Vence el' : 'Venció el' ?></dt><dd><?= $planState['until'] ? dateTag($planState['until']) : '—' ?></dd>
+          <dt>Duración</dt><dd><?= (int) $pl['days'] ?> días por periodo</dd>
+          <dt>Cantidad de contenido</dt><dd><?= (int) $pl['max_files'] ?> archivo(s) · tienes <?= count($mediaList) ?></dd>
+          <dt>Almacenamiento</dt><dd><?= h(PlanRepository::storageText((int) $pl['storage_mb'])) ?> · usas <?= h(formatBytes($usedBytes)) ?></dd>
+          <dt>Costo</dt><dd><?= h(PlanRepository::priceText($pl)) ?> por periodo</dd>
+        </dl>
+        <?php if ($planState['state'] === 'active'): ?>
+          <progress value="<?= (int) $usedBytes ?>" max="<?= (int) ((int) $pl['storage_mb'] * 1048576) ?>"></progress>
+        <?php endif; ?>
+      <?php endif; ?>
+      <p class="hint">La vigencia del contenido en tus pantallas: <?= $validity['text'] ?>. Al renovar el plan se suman sus días.</p>
+    </section>
+    <!-- Historial de asignaciones y renovaciones (datos del plan en ese momento) -->
+    <section class="card block">
+      <h2>Historial de renovaciones</h2>
+      <?php if (!$planHistory): ?>
+        <p class="hint">Todavía no hay renovaciones.</p>
+      <?php else: ?>
+        <div class="table-wrap"><table class="history">
+          <tr><th>Fecha</th><th>Movimiento</th><th>Plan</th><th>Días</th><th>Costo</th><th>Vigente hasta</th></tr>
+          <?php foreach ($planHistory as $r): ?>
+            <tr>
+              <td><?= dateTag($r['created_at']) ?></td>
+              <td><?= $r['kind'] === 'renew' ? 'Renovación' : 'Asignación' ?></td>
+              <td><?= h($r['plan_name']) ?> <span class="hint">(<?= (int) $r['max_files'] ?> archivos · <?= h(PlanRepository::storageText((int) $r['storage_mb'])) ?>)</span></td>
+              <td>+<?= (int) $r['days'] ?></td>
+              <td><?= h(PlanRepository::priceText($r)) ?></td>
+              <td><?= dateTag($r['plan_until']) ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </table></div>
+      <?php endif; ?>
+    </section>
 
   <?php elseif ($section === 'mensajes'): ?>
     <!-- ======================= MENSAJES con el administrador ======================= -->

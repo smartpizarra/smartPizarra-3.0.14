@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.10 (2026-11-22)
+// Versión del archivo: 1.0.11 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -281,6 +281,11 @@ final class Database
         if (!in_array('sp_device_profiles', $tables, true) || !in_array('first_authorized_at', $cols, true)) {
             return 'Faltan los perfiles de equipo (tabla sp_device_profiles / columna first_authorized_at): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-profiles.sql.';
+        }
+        // Planes de contenido (2026-11-22)
+        if (!in_array('sp_plans', $tables, true) || !in_array('sp_plan_renewals', $tables, true) || !in_array('plan_id', $userCols, true)) {
+            return 'Faltan los planes de contenido (tablas sp_plans / sp_plan_renewals, columna sp_users.plan_id): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans.sql.';
         }
         // S/N del perfil (2026-11-22)
         $profileCols = $pdo->query('SHOW COLUMNS FROM sp_device_profiles')->fetchAll(PDO::FETCH_COLUMN);
@@ -916,8 +921,9 @@ final class UserRepository
             'SELECT u.*,
                (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id) AS devices,
                (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id AND d.status = \'authorized\') AS authorized,
-               (SELECT COUNT(*) FROM sp_media m WHERE m.user_id = u.id) AS media
-             FROM sp_users u ORDER BY u.company, u.email'
+               (SELECT COUNT(*) FROM sp_media m WHERE m.user_id = u.id) AS media,
+               pl.name AS plan_name
+             FROM sp_users u LEFT JOIN sp_plans pl ON pl.id = u.plan_id ORDER BY u.company, u.email'
         )->fetchAll();
     }
 
@@ -985,10 +991,15 @@ final class UserRepository
     /** Máximo que el administrador puede poner. */
     public const MAX_FILES_LIMIT = 1000;
 
-    /** @return int Cuántos archivos de contenido puede subir el usuario (su límite). */
+    /**
+     * @return int Cuántos archivos de contenido puede tener el usuario: los de su PLAN si
+     * está vigente; sin plan o con el plan vencido, 0 (no puede subir más). Desde
+     * 2026-11-22 el límite lo da el plan; la columna max_files ya no se usa.
+     */
     public static function maxFiles(array $user): int
     {
-        return isset($user['max_files']) ? (int) $user['max_files'] : self::DEFAULT_MAX_FILES;
+        $limits = PlanRepository::limits($user);
+        return $limits === null ? 0 : $limits['files'];
     }
 
     /**
@@ -3103,6 +3114,260 @@ final class RouteRepository
         }
         $league = LeagueRepository::devicePayload($device);
         return self::buildUrl($r, $league === null ? '' : (string) $league['values']);
+    }
+}
+
+/**
+ * PLANES DE CONTENIDO (tablas sp_plans y sp_plan_renewals; sp_users.plan_id /
+ * plan_until), 2026-11-22.
+ *
+ * El administrador crea planes (nombre, días, cantidad de archivos,
+ * almacenamiento y costo) y asigna uno a cada usuario. ASIGNAR o RENOVAR
+ * (solo desde el panel) suma los días del plan:
+ *   - a plan_until (fin del periodo pagado), desde ahora si estaba vencido o
+ *     desde su fecha de fin si sigue vigente (no se pierden días);
+ *   - a la VIGENCIA del contenido (content_until), con la misma regla
+ *     (UserRepository::addContentDays).
+ * Cada asignación o renovación deja una línea en el HISTORIAL con los datos
+ * del plan en ese momento (el usuario la ve en /cuenta/ → Mi plan).
+ * Con el plan VIGENTE el usuario puede subir hasta max_files archivos y
+ * storage_mb de espacio; sin plan o con el plan vencido no puede subir
+ * archivos nuevos (lo ya subido no se borra). La vigencia del contenido se
+ * sigue cambiando a mano (sumar/restar días), con plan o sin él.
+ */
+final class PlanRepository
+{
+    /** Máximos razonables para los campos del plan. */
+    public const MAX_DAYS = 3650;
+    public const MAX_FILES = 1000;
+    public const MAX_STORAGE_MB = 1048576; // 1 TB
+    public const MAX_PRICE = 99999999.99;
+
+    /**
+     * Valida el formulario de un plan.
+     * @param array<string,mixed> $in name, days, max_files, storage_gb (admite decimales), price, currency.
+     * @return array{name:string,days:int,max_files:int,storage_mb:int,price:string,currency:string}|string Datos o error.
+     */
+    public static function clean(array $in): array|string
+    {
+        $name = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', (string) ($in['name'] ?? '')));
+        if (!mb_check_encoding($name, 'UTF-8')) {
+            $name = mb_convert_encoding($name, 'UTF-8', 'Windows-1252');
+        }
+        $name = mb_substr($name, 0, 60);
+        if ($name === '') {
+            return 'El plan necesita un nombre.';
+        }
+        $int = static fn($v) => ctype_digit(trim((string) $v)) ? (int) trim((string) $v) : -1;
+        $days = $int($in['days'] ?? '');
+        if ($days < 1 || $days > self::MAX_DAYS) {
+            return 'La duración debe ser de 1 a ' . self::MAX_DAYS . ' días.';
+        }
+        $files = $int($in['max_files'] ?? '');
+        if ($files < 1 || $files > self::MAX_FILES) {
+            return 'La cantidad de contenido debe ser de 1 a ' . self::MAX_FILES . ' archivos.';
+        }
+        // Almacenamiento en GB (coma o punto decimal) => MB
+        $gb = str_replace(',', '.', trim((string) ($in['storage_gb'] ?? '')));
+        if (!preg_match('/^\d+(\.\d{1,3})?$/', $gb) || (float) $gb <= 0) {
+            return 'Escribe el almacenamiento en GB (p. ej. 1 o 0.5).';
+        }
+        $mb = (int) round((float) $gb * 1024);
+        if ($mb < 1 || $mb > self::MAX_STORAGE_MB) {
+            return 'El almacenamiento debe ser de 0.001 a ' . (self::MAX_STORAGE_MB / 1024) . ' GB.';
+        }
+        $price = str_replace(',', '.', trim((string) ($in['price'] ?? '')));
+        if (!preg_match('/^\d+(\.\d{1,2})?$/', $price) || (float) $price > self::MAX_PRICE) {
+            return 'Escribe el costo como número (p. ej. 10 o 9.99).';
+        }
+        $currency = strtoupper(trim((string) ($in['currency'] ?? 'USD')));
+        if (!preg_match('/^[A-Z]{3}$/', $currency)) {
+            return 'La moneda son 3 letras (p. ej. USD).';
+        }
+        return ['name' => $name, 'days' => $days, 'max_files' => $files, 'storage_mb' => $mb,
+            'price' => number_format((float) $price, 2, '.', ''), 'currency' => $currency];
+    }
+
+    /** ¿Otro plan tiene ya ese nombre? */
+    public static function nameTaken(string $name, int $exceptId = 0): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_plans WHERE name = ? AND id <> ?');
+        $stmt->execute([$name, $exceptId]);
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /** @return array<int,array<string,mixed>> Planes con cuántos usuarios los tienen (users). */
+    public static function all(): array
+    {
+        return Database::pdo()->query(
+            'SELECT p.*, (SELECT COUNT(*) FROM sp_users u WHERE u.plan_id = p.id) AS users
+             FROM sp_plans p ORDER BY p.price, p.days, p.name'
+        )->fetchAll();
+    }
+
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_plans WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /** @param array<string,mixed> $d Datos de clean(). */
+    public static function create(array $d): int
+    {
+        $now = Database::now();
+        $pdo = Database::pdo();
+        $pdo->prepare(
+            'INSERT INTO sp_plans (name, days, max_files, storage_mb, price, currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$d['name'], $d['days'], $d['max_files'], $d['storage_mb'], $d['price'], $d['currency'], $now, $now]);
+        return (int) $pdo->lastInsertId();
+    }
+
+    /**
+     * Cambia un plan. Los LÍMITES nuevos valen al momento para quien lo tenga;
+     * el historial conserva los datos que tenía cada renovación.
+     */
+    public static function update(int $id, array $d): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_plans SET name = ?, days = ?, max_files = ?, storage_mb = ?, price = ?, currency = ?, updated_at = ? WHERE id = ?'
+        )->execute([$d['name'], $d['days'], $d['max_files'], $d['storage_mb'], $d['price'], $d['currency'], Database::now(), $id]);
+    }
+
+    /** Borra un plan: sus usuarios quedan sin plan (FK SET NULL); el historial se conserva. */
+    public static function delete(int $id): void
+    {
+        $pdo = Database::pdo();
+        // Sin plan tampoco tiene sentido una fecha de fin de plan
+        $pdo->prepare('UPDATE sp_users SET plan_until = NULL WHERE plan_id = ?')->execute([$id]);
+        $pdo->prepare('DELETE FROM sp_plans WHERE id = ?')->execute([$id]);
+    }
+
+    /**
+     * Estado del plan de un usuario (fila de sp_users con plan_id / plan_until).
+     * @return array{state:string,plan:?array,days:int,until:?string}
+     *   state: none (sin plan) | active (vigente) | expired (vencido); days = días que le quedan.
+     */
+    public static function forUser(array $user): array
+    {
+        $plan = !empty($user['plan_id']) ? self::find((int) $user['plan_id']) : null;
+        if ($plan === null) {
+            return ['state' => 'none', 'plan' => null, 'days' => 0, 'until' => null];
+        }
+        $until = !empty($user['plan_until']) ? (string) $user['plan_until'] : null;
+        $left = $until !== null ? (int) strtotime($until . ' UTC') - time() : 0;
+        return ['state' => $left > 0 ? 'active' : 'expired', 'plan' => $plan,
+            'days' => $left > 0 ? (int) ceil($left / 86400) : 0, 'until' => $until];
+    }
+
+    /**
+     * LÍMITES de subida del usuario: los de su plan si está vigente; si no, null
+     * (no puede subir archivos nuevos).
+     * @return array{files:int,bytes:int}|null
+     */
+    public static function limits(array $user): ?array
+    {
+        $st = self::forUser($user);
+        if ($st['state'] !== 'active') {
+            return null;
+        }
+        return ['files' => (int) $st['plan']['max_files'], 'bytes' => (int) $st['plan']['storage_mb'] * 1048576];
+    }
+
+    /**
+     * ASIGNA un plan al usuario (o lo cambia por otro) y empieza/alarga su periodo:
+     * suma sus días al plan y a la vigencia, y lo anota en el historial ("assign").
+     * @return string|null Error o null.
+     */
+    public static function assign(int $userId, int $planId): ?string
+    {
+        return self::extend($userId, $planId, 'assign');
+    }
+
+    /**
+     * RENUEVA el plan que ya tiene el usuario (botón del panel): suma sus días al
+     * plan y a la vigencia y lo anota en el historial ("renew").
+     * @return string|null Error o null.
+     */
+    public static function renew(int $userId): ?string
+    {
+        $user = UserRepository::find($userId);
+        if ($user === null || empty($user['plan_id'])) {
+            return 'El usuario no tiene plan: asígnale uno.';
+        }
+        return self::extend($userId, (int) $user['plan_id'], 'renew');
+    }
+
+    /** Asignar y renovar: misma operación, en una transacción. */
+    private static function extend(int $userId, int $planId, string $kind): ?string
+    {
+        $user = UserRepository::find($userId);
+        $plan = self::find($planId);
+        if ($user === null) {
+            return 'Ese usuario ya no existe.';
+        }
+        if ($plan === null) {
+            return 'Ese plan ya no existe.';
+        }
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $days = (int) $plan['days'];
+            // Fin del plan: desde ahora si no tenía o estaba vencido; si no, desde su fin (cambiar de plan conserva los días)
+            $prev = !empty($user['plan_until']) ? (int) strtotime($user['plan_until'] . ' UTC') : 0;
+            $planUntil = gmdate('Y-m-d H:i:s', max(time(), $prev) + $days * 86400);
+            $pdo->prepare('UPDATE sp_users SET plan_id = ?, plan_until = ? WHERE id = ?')->execute([$planId, $planUntil, $userId]);
+            // Vigencia del contenido: misma regla (addContentDays)
+            $contentUntil = UserRepository::addContentDays($userId, $days);
+            $pdo->prepare(
+                'INSERT INTO sp_plan_renewals (user_id, plan_id, kind, plan_name, days, max_files, storage_mb, price, currency,
+                   plan_until, content_until, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            )->execute([$userId, $planId, $kind, $plan['name'], $days, (int) $plan['max_files'], (int) $plan['storage_mb'],
+                $plan['price'], $plan['currency'], $planUntil, $contentUntil, Database::now()]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            error_log('smartpizarra plan ' . $kind . ' usuario ' . $userId . ': ' . $e->getMessage());
+            return 'No se pudo ' . ($kind === 'renew' ? 'renovar' : 'asignar') . ' el plan (no se cambió nada).';
+        }
+        return null;
+    }
+
+    /** Quita el plan al usuario (la vigencia del contenido NO se toca; el historial se conserva). */
+    public static function removeFromUser(int $userId): void
+    {
+        Database::pdo()->prepare('UPDATE sp_users SET plan_id = NULL, plan_until = NULL WHERE id = ?')->execute([$userId]);
+    }
+
+    /** @return array<int,array<string,mixed>> Historial del usuario, lo más reciente primero (máx. 200). */
+    public static function history(int $userId): array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_plan_renewals WHERE user_id = ? ORDER BY id DESC LIMIT 200');
+        $stmt->execute([$userId]);
+        return $stmt->fetchAll();
+    }
+
+    /** "10.00 USD" => "10 USD"; "9.99 USD" igual. */
+    public static function priceText(array $p): string
+    {
+        $n = (float) $p['price'];
+        return (floor($n) == $n ? number_format($n, 0, '.', ',') : number_format($n, 2, '.', ',')) . ' ' . $p['currency'];
+    }
+
+    /** 1024 MB => "1 GB"; 512 => "512 MB"; 1536 => "1.5 GB". */
+    public static function storageText(int $mb): string
+    {
+        if ($mb >= 1024) {
+            $gb = $mb / 1024;
+            return rtrim(rtrim(number_format($gb, 2, '.', ''), '0'), '.') . ' GB';
+        }
+        return $mb . ' MB';
+    }
+
+    /** "storage_gb" para el formulario: 1024 => "1", 512 => "0.5". */
+    public static function storageGbValue(int $mb): string
+    {
+        return rtrim(rtrim(number_format($mb / 1024, 3, '.', ''), '0'), '.');
     }
 }
 

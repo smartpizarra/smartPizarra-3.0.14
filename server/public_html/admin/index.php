@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.11 (2026-11-22)
+// Versión del archivo: 1.0.12 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -86,7 +86,8 @@
  *
  *  - LÍMITE DE ARCHIVOS POR USUARIO (2026-11-12): cuántos archivos de
  *    contenido puede subir cada usuario desde /cuenta/ (por defecto 5).
- *    Se cambia en su ficha (sección Contenido, acción user_max_files).
+ *    (Hasta 2026-11-22 se cambiaba en su ficha, sección Contenido; ahora el
+ *    límite lo da su PLAN: ver PLANES más abajo.)
  *    La lista de usuarios muestra "N/límite archivo(s)".
  *
  *  - VIDEOS FLUIDOS (2026-11-13): un anuncio MP4 de más de 30 fps, nivel
@@ -120,6 +121,13 @@
  *    DeviceRepository::setAdminInfo). El buscador del panel encuentra el
  *    equipo por ese alias (search(..., admin: true)); /cuenta/ no.
  *
+ *  - PLANES DE CONTENIDO (botón "Planes", ?view=plans, 2026-11-22): crear,
+ *    editar y borrar planes (nombre, días, archivos, almacenamiento, costo;
+ *    acciones plan_*). En la ficha del usuario, sección Plan: asignar o
+ *    cambiar (user_plan_assign), RENOVAR (user_plan_renew, solo aquí: el
+ *    usuario queda renovado al momento), quitar (user_plan_remove) e
+ *    historial. Asignar/renovar suman los días al plan y a la vigencia. La
+ *    Vigencia se sigue cambiando a mano con plan o sin él.
  *  - PERFILES DE EQUIPO (botón "Perfiles", ?view=profiles, 2026-11-12):
  *    ficha de la caja física = marca, modelo, MAC impresa en el CASE y
  *    fecha de instalación (todos obligatorios; ProfileRepository). Se crea
@@ -871,6 +879,35 @@ try {
                 default:
                     redirectWith('Acción desconocida.', $back);
             }
+        } elseif (str_starts_with($action, 'plan_')) {
+            /* ---- PLANES DE CONTENIDO (vista ?view=plans, 2026-11-22) ---- */
+            $planId = (int) param($_POST, 'planId');
+            $plan = $action === 'plan_create' ? null : PlanRepository::find($planId);
+            if ($action !== 'plan_create' && $plan === null) {
+                redirectWith('Ese plan ya no existe.', 'view=plans');
+            }
+            switch ($action) {
+                case 'plan_create':
+                case 'plan_update':
+                    $data = PlanRepository::clean($_POST);
+                    if (is_string($data)) {
+                        redirectWith($data, 'view=plans');
+                    }
+                    if (PlanRepository::nameTaken($data['name'], $planId)) {
+                        redirectWith("Ya hay un plan llamado «{$data['name']}».", 'view=plans');
+                    }
+                    if ($action === 'plan_create') {
+                        PlanRepository::create($data);
+                        redirectWith("Plan «{$data['name']}» creado. Asígnalo en la ficha de cada usuario.", 'view=plans');
+                    }
+                    PlanRepository::update($planId, $data);
+                    redirectWith("Plan «{$data['name']}» guardado. Sus límites valen ya para quien lo tenga; el historial conserva los datos anteriores.", 'view=plans');
+                case 'plan_delete':
+                    PlanRepository::delete($planId);
+                    redirectWith("Plan «{$plan['name']}» eliminado; sus usuarios quedan sin plan (el historial se conserva).", 'view=plans');
+                default:
+                    redirectWith('Acción desconocida.', 'view=plans');
+            }
         } elseif (str_starts_with($action, 'route_')) {
             /* ---- GESTIÓN DE RUTAS (vista ?view=routes) ---- */
             $routeId = (int) param($_POST, 'routeId');
@@ -1044,16 +1081,23 @@ try {
                     $password = UserRepository::resetPassword($uid);
                     $_SESSION['newPassword'] = ['email' => $user['email'], 'company' => $user['company'], 'password' => $password];
                     redirectWith("Contraseña de «{$user['company']}» restablecida; su sesión abierta se cierra.", $back);
-                case 'user_max_files':
-                    // LÍMITE de archivos de contenido que puede subir el usuario
-                    $raw = param($_POST, 'maxFiles');
-                    if (!ctype_digit($raw) || !UserRepository::setMaxFiles($uid, (int) $raw)) {
-                        redirectWith('Indica un número de archivos entre 0 y ' . UserRepository::MAX_FILES_LIMIT . '.', $back);
+                case 'user_plan_assign':
+                case 'user_plan_renew':
+                    // PLAN (2026-11-22): asignar (o cambiar) y renovar suman los días del plan
+                    // al plan y a la vigencia, y quedan en el historial que ve el usuario
+                    $renew = $action === 'user_plan_renew';
+                    $err = $renew ? PlanRepository::renew($uid) : PlanRepository::assign($uid, (int) param($_POST, 'planId'));
+                    if ($err !== null) {
+                        redirectWith($err, $back);
                     }
-                    $max = (int) $raw;
-                    $has = MediaRepository::countForUser($uid);
-                    redirectWith("«{$user['company']}» puede subir hasta {$max} archivo(s); ahora tiene {$has}."
-                        . ($has > $max ? ' No se borra nada: no podrá subir más hasta tener menos de ' . $max . '.' : ''), $back);
+                    $fresh = UserRepository::find($uid) ?? $user;
+                    $ps = PlanRepository::forUser($fresh);
+                    redirectWith(($renew ? 'Plan renovado' : 'Plan asignado') . " a «{$user['company']}»: «{$ps['plan']['name']}» +{$ps['plan']['days']} días,"
+                        . ' vigente hasta el ' . gmdate('d/m/Y H:i', (int) strtotime($ps['until'] . ' UTC')) . ' UTC.'
+                        . ' La vigencia del contenido también suma esos días. Queda en su historial.', $back);
+                case 'user_plan_remove':
+                    PlanRepository::removeFromUser($uid);
+                    redirectWith("«{$user['company']}» queda sin plan: no podrá subir archivos nuevos (lo ya subido y la vigencia no cambian).", $back);
                 case 'user_days':
                     // Sumar o restar días de vigencia (afecta a todos sus equipos)
                     $days = (int) param($_POST, 'days');
@@ -1195,7 +1239,7 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages', 'plans'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
@@ -1299,6 +1343,10 @@ try {
     // Rutas (?view=routes) y nombre de la ruta de cada usuario (ficha)
     // (también en la lista: URL final de cada tarjeta sin consultar por equipo)
     $routes = $loggedIn && ($view === 'routes' || $view === 'list' || $userCard) ? RouteRepository::all() : [];
+    // PLANES (2026-11-22): la vista ?view=plans y el selector de la ficha del usuario; su plan e historial
+    $plans = $loggedIn && ($view === 'plans' || $userCard) ? PlanRepository::all() : [];
+    $userPlan = $loggedIn && $userCard ? PlanRepository::forUser($userCard) : null;
+    $userPlanHistory = $loggedIn && $userCard ? PlanRepository::history((int) $userCard['id']) : [];
     $routesById = array_column($routes, null, 'id');
     $routeNames = array_column($routes, 'name', 'id');
     usort($allDevices, static fn($a, $b) => strcmp((string) $a['user_company'] . $a['device_id'], (string) $b['user_company'] . $b['device_id']));
@@ -1364,6 +1412,9 @@ try {
     $allDevices = [];
     $overlaysAll = [];
     $routes = [];
+    $plans = [];
+    $userPlan = null;
+    $userPlanHistory = [];
     $routeNames = [];
     $leagueTypes = [];
     $leagues = [];
@@ -1580,6 +1631,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'ads' ? 'on' : '' ?>" href="?view=ads">Anuncios</a>
       <a class="btn <?= $view === 'overlays' ? 'on' : '' ?>" href="?view=overlays">Tiras</a>
       <a class="btn <?= $view === 'routes' ? 'on' : '' ?>" href="?view=routes">Rutas</a>
+      <a class="btn <?= $view === 'plans' ? 'on' : '' ?>" href="?view=plans">Planes</a>
       <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues">Ligas</a>
       <a class="btn <?= $view === 'profiles' ? 'on' : '' ?>" href="?view=profiles">Perfiles</a>
       <!-- Buzón: número de mensajes de usuarios sin leer -->
@@ -1602,7 +1654,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php endif; ?>
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages'], true) ? ' hidden-tools' : '' ?>" method="get">
+  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages', 'plans'], true) ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? 'Buscar usuario por empresa, email o teléfono' : 'Buscar por ID, alias, alias del admin, empresa, email, MAC, MAC del case o S/N' ?>" aria-label="Buscar">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="Usuario" data-autosubmit>
@@ -1642,7 +1694,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="stats">
         <div class="stat"><b><?= (int) $userCard['devices'] ?></b><span>Equipos</span></div>
         <div class="stat"><b><?= (int) $userCard['authorized'] ?></b><span>Autorizados</span></div>
-        <div class="stat"><b><?= (int) $userCard['media'] ?>/<?= UserRepository::maxFiles($userCard) ?></b><span>Archivos</span></div>
+        <div class="stat"><b><?= (int) $userCard['media'] ?>/<?= $userPlan && $userPlan['state'] === 'active' ? (int) $userPlan['plan']['max_files'] : '—' ?></b><span>Archivos</span></div>
         <div class="stat"><b><?= $uv['state'] === 'active' ? (int) $uv['days'] : '—' ?></b><span>Días de vigencia</span></div>
       </div>
     </section>
@@ -1671,18 +1723,68 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </div>
     </section>
 
-    <!-- Contenido subido por el usuario -->
+    <!-- PLAN del usuario (2026-11-22; sustituye a la sección Contenido / límite de archivos).
+         Asignar o renovar suma los días del plan al plan y a la vigencia y queda en el historial
+         (el usuario lo ve en /cuenta/ → Mi plan). Sin plan vigente no puede subir archivos nuevos. -->
     <section class="card section">
-      <h2>Contenido</h2>
-      <div class="meta"><?= (int) $userCard['media'] ?> de <?= UserRepository::maxFiles($userCard) ?> archivo(s) subido(s) desde /cuenta/.</div>
-      <!-- Límite de archivos que puede subir (por defecto 5) -->
-      <form method="post" class="days-form"><?= csrfField() ?>
-        <input type="hidden" name="action" value="user_max_files"><input type="hidden" name="userId" value="<?= $uid ?>">
-        <input type="hidden" name="back" value="<?= h($userBack) ?>">
-        <label for="maxf<?= $uid ?>">Límite de archivos</label>
-        <input type="number" id="maxf<?= $uid ?>" name="maxFiles" value="<?= UserRepository::maxFiles($userCard) ?>" min="0" max="<?= UserRepository::MAX_FILES_LIMIT ?>" required>
-        <button class="ok" type="submit">Guardar límite</button>
-      </form>
+      <h2>Plan</h2>
+      <?php $up = $userPlan; $upl = $up['plan'] ?? null; ?>
+      <?php if ($upl === null): ?>
+        <div class="meta"><strong>Sin plan.</strong> No puede subir archivos nuevos (tiene <?= (int) $userCard['media'] ?> subido(s); no se borran).</div>
+      <?php else: ?>
+        <div class="meta">
+          <strong><?= h($upl['name']) ?></strong>
+          <span class="badge <?= $up['state'] === 'active' ? 'authorized' : 'revoked' ?>"><?= $up['state'] === 'active' ? 'Vigente · ' . (int) $up['days'] . ' d' : 'Vencido' ?></span><br>
+          <?= $up['state'] === 'active' ? 'Vence' : 'Venció' ?> el <?= $up['until'] ? dateTag($up['until']) : '—' ?>
+          · <?= (int) $upl['days'] ?> días · <?= (int) $upl['max_files'] ?> archivos · <?= h(PlanRepository::storageText((int) $upl['storage_mb'])) ?>
+          · <?= h(PlanRepository::priceText($upl)) ?><br>
+          Usa <?= (int) $userCard['media'] ?> de <?= (int) $upl['max_files'] ?> archivo(s) y <?= h(formatBytes(MediaRepository::usedBytes($uid))) ?> de <?= h(PlanRepository::storageText((int) $upl['storage_mb'])) ?>.
+        </div>
+        <div class="actions">
+          <!-- RENOVAR: solo el administrador; el usuario queda renovado al momento -->
+          <form method="post" data-confirm="¿Renovar el plan «<?= h($upl['name']) ?>» de «<?= h($userCard['company']) ?>»? Se suman <?= (int) $upl['days'] ?> días al plan y a la vigencia (<?= h(PlanRepository::priceText($upl)) ?>)."><?= csrfField() ?>
+            <input type="hidden" name="action" value="user_plan_renew"><input type="hidden" name="userId" value="<?= $uid ?>">
+            <input type="hidden" name="back" value="<?= h($userBack) ?>">
+            <button class="ok" type="submit">Renovar plan</button></form>
+          <form method="post" data-confirm="¿Quitar el plan a «<?= h($userCard['company']) ?>»? No podrá subir archivos nuevos; la vigencia no cambia."><?= csrfField() ?>
+            <input type="hidden" name="action" value="user_plan_remove"><input type="hidden" name="userId" value="<?= $uid ?>">
+            <input type="hidden" name="back" value="<?= h($userBack) ?>">
+            <button type="submit">Quitar plan</button></form>
+        </div>
+      <?php endif; ?>
+      <!-- Asignar (o cambiar) plan: empieza o alarga el periodo con los días del plan elegido -->
+      <?php if ($plans): ?>
+        <form method="post" class="days-form" data-confirm="¿Asignar este plan? Se suman sus días al plan y a la vigencia del contenido."><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_plan_assign"><input type="hidden" name="userId" value="<?= $uid ?>">
+          <input type="hidden" name="back" value="<?= h($userBack) ?>">
+          <label for="plan<?= $uid ?>"><?= $upl === null ? 'Asignar plan' : 'Cambiar a otro plan' ?></label>
+          <select id="plan<?= $uid ?>" name="planId" required>
+            <?php foreach ($plans as $pl): ?>
+              <option value="<?= (int) $pl['id'] ?>" <?= $upl !== null && (int) $upl['id'] === (int) $pl['id'] ? 'selected' : '' ?>>
+                <?= h($pl['name'] . ' · ' . $pl['days'] . ' d · ' . $pl['max_files'] . ' archivos · ' . PlanRepository::storageText((int) $pl['storage_mb']) . ' · ' . PlanRepository::priceText($pl)) ?></option>
+            <?php endforeach; ?>
+          </select>
+          <button class="ok" type="submit"><?= $upl === null ? 'Asignar' : 'Cambiar' ?></button>
+        </form>
+      <?php else: ?>
+        <div class="meta">Todavía no hay planes: créalos en <a href="?view=plans">Planes</a>.</div>
+      <?php endif; ?>
+      <!-- Historial (lo mismo que ve el usuario en /cuenta/ → Mi plan) -->
+      <details class="edit">
+        <summary>Historial de renovaciones (<?= count($userPlanHistory) ?>)</summary>
+        <?php if (!$userPlanHistory): ?>
+          <p class="owner">Sin renovaciones todavía.</p>
+        <?php else: ?>
+          <div class="table-wrap"><table class="boots">
+            <tr><th>Fecha</th><th>Movimiento</th><th>Plan</th><th>Días</th><th>Costo</th><th>Plan hasta</th></tr>
+            <?php foreach ($userPlanHistory as $r): ?>
+              <tr><td><?= dateTag($r['created_at']) ?></td><td><?= $r['kind'] === 'renew' ? 'Renovación' : 'Asignación' ?></td>
+                <td><?= h($r['plan_name']) ?></td><td>+<?= (int) $r['days'] ?></td><td><?= h(PlanRepository::priceText($r)) ?></td>
+                <td><?= dateTag($r['plan_until']) ?></td></tr>
+            <?php endforeach; ?>
+          </table></div>
+        <?php endif; ?>
+      </details>
       <div class="actions">
         <a class="btn" href="<?= h(panelUrl(['view' => 'media', 'user' => $uid])) ?>">Ver su contenido</a>
       </div>
@@ -1812,7 +1914,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               <span class="badge <?= ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$v['state']] ?>">
                 <?= $v['state'] === 'active' ? 'Vigente · ' . (int) $v['days'] . ' d' : ($v['state'] === 'expired' ? 'Vencida' : 'Sin vigencia') ?></span>
               <?php if ((int) $u['must_change_password'] === 1): ?><span class="badge pending">Contraseña temporal</span><?php endif; ?>
-              <span class="owner"><?= (int) $u['devices'] ?> equipo(s) · <?= (int) $u['authorized'] ?> aut. · <?= (int) $u['media'] ?>/<?= UserRepository::maxFiles($u) ?> archivo(s)</span>
+              <span class="owner"><?= (int) $u['devices'] ?> equipo(s) · <?= (int) $u['authorized'] ?> aut. · <?= (int) $u['media'] ?> archivo(s) · <?= !empty($u['plan_name']) ? 'plan ' . h($u['plan_name']) . (!empty($u['plan_until']) && strtotime($u['plan_until'] . ' UTC') > time() ? '' : ' (vencido)') : 'sin plan' ?></span>
             </span>
             <span class="chev" aria-hidden="true">&rsaquo;</span>
           </a>
@@ -2118,6 +2220,61 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
             <button class="primary" type="submit">Guardar cambios</button>
           </form>
         </details>
+      </section>
+    <?php endforeach; ?>
+
+  <?php elseif ($view === 'plans' && !$historyDevice):
+      // Campos de un plan (crear o editar); el almacenamiento se escribe en GB
+      $planFields = static function (?array $pl, string $px): string {
+          $v = $pl ?? ['name' => '', 'days' => 30, 'max_files' => 5, 'storage_mb' => 1024, 'price' => '10.00', 'currency' => 'USD'];
+          return '<div class="user-grid">'
+              . '<div><label for="' . $px . 'name">Nombre del plan</label><input type="text" id="' . $px . 'name" name="name" maxlength="60" required value="' . h((string) $v['name']) . '" placeholder="p. ej. Lite"></div>'
+              . '<div><label for="' . $px . 'days">Duración (días)</label><input type="number" id="' . $px . 'days" name="days" min="1" max="' . PlanRepository::MAX_DAYS . '" required value="' . (int) $v['days'] . '"></div>'
+              . '<div><label for="' . $px . 'files">Cantidad de contenido (archivos)</label><input type="number" id="' . $px . 'files" name="max_files" min="1" max="' . PlanRepository::MAX_FILES . '" required value="' . (int) $v['max_files'] . '"></div>'
+              . '<div><label for="' . $px . 'gb">Almacenamiento (GB)</label><input type="text" id="' . $px . 'gb" name="storage_gb" inputmode="decimal" required value="' . h(PlanRepository::storageGbValue((int) $v['storage_mb'])) . '" placeholder="1 o 0.5"></div>'
+              . '<div><label for="' . $px . 'price">Costo</label><input type="text" id="' . $px . 'price" name="price" inputmode="decimal" required value="' . h(rtrim(rtrim((string) $v['price'], '0'), '.') ?: '0') . '" placeholder="10"></div>'
+              . '<div><label for="' . $px . 'cur">Moneda</label><input type="text" id="' . $px . 'cur" name="currency" maxlength="3" required value="' . h((string) $v['currency']) . '" data-upper autocapitalize="characters"></div>'
+              . '</div>';
+      };
+  ?>
+    <!-- ================= PLANES DE CONTENIDO (2026-11-22) =================
+         Nombre, duración, cantidad de archivos, almacenamiento y costo. Se asignan y
+         renuevan en la ficha de cada usuario; el usuario los ve en /cuenta/ → Mi plan. -->
+    <h2 class="ov-list-title">Planes</h2>
+    <details class="card new-user" <?= !$plans ? 'open' : '' ?>>
+      <summary><strong>+ Nuevo plan</strong></summary>
+      <form method="post" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="plan_create">
+        <?= $planFields(null, 'plnew-') ?>
+        <p><button class="primary" type="submit">Crear plan</button>
+          <span class="owner">Asignar o renovar un plan suma sus días al plan y a la vigencia del contenido del usuario.</span></p>
+      </form>
+    </details>
+    <?php if (!$plans): ?><div class="card empty">Todavía no hay planes.</div><?php endif; ?>
+    <?php foreach ($plans as $pl): $plid = (int) $pl['id']; ?>
+      <section class="card device">
+        <div class="user-head">
+          <span class="media-name"><?= h($pl['name']) ?></span>
+          <span class="badge <?= (int) $pl['users'] > 0 ? 'authorized' : 'off' ?>"><?= (int) $pl['users'] ?> usuario(s)</span>
+        </div>
+        <div class="meta">
+          <?= (int) $pl['days'] ?> días · <?= (int) $pl['max_files'] ?> archivos · <?= h(PlanRepository::storageText((int) $pl['storage_mb'])) ?>
+          · <strong><?= h(PlanRepository::priceText($pl)) ?></strong>
+        </div>
+        <details class="edit">
+          <summary>Editar</summary>
+          <form method="post" autocomplete="off"><?= csrfField() ?>
+            <input type="hidden" name="action" value="plan_update"><input type="hidden" name="planId" value="<?= $plid ?>">
+            <?= $planFields($pl, 'pl' . $plid . '-') ?>
+            <p><button class="primary" type="submit">Guardar plan</button>
+              <span class="owner">Los límites nuevos valen ya para sus usuarios; el historial conserva los datos de cada renovación.</span></p>
+          </form>
+        </details>
+        <div class="actions">
+          <form method="post" data-confirm="¿Eliminar el plan «<?= h($pl['name']) ?>»?<?= (int) $pl['users'] > 0 ? ' ' . (int) $pl['users'] . ' usuario(s) quedarán sin plan y no podrán subir archivos nuevos.' : '' ?>"><?= csrfField() ?>
+            <input type="hidden" name="action" value="plan_delete"><input type="hidden" name="planId" value="<?= $plid ?>">
+            <button type="submit">Eliminar</button></form>
+        </div>
       </section>
     <?php endforeach; ?>
 
