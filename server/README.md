@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.14 (2026-11-22) -->
+<!-- Versión del archivo: 1.0.15 (2026-11-22) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -355,6 +355,17 @@ Cómo funciona:
 - Un archivo pausado **sigue contando** para el límite de archivos del usuario.
 
 **Nombre del dispositivo en las pantallas** (2026-11-13; sube `api/device.php`, `api/media.php` y las 6 páginas a Kodular; sin migración): `api/device.php` y `api/media.php` devuelven `"deviceName"`, el nombre del equipo en el panel (el que pone el usuario en `/cuenta/` → *Dispositivos* o el administrador como alias; `""` si no tiene). **Nunca** el alias del administrador ni sus notas. Las 6 páginas lo guardan en `smartpizarra.deviceName` cada vez que el servidor responde; `loading`, `config`, `connection` y `fingerprint` lo muestran junto a la versión, la web y el email («Nombre: Local Centro» / «Name: …»). Sin nombre, la línea no aparece.
+
+## Idiomas de los paneles (español / inglés) — 2026-11-22
+
+**Fase 1: `/cuenta/` (panel del usuario).** El panel del administrador sigue en español (fase 2).
+
+Instalación: ejecuta una vez `migrations/2026-11-22-user-lang.sql` (columna `sp_users.lang`; si sale _Duplicate column name 'lang'_, ya estaba) y sube `private/i18n.php`, `private/i18n_en.php`, `private/lib.php`, `private/web.php` y `cuenta/index.php`.
+
+- Arriba a la derecha de `/cuenta/` hay un selector **ES / EN** (también en la pantalla de entrada). Cambiarlo recarga la misma pestaña en el idioma elegido.
+- **Qué idioma se usa:** el elegido con el selector; si no, el guardado del usuario (se guarda al elegirlo y, la primera vez que entra, el que estaba usando); si no, la cookie del navegador; y si no, el idioma del navegador (español si empieza por *es*; si no, inglés).
+- Todo se traduce: pestañas, botones, avisos tras cada acción, errores (contraseña, subida de videos…), fechas (en inglés, mes/día/año), «hace X», En línea / Desconectado, tiras y banners, Mi plan e historial.
+- Las traducciones están en `private/i18n_en.php` (una línea por texto: español => inglés). Un texto sin traducción se muestra en español.
 
 ## Imágenes reducidas y miniaturas — 2026-11-17
 

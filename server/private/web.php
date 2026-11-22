@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.1 (2026-11-22)
+// Versión del archivo: 1.0.2 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - UTILIDADES DE LAS PÁGINAS WEB
@@ -110,15 +110,15 @@ function ago(?string $utc): string
     }
     $d = max(0, time() - utcTs($utc));
     if ($d < 60) {
-        return 'hace ' . $d . ' s';
+        return t('hace %s', $d . ' s');
     }
     if ($d < 3600) {
-        return 'hace ' . intdiv($d, 60) . ' min';
+        return t('hace %s', intdiv($d, 60) . ' min');
     }
     if ($d < 86400) {
-        return 'hace ' . intdiv($d, 3600) . ' h';
+        return t('hace %s', intdiv($d, 3600) . ' h');
     }
-    return 'hace ' . intdiv($d, 86400) . ' d';
+    return t('hace %s', intdiv($d, 86400) . ' d');
 }
 
 /** Texto relativo que timeScript() recalcula cada 30 s. */
@@ -141,7 +141,7 @@ function dateTag(?string $utc): string
     }
     $t = utcTs($utc);
     return '<time datetime="' . gmdate('Y-m-d\TH:i:s\Z', $t) . '" data-ts="' . $t . '">'
-        . h(gmdate('d/m/Y H:i', $t)) . ' UTC</time>';
+        . h(gmdate(I18n::lang() === 'en' ? 'm/d/Y H:i' : 'd/m/Y H:i', $t)) . ' UTC</time>';
 }
 
 /**
@@ -152,23 +152,25 @@ function dateTag(?string $utc): string
 function onlineTag(?string $utc, int $timeout): string
 {
     if (!$utc) {
-        return '<span class="online never">Sin conexión registrada</span>';
+        return '<span class="online never">' . t('Sin conexión registrada') . '</span>';
     }
     $t = utcTs($utc);
     $on = time() - $t < $timeout;
     return '<span class="online ' . ($on ? 'on' : 'off') . '" data-online="' . $t . '">'
-        . ($on ? 'En línea · ' : 'Desconectado · ')
+        . ($on ? t('En línea') . ' · ' : t('Desconectado') . ' · ')
         . '<span data-ago="' . $t . '">' . h(ago($utc)) . '</span></span>';
 }
 
 /** Tamaño legible: 1.5 MB, 820 KB... */
 function formatBytes(int $bytes): string
 {
+    // Decimales con coma en español y con punto en inglés
+    [$dec, $th] = I18n::lang() === 'en' ? ['.', ','] : [',', '.'];
     if ($bytes >= 1073741824) {
-        return number_format($bytes / 1073741824, 2, ',', '.') . ' GB';
+        return number_format($bytes / 1073741824, 2, $dec, $th) . ' GB';
     }
     if ($bytes >= 1048576) {
-        return number_format($bytes / 1048576, 1, ',', '.') . ' MB';
+        return number_format($bytes / 1048576, 1, $dec, $th) . ' MB';
     }
     return max(1, (int) round($bytes / 1024)) . ' KB';
 }
@@ -181,15 +183,15 @@ function formatBytes(int $bytes): string
 function contentValidity(?string $until): array
 {
     if (!$until) {
-        return ['state' => 'none', 'days' => 0, 'text' => 'Sin vigencia asignada'];
+        return ['state' => 'none', 'days' => 0, 'text' => t('Sin vigencia asignada')];
     }
     $left = utcTs($until) - time();
     if ($left <= 0) {
-        return ['state' => 'expired', 'days' => 0, 'text' => 'Vencida el ' . dateTag($until)];
+        return ['state' => 'expired', 'days' => 0, 'text' => t('Vencida el %s', dateTag($until))];
     }
     $days = (int) ceil($left / 86400);
     return ['state' => 'active', 'days' => $days,
-        'text' => 'Vigente hasta el ' . dateTag($until) . ' (' . ($days === 1 ? 'queda 1 día' : 'quedan ' . $days . ' días') . ')'];
+        'text' => t('Vigente hasta el %s', dateTag($until)) . ' (' . ($days === 1 ? t('queda 1 día') : t('quedan %d días', $days)) . ')'];
 }
 
 /**
@@ -297,22 +299,23 @@ CSS;
 function messageThread(array $messages, string $me, string $other): string
 {
     if (!$messages) {
-        return '<p class="empty">Todavía no hay mensajes.</p>';
+        return '<p class="empty">' . t('Todavía no hay mensajes.') . '</p>';
     }
     $html = '<div class="thread" data-thread>';
     foreach ($messages as $m) {
         $mine = $m['sender'] === $me;
         $html .= '<div class="msg ' . ($mine ? 'mine' : 'theirs') . '"><div class="msg-body">' . nl2br(h((string) $m['body'])) . '</div>'
-            . '<div class="msg-meta">' . ($mine ? 'Tú' : h($other)) . ' · ' . dateTag((string) $m['created_at'])
-            . ($mine ? ' · ' . (!empty($m['read_at']) ? 'Leído' : 'Enviado') : '') . '</div></div>';
+            . '<div class="msg-meta">' . ($mine ? t('Tú') : h($other)) . ' · ' . dateTag((string) $m['created_at'])
+            . ($mine ? ' · ' . (!empty($m['read_at']) ? t('Leído') : t('Enviado')) : '') . '</div></div>';
     }
     return $html . '</div>';
 }
 
 /** Campo de texto del mensaje (máx. MessageRepository::MAX_BODY) + botón Enviar. */
-function messageField(string $id, string $placeholder = 'Escribe tu mensaje…'): string
+function messageField(string $id, string $placeholder = ''): string
 {
-    return '<label for="' . h($id) . '" class="sr">Mensaje</label>'
+    $placeholder = $placeholder !== '' ? $placeholder : t('Escribe tu mensaje…');
+    return '<label for="' . h($id) . '" class="sr">' . t('Mensaje') . '</label>'
         . '<textarea id="' . h($id) . '" name="body" rows="3" maxlength="' . MessageRepository::MAX_BODY . '" required placeholder="' . h($placeholder) . '"></textarea>';
 }
 
@@ -332,12 +335,13 @@ JS;
  * oculta las casillas (label[data-search]) del MISMO contenedor que no
  * coinciden. Las casillas marcadas que se ocultan SIGUEN marcadas.
  */
-function deviceFilterBox(string $placeholder = 'Buscar dispositivo por nombre, ID o MAC del case'): string
+function deviceFilterBox(string $placeholder = ''): string
 {
+    $placeholder = $placeholder !== '' ? $placeholder : t('Buscar dispositivo por nombre, ID o MAC del case');
     // Título visible + caja (la caja debe quedar DENTRO de la lista: el JS usa su contenedor)
-    return '<span class="device-filter-title">&#128269; Buscar dispositivo</span>'
-        . '<input type="search" class="device-filter" data-device-filter placeholder="' . h($placeholder) . '" aria-label="Buscar dispositivo">'
-        . '<span class="hint device-hidden" data-device-filter-none>Ningún dispositivo coincide.</span>';
+    return '<span class="device-filter-title">&#128269; ' . t('Buscar dispositivo') . '</span>'
+        . '<input type="search" class="device-filter" data-device-filter placeholder="' . h($placeholder) . '" aria-label="' . h(t('Buscar dispositivo')) . '">'
+        . '<span class="hint device-hidden" data-device-filter-none>' . t('Ningún dispositivo coincide.') . '</span>';
 }
 
 /**
@@ -407,19 +411,20 @@ function timeScript(int $onlineTimeout): string
       });
     });
     var ONLINE_TIMEOUT = __TIMEOUT__;
+    var T = __TEXTS__; // textos en el idioma de la página
     var SKEW = __NOW__ - Math.floor(Date.now() / 1000);
     function nowTs() { return Math.floor(Date.now() / 1000) + SKEW; }
     function agoText(ts) {
       var d = Math.max(0, nowTs() - ts);
-      if (d < 60) return "hace " + d + " s";
-      if (d < 3600) return "hace " + Math.floor(d / 60) + " min";
-      if (d < 86400) return "hace " + Math.floor(d / 3600) + " h";
-      return "hace " + Math.floor(d / 86400) + " d";
+      var v = d < 60 ? d + " s" : d < 3600 ? Math.floor(d / 60) + " min" : d < 86400 ? Math.floor(d / 3600) + " h" : Math.floor(d / 86400) + " d";
+      return T.ago.replace("%s", v);
     }
     function pad(n) { return (n < 10 ? "0" : "") + n; }
     document.querySelectorAll("time[data-ts]").forEach(function (el) {
       var dt = new Date(+el.getAttribute("data-ts") * 1000);
-      el.textContent = pad(dt.getDate()) + "/" + pad(dt.getMonth() + 1) + "/" + dt.getFullYear()
+      // Español: 22/11/2026 20:30 · inglés: 11/22/2026 20:30
+      var day = pad(dt.getDate()), mon = pad(dt.getMonth() + 1);
+      el.textContent = (T.lang === "en" ? mon + "/" + day : day + "/" + mon) + "/" + dt.getFullYear()
         + " " + pad(dt.getHours()) + ":" + pad(dt.getMinutes());
     });
     setInterval(function () {
@@ -429,12 +434,14 @@ function timeScript(int $onlineTimeout): string
       document.querySelectorAll("[data-online]").forEach(function (el) {
         var on = nowTs() - (+el.getAttribute("data-online")) < ONLINE_TIMEOUT;
         el.className = "online " + (on ? "on" : "off");
-        el.firstChild.nodeValue = on ? "En línea · " : "Desconectado · "; // nodo de texto inicial
+        el.firstChild.nodeValue = (on ? T.on : T.off) + " · "; // nodo de texto inicial
       });
     }, 30000);
   })();
 JS;
-    return strtr($js, ['__TIMEOUT__' => (string) $onlineTimeout, '__NOW__' => (string) time()]);
+    $texts = json_encode(['lang' => I18n::lang(), 'ago' => t('hace %s'), 'on' => t('En línea'), 'off' => t('Desconectado')],
+        JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP);
+    return strtr($js, ['__TIMEOUT__' => (string) $onlineTimeout, '__NOW__' => (string) time(), '__TEXTS__' => $texts]);
 }
 
 /* =====================================================================
@@ -444,21 +451,24 @@ JS;
    Ver OverlayRepository (lib.php) y api/media.php.
    ===================================================================== */
 
-/** Textos de las opciones (paneles). */
-const OVERLAY_LABELS = [
-    'kind' => ['text' => 'Tira de texto', 'image' => 'Banner (imagen)'],
-    'place' => ['top' => 'Arriba', 'bottom' => 'Abajo'],
-    'size' => ['s' => 'Pequeña', 'm' => 'Mediana', 'l' => 'Grande'],
-    'motion' => ['static' => 'Fija', 'scroll' => 'Desplazándose'],
-    'speed' => ['slow' => 'Lenta', 'normal' => 'Normal', 'fast' => 'Rápida'],
-    'fit' => ['contain' => 'Proporcional (sin deformar)', 'stretch' => 'Estirar a todo el ancho'],
-];
+/** Textos de las opciones (paneles), en el idioma de la página. @return array<string,array<string,string>> */
+function overlayLabels(): array
+{
+    return [
+        'kind' => ['text' => t('Tira de texto'), 'image' => t('Banner (imagen)')],
+        'place' => ['top' => t('Arriba'), 'bottom' => t('Abajo')],
+        'size' => ['s' => t('Pequeña'), 'm' => t('Mediana'), 'l' => t('Grande')],
+        'motion' => ['static' => t('Fija'), 'scroll' => t('Desplazándose')],
+        'speed' => ['slow' => t('Lenta'), 'normal' => t('Normal'), 'fast' => t('Rápida')],
+        'fit' => ['contain' => t('Proporcional (sin deformar)'), 'stretch' => t('Estirar a todo el ancho')],
+    ];
+}
 
 /** Grupo de botones de radio de una opción de OVERLAY_LABELS. */
 function overlayRadios(string $field, string $name, string $value): string
 {
     $html = '';
-    foreach (OVERLAY_LABELS[$field] as $k => $text) {
+    foreach (overlayLabels()[$field] as $k => $text) {
         $html .= '<label class="inline"><input type="radio" name="' . $name . '" value="' . $k . '"'
             . ($value === $k ? ' checked' : '') . '> ' . $text . '</label>';
     }
@@ -477,42 +487,40 @@ function overlayFields(?array $o, string $p): string
     $kind = (string) ($o['kind'] ?? 'text');
     $html = '<div class="ov-form" data-ov-form>';
     if ($o === null) {
-        $html .= '<fieldset class="targets"><legend>Tipo</legend>' . overlayRadios('kind', 'kind', 'text') . '</fieldset>';
+        $html .= '<fieldset class="targets"><legend>' . t('Tipo') . '</legend>' . overlayRadios('kind', 'kind', 'text') . '</fieldset>';
     } else {
         // El tipo no se cambia al editar (un banner lleva su imagen)
         $html .= '<input type="hidden" name="kind" value="' . h($kind) . '">';
     }
-    $html .= '<label for="' . $p . 'name">Nombre (solo para el panel)</label>'
-        . '<input type="text" id="' . $p . 'name" name="name" maxlength="100" value="' . h((string) ($o['name'] ?? '')) . '" placeholder="p. ej. Oferta del día">';
+    $html .= '<label for="' . $p . 'name">' . t('Nombre (solo para el panel)') . '</label>'
+        . '<input type="text" id="' . $p . 'name" name="name" maxlength="100" value="' . h((string) ($o['name'] ?? '')) . '" placeholder="' . h(t('p. ej. Oferta del día')) . '">';
     // Banner: imagen (solo al crear)
     if ($o === null) {
-        $html .= '<div data-ov-only="image"><label for="' . $p . 'file">Imagen del banner</label>'
+        $html .= '<div data-ov-only="image"><label for="' . $p . 'file">' . t('Imagen del banner') . '</label>'
             . '<input type="file" id="' . $p . 'file" name="file" accept="' . implode(',', OverlayRepository::IMAGE_TYPES) . '">'
-            . '<span class="hint">JPG, PNG, WEBP o GIF de hasta ' . h(formatBytes(OverlayRepository::maxBytes()))
-            . '. Mejor una imagen ANCHA (p. ej. 1920×160).</span></div>';
+            . '<span class="hint">' . t('JPG, PNG, WEBP o GIF de hasta %s. Mejor una imagen ANCHA (p. ej. 1920×160).', h(formatBytes(OverlayRepository::maxBytes()))) . '</span></div>';
     }
     // Banner: ajuste de la imagen (al crear y al editar)
-    $html .= '<fieldset class="targets" data-ov-only="image"><legend>Ajuste de la imagen</legend>'
+    $html .= '<fieldset class="targets" data-ov-only="image"><legend>' . t('Ajuste de la imagen') . '</legend>'
         . overlayRadios('fit', 'fit', (string) ($o['image_fit'] ?? 'contain'))
-        . '<br><span class="hint">Proporcional: no se deforma, pero si la imagen no es lo bastante ancha queda centrada. '
-        . 'Estirar: llena todo el ancho de la pantalla (se deforma en horizontal).</span></fieldset>';
+        . '<br><span class="hint">' . t('Proporcional: no se deforma, pero si la imagen no es lo bastante ancha queda centrada. Estirar: llena todo el ancho de la pantalla (se deforma en horizontal).') . '</span></fieldset>';
     // Tira: mensaje
-    $html .= '<div data-ov-only="text"><label for="' . $p . 'message">Mensaje</label>'
+    $html .= '<div data-ov-only="text"><label for="' . $p . 'message">' . t('Mensaje') . '</label>'
         . '<input type="text" id="' . $p . 'message" name="message" maxlength="' . OverlayRepository::MAX_MESSAGE . '" value="'
-        . h((string) ($o['message'] ?? '')) . '" placeholder="p. ej. 2x1 en pizzas todos los martes" data-ov-message></div>';
+        . h((string) ($o['message'] ?? '')) . '" placeholder="' . h(t('p. ej. 2x1 en pizzas todos los martes')) . '" data-ov-message></div>';
     // Colores (la letra solo en tiras)
     $html .= '<div class="ov-row">'
-        . '<div><label for="' . $p . 'bg">Color de fondo</label><input type="color" id="' . $p . 'bg" name="bg" value="' . h(strtolower((string) ($o['bg_color'] ?? '#000000'))) . '" data-ov-bg></div>'
-        . '<div data-ov-only="text"><label for="' . $p . 'fg">Color de la letra</label><input type="color" id="' . $p . 'fg" name="fg" value="' . h(strtolower((string) ($o['fg_color'] ?? '#ffffff'))) . '" data-ov-fg></div>'
+        . '<div><label for="' . $p . 'bg">' . t('Color de fondo') . '</label><input type="color" id="' . $p . 'bg" name="bg" value="' . h(strtolower((string) ($o['bg_color'] ?? '#000000'))) . '" data-ov-bg></div>'
+        . '<div data-ov-only="text"><label for="' . $p . 'fg">' . t('Color de la letra') . '</label><input type="color" id="' . $p . 'fg" name="fg" value="' . h(strtolower((string) ($o['fg_color'] ?? '#ffffff'))) . '" data-ov-fg></div>'
         . '</div>';
-    $html .= '<fieldset class="targets" data-ov-only="text"><legend>Movimiento</legend>' . overlayRadios('motion', 'motion', (string) ($o['motion'] ?? 'static'))
-        . '<div data-ov-speed><span class="hint">Velocidad:</span> ' . overlayRadios('speed', 'speed', (string) ($o['speed'] ?? 'normal')) . '</div></fieldset>';
-    $html .= '<fieldset class="targets"><legend>Posición en la pantalla</legend>' . overlayRadios('place', 'place', (string) ($o['place'] ?? 'bottom'))
-        . '<br><span class="hint">Tamaño de la franja:</span> ' . overlayRadios('size', 'size', (string) ($o['band_size'] ?? 'm')) . '</fieldset>';
+    $html .= '<fieldset class="targets" data-ov-only="text"><legend>' . t('Movimiento') . '</legend>' . overlayRadios('motion', 'motion', (string) ($o['motion'] ?? 'static'))
+        . '<div data-ov-speed><span class="hint">' . t('Velocidad:') . '</span> ' . overlayRadios('speed', 'speed', (string) ($o['speed'] ?? 'normal')) . '</div></fieldset>';
+    $html .= '<fieldset class="targets"><legend>' . t('Posición en la pantalla') . '</legend>' . overlayRadios('place', 'place', (string) ($o['place'] ?? 'bottom'))
+        . '<br><span class="hint">' . t('Tamaño de la franja:') . '</span> ' . overlayRadios('size', 'size', (string) ($o['band_size'] ?? 'm')) . '</fieldset>';
     // Vista previa (pantalla en miniatura): la actualiza el JS al cambiar los campos
-    $html .= '<div class="hint">Vista previa</div><div class="ov-screen" data-ov-preview data-kind="' . h($kind) . '"'
+    $html .= '<div class="hint">' . t('Vista previa') . '</div><div class="ov-screen" data-ov-preview data-placeholder="' . h(t('Tu mensaje aquí')) . '" data-kind="' . h($kind) . '"'
         . ($o !== null && $kind === 'image' ? ' data-img="' . h((string) ($o['_img'] ?? '')) . '"' : '') . '>'
-        . '<div class="ov-band"><span class="ov-text"></span></div><div class="ov-content">Contenido</div></div>';
+        . '<div class="ov-band"><span class="ov-text"></span></div><div class="ov-content">' . t('Contenido') . '</div></div>';
     return $html . '</div>';
 }
 
@@ -527,11 +535,11 @@ function overlayStyleData(?array $o, string $fallbackName = ''): array|string
     $kind = $o !== null ? (string) $o['kind'] : OverlayRepository::pick(param($_POST, 'kind'), OverlayRepository::KINDS);
     $message = OverlayRepository::cleanText(param($_POST, 'message'), OverlayRepository::MAX_MESSAGE);
     if ($kind === 'text' && $message === null) {
-        return 'Escribe el mensaje de la tira.';
+        return t('Escribe el mensaje de la tira.');
     }
     $name = OverlayRepository::cleanText(param($_POST, 'name'), 100)
         ?? ($kind === 'text' ? mb_substr((string) $message, 0, 40) : OverlayRepository::cleanText($fallbackName, 100))
-        ?? ($kind === 'text' ? 'Tira' : 'Banner');
+        ?? ($kind === 'text' ? t('Tira') : t('Banner'));
     return [
         'kind' => $kind,
         'name' => $name,
@@ -556,17 +564,17 @@ function overlayUpload(): array|string
     $f = $_FILES['file'] ?? null;
     $err = is_array($f) && is_int($f['error'] ?? null) ? $f['error'] : UPLOAD_ERR_NO_FILE;
     if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
-        return 'La imagen supera el límite de PHP (upload_max_filesize: ' . ini_get('upload_max_filesize') . ').';
+        return t('La imagen supera el límite de PHP (upload_max_filesize: %s).', (string) ini_get('upload_max_filesize'));
     }
     if ($err !== UPLOAD_ERR_OK) {
-        return $err === UPLOAD_ERR_NO_FILE ? 'Elige la imagen del banner.' : 'La subida falló (código ' . $err . '). Inténtalo de nuevo.';
+        return $err === UPLOAD_ERR_NO_FILE ? t('Elige la imagen del banner.') : t('La subida falló (código %d). Inténtalo de nuevo.', $err);
     }
     if ((int) $f['size'] > OverlayRepository::maxBytes()) {
-        return 'La imagen supera el máximo de ' . formatBytes(OverlayRepository::maxBytes()) . '.';
+        return t('La imagen supera el máximo de %s.', formatBytes(OverlayRepository::maxBytes()));
     }
     $mime = MediaRepository::detectMime((string) $f['tmp_name']);
     if ($mime === null || !in_array($mime, OverlayRepository::IMAGE_TYPES, true)) {
-        return 'Para un banner usa una imagen JPG, PNG, WEBP o GIF.';
+        return t('Para un banner usa una imagen JPG, PNG, WEBP o GIF.');
     }
     return [(string) $f['tmp_name'], (string) $f['name'], $mime];
 }
@@ -577,13 +585,13 @@ function overlayUpload(): array|string
  */
 function overlayNoun(string $kind): array
 {
-    return $kind === 'text' ? ['Tira', 'a'] : ['Banner', 'o'];
+    return $kind === 'text' ? [t('Tira'), 'a'] : [t('Banner'), 'o'];
 }
 
 /** Texto del aviso tras asignar: las otras tiras/banners a las que se quitaron esos equipos. */
 function overlayExclusiveText(array $changed): string
 {
-    return $changed ? ' Cada equipo muestra una sola: se quitó de esos equipos a «' . implode('», «', $changed) . '».' : '';
+    return $changed ? ' ' . t('Cada equipo muestra una sola: se quitó de esos equipos a «%s».', implode('», «', $changed)) : '';
 }
 
 /** ¿Está asignada a algún equipo? (scope none = sin asignar: no se ve en ninguna pantalla) */
@@ -595,12 +603,12 @@ function overlayAssigned(array $o): bool
 /** Resumen de una tira/banner para las listas: "Tira · Abajo · Mediana · Desplazándose (normal)". */
 function overlaySummary(array $o): string
 {
-    $L = OVERLAY_LABELS;
+    $L = overlayLabels();
     $text = $L['kind'][$o['kind']] . ' · ' . $L['place'][$o['place']] . ' · ' . $L['size'][$o['band_size']];
     if ($o['kind'] === 'text') {
         $text .= ' · ' . $L['motion'][$o['motion']] . ($o['motion'] === 'scroll' ? ' (' . mb_strtolower($L['speed'][$o['speed']]) . ')' : '');
     } else {
-        $text .= (($o['image_fit'] ?? 'contain') === 'stretch' ? ' · Estirado a todo el ancho' : ' · Proporcional')
+        $text .= (($o['image_fit'] ?? 'contain') === 'stretch' ? ' · ' . t('Estirado a todo el ancho') : ' · ' . t('Proporcional'))
             . ' · ' . formatBytes((int) $o['size_bytes']);
     }
     return $text;
@@ -692,7 +700,7 @@ function overlayScript(): string
         band.style.background = form.querySelector("[data-ov-bg]").value;
         band.style.color = form.querySelector("[data-ov-fg]").value;
         var msg = form.querySelector("[data-ov-message]");
-        text.textContent = msg && msg.value.trim() ? msg.value.trim() : "Tu mensaje aquí";
+        text.textContent = msg && msg.value.trim() ? msg.value.trim() : (preview.getAttribute("data-placeholder") || "Tu mensaje aquí");
         text.hidden = kind !== "text";
         if (img) {
           img.hidden = kind !== "image";
@@ -754,12 +762,12 @@ function planHistoryFilter(array $keep, array $f, string $anchor = 'historial'):
         $html .= '<input type="hidden" name="' . h($k) . '" value="' . h($v) . '">';
     }
     $html .= '<input type="hidden" name="tz" value="0" data-tz>'
-        . '<label>ID de transacción<input type="search" name="tq" value="' . h($f['tq']) . '" maxlength="20" placeholder="TX-20261122-4F7A2C" autocapitalize="characters" spellcheck="false"></label>'
-        . '<label>Desde<input type="date" name="tf" value="' . h($f['tf']) . '"></label>'
-        . '<label>Hasta<input type="date" name="tt" value="' . h($f['tt']) . '"></label>'
-        . '<button type="submit">Buscar</button>';
+        . '<label>' . t('ID de transacción') . '<input type="search" name="tq" value="' . h($f['tq']) . '" maxlength="20" placeholder="TX-20261122-4F7A2C" autocapitalize="characters" spellcheck="false"></label>'
+        . '<label>' . t('Desde') . '<input type="date" name="tf" value="' . h($f['tf']) . '"></label>'
+        . '<label>' . t('Hasta') . '<input type="date" name="tt" value="' . h($f['tt']) . '"></label>'
+        . '<button type="submit">' . t('Buscar') . '</button>';
     if ($f['tq'] !== '' || $f['tf'] !== '' || $f['tt'] !== '') {
-        $html .= ' <a class="btn" href="?' . h(http_build_query($keep)) . '#' . h($anchor) . '">Ver todo</a>';
+        $html .= ' <a class="btn" href="?' . h(http_build_query($keep)) . '#' . h($anchor) . '">' . t('Ver todo') . '</a>';
     }
     return $html . '</form>';
 }
@@ -772,15 +780,15 @@ function planHistoryFilter(array $keep, array $f, string $anchor = 'historial'):
  */
 function planHistoryTable(array $rows, bool $withUser, string $class): string
 {
-    $html = '<div class="table-wrap"><table class="' . h($class) . '"><tr><th>ID de transacción</th><th>Fecha</th>'
-        . ($withUser ? '<th>Usuario</th>' : '') . '<th>Movimiento</th><th>Plan</th><th>Días</th><th>Costo</th><th>Plan hasta</th></tr>';
+    $html = '<div class="table-wrap"><table class="' . h($class) . '"><tr><th>' . t('ID de transacción') . '</th><th>' . t('Fecha') . '</th>'
+        . ($withUser ? '<th>' . t('Usuario') . '</th>' : '') . '<th>' . t('Movimiento') . '</th><th>' . t('Plan') . '</th><th>' . t('Días') . '</th><th>' . t('Costo') . '</th><th>' . t('Plan hasta') . '</th></tr>';
     foreach ($rows as $r) {
         $html .= '<tr><td><code class="txn">' . h((string) ($r['txn_id'] ?? '—')) . '</code></td><td>' . dateTag($r['created_at']) . '</td>'
             . ($withUser ? '<td>' . ($r['user_company'] !== null
                 ? '<a href="./?' . h(http_build_query(['view' => 'users', 'user' => (int) $r['user_id']])) . '">' . h((string) $r['user_company']) . '</a>'
-                : '<em>usuario eliminado</em>') . '</td>' : '')
-            . '<td>' . ($r['kind'] === 'renew' ? 'Renovación' : 'Asignación') . '</td>'
-            . '<td>' . h((string) $r['plan_name']) . ' <span class="owner">(' . (int) $r['max_files'] . ' archivos · '
+                : '<em>' . t('usuario eliminado') . '</em>') . '</td>' : '')
+            . '<td>' . ($r['kind'] === 'renew' ? t('Renovación') : t('Asignación')) . '</td>'
+            . '<td>' . h((string) $r['plan_name']) . ' <span class="owner">(' . t('%d archivos', (int) $r['max_files']) . ' · '
             . h(PlanRepository::storageText((int) $r['storage_mb'])) . ')</span></td>'
             . '<td>+' . (int) $r['days'] . '</td><td>' . h(PlanRepository::priceText($r)) . '</td><td>' . dateTag($r['plan_until']) . '</td></tr>';
     }

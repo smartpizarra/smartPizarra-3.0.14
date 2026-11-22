@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.13 (2026-11-22)
+// Versión del archivo: 1.0.14 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -21,6 +21,9 @@
  */
 
 declare(strict_types=1);
+
+// Idiomas de los paneles (t(), I18n): español por defecto; /cuenta/ elige el del usuario
+require_once __DIR__ . '/i18n.php';
 
 /** Configuración del servidor (array devuelto por config.php). */
 final class AppConfig
@@ -286,6 +289,11 @@ final class Database
         if (!in_array('sp_plans', $tables, true) || !in_array('sp_plan_renewals', $tables, true) || !in_array('plan_id', $userCols, true)) {
             return 'Faltan los planes de contenido (tablas sp_plans / sp_plan_renewals, columna sp_users.plan_id): '
                 . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans.sql.';
+        }
+        // Idioma de /cuenta/ por usuario (2026-11-22)
+        if (!in_array('lang', $userCols, true)) {
+            return 'Falta el idioma de los usuarios (columna sp_users.lang): '
+                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-user-lang.sql.';
         }
         // ID de transacción del historial de planes (2026-11-22)
         $renewalCols = $pdo->query('SHOW COLUMNS FROM sp_plan_renewals')->fetchAll(PDO::FETCH_COLUMN);
@@ -1085,13 +1093,13 @@ final class UserRepository
     public static function passwordProblem(string $password, string $email): ?string
     {
         if (mb_strlen($password) < self::MIN_PASSWORD) {
-            return 'La contraseña debe tener al menos ' . self::MIN_PASSWORD . ' caracteres.';
+            return t('La contraseña debe tener al menos %d caracteres.', self::MIN_PASSWORD);
         }
         if (mb_strlen($password) > 200) {
-            return 'La contraseña es demasiado larga.';
+            return t('La contraseña es demasiado larga.');
         }
         if (mb_strtolower($password) === mb_strtolower($email)) {
-            return 'La contraseña no puede ser tu email.';
+            return t('La contraseña no puede ser tu email.');
         }
         return null;
     }
@@ -1116,6 +1124,14 @@ final class UserRepository
     {
         Database::pdo()->prepare('UPDATE sp_users SET last_login_at = ? WHERE id = ?')
             ->execute([Database::now(), $id]);
+    }
+
+    /** Guarda el idioma de /cuenta/ que eligió el usuario ('es' | 'en'). */
+    public static function setLang(int $id, string $lang): void
+    {
+        if (I18n::valid($lang)) {
+            Database::pdo()->prepare('UPDATE sp_users SET lang = ? WHERE id = ?')->execute([$lang, $id]);
+        }
     }
 
     /**
@@ -1437,25 +1453,23 @@ final class MediaRepository
         }
         $problems = [];
         if ($info['codec'] === 'hevc') {
-            $problems[] = 'está en H.265/HEVC (las pantallas no lo reproducen)';
+            $problems[] = t('está en H.265/HEVC (las pantallas no lo reproducen)');
         }
         if ($info['fps'] !== null && $info['fps'] > self::VIDEO_MAX_FPS) {
-            $problems[] = 'es de ' . (int) round($info['fps']) . ' fotogramas por segundo (máximo 30)';
+            $problems[] = t('es de %d fotogramas por segundo (máximo 30)', (int) round($info['fps']));
         }
         if ($info['codec'] === 'h264' && $info['level'] !== null && $info['level'] > self::VIDEO_MAX_H264_LEVEL) {
-            $problems[] = 'usa el nivel H.264 ' . number_format($info['level'] / 10, 1) . ' (máximo 4.1)';
+            $problems[] = t('usa el nivel H.264 %s (máximo 4.1)', number_format($info['level'] / 10, 1));
         }
         $long = max($info['width'], $info['height']);
         $short = min($info['width'], $info['height']);
         if ($long > self::VIDEO_MAX_LONG || $short > self::VIDEO_MAX_SHORT) {
-            $problems[] = 'mide ' . $info['width'] . '×' . $info['height'] . ' (máximo 1920×1080)';
+            $problems[] = t('mide %d×%d (máximo 1920×1080)', $info['width'], $info['height']);
         }
         if (!$problems) {
             return null;
         }
-        return 'Este video ' . implode(', ', $problems) . ': en las pantallas no se vería bien (a saltos o nada). '
-            . 'Expórtalo a 30 fps, H.264 (nivel 4.0) y 1920×1080 como máximo, sin audio, y vuelve a subirlo '
-            . '(p. ej. con HandBrake: Framerate 30 constante, Encoder Level 4.0).';
+        return t('Este video %s: en las pantallas no se vería bien (a saltos o nada). Expórtalo a 30 fps, H.264 (nivel 4.0) y 1920×1080 como máximo, sin audio, y vuelve a subirlo (p. ej. con HandBrake: Framerate 30 constante, Encoder Level 4.0).', implode(', ', $problems));
     }
 
     /**

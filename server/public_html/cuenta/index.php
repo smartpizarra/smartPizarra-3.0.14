@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.9 (2026-11-22)
+// Versión del archivo: 1.0.10 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -75,6 +75,15 @@ require __DIR__ . '/../../private/web.php';
 
 $nonce = startSecurePage('sp_user', '/cuenta/');
 
+/*
+ * IDIOMA de /cuenta/ (2026-11-22): español o inglés. Orden: ?lang= (selector de la
+ * cabecera; se guarda en la cookie y en el usuario) => el guardado del usuario =>
+ * la cookie sp_lang => el idioma del navegador. Aquí, sin usuario todavía; se
+ * vuelve a elegir al saber quién es.
+ */
+$langRequested = I18n::valid(param($_GET, 'lang')) ? param($_GET, 'lang') : null;
+I18n::set(I18n::pick($langRequested, null, $_COOKIE['sp_lang'] ?? null));
+
 /**
  * Huella de la contraseña guardada: cambia cada vez que se cambia la
  * contraseña, así una sesión abierta con la anterior deja de valer.
@@ -108,19 +117,19 @@ function targetDevices(): array
  */
 function targetFields(array $devices, bool $all, array $selected, string $uid): string
 {
-    $html = '<fieldset class="targets"><legend>Mostrar en</legend>'
-        . '<label class="inline"><input type="radio" name="target" value="all"' . ($all ? ' checked' : '') . '> Todos mis dispositivos</label>'
-        . '<label class="inline"><input type="radio" name="target" value="some"' . ($all ? '' : ' checked') . '> Solo en:</label>'
+    $html = '<fieldset class="targets"><legend>' . t('Mostrar en') . '</legend>'
+        . '<label class="inline"><input type="radio" name="target" value="all"' . ($all ? ' checked' : '') . '> ' . t('Todos mis dispositivos') . '</label>'
+        . '<label class="inline"><input type="radio" name="target" value="some"' . ($all ? '' : ' checked') . '> ' . t('Solo en:') . '</label>'
         . '<div class="device-checks">' . ($devices ? deviceFilterBox() : '');
     if (!$devices) {
-        $html .= '<span class="hint">Todavía no tienes dispositivos asignados.</span>';
+        $html .= '<span class="hint">' . t('Todavía no tienes dispositivos asignados.') . '</span>';
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
         $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id, $d['profile_serial'] ?? null], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="d-' . h($uid . $id) . '"'
             . (in_array($id, $selected, true) ? ' checked' : '') . '> '
             . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
-            . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
+            . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(' . t('contenido no habilitado') . ')</span>') . '</label>';
     }
     return $html . '</div></fieldset>';
 }
@@ -140,16 +149,16 @@ function scheduleFields(?array $m, string $p): string
     $date = static fn(string $name, string $text, $value) =>
         '<div><label for="' . $p . $name . '">' . $text . '</label>'
         . '<span class="date-field"><input type="datetime-local" id="' . $p . $name . '" name="' . $name . '" data-utc="' . $utc($value) . '">'
-        . '<button type="button" data-pick="' . $p . $name . '" title="Abrir calendario" aria-label="Abrir calendario">&#128197;</button>'
-        . '<button type="button" data-clear="' . $p . $name . '" title="Quitar fecha" aria-label="Quitar fecha">&times;</button></span></div>';
-    return '<fieldset class="targets" data-when><legend>Cuándo se muestra</legend>'
+        . '<button type="button" data-pick="' . $p . $name . '" title="' . h(t('Abrir calendario')) . '" aria-label="' . h(t('Abrir calendario')) . '">&#128197;</button>'
+        . '<button type="button" data-clear="' . $p . $name . '" title="' . h(t('Quitar fecha')) . '" aria-label="' . h(t('Quitar fecha')) . '">&times;</button></span></div>';
+    return '<fieldset class="targets" data-when><legend>' . t('Cuándo se muestra') . '</legend>'
         . '<input type="hidden" name="tz" value="0" data-tz>'
-        . '<label class="inline"><input type="radio" name="when" value="always"' . ($hasDates ? '' : ' checked') . '> Permanente</label>'
-        . '<label class="inline"><input type="radio" name="when" value="dates"' . ($hasDates ? ' checked' : '') . '> Con fechas</label>'
+        . '<label class="inline"><input type="radio" name="when" value="always"' . ($hasDates ? '' : ' checked') . '> ' . t('Permanente') . '</label>'
+        . '<label class="inline"><input type="radio" name="when" value="dates"' . ($hasDates ? ' checked' : '') . '> ' . t('Con fechas') . '</label>'
         . '<div class="dates" data-dates>'
-        . $date('starts', 'Desde (opcional)', $m['starts_at'] ?? null)
-        . $date('ends', 'Hasta (opcional)', $m['ends_at'] ?? null)
-        . '<p class="hint">Fuera de esas fechas tus pantallas no lo muestran. Se aplica en su próxima consulta (≈ 1 min).</p>'
+        . $date('starts', t('Desde (opcional)'), $m['starts_at'] ?? null)
+        . $date('ends', t('Hasta (opcional)'), $m['ends_at'] ?? null)
+        . '<p class="hint">' . t('Fuera de esas fechas tus pantallas no lo muestran. Se aplica en su próxima consulta (≈ 1 min).') . '</p>'
         . '</div></fieldset>';
 }
 
@@ -167,13 +176,13 @@ function scheduleData(string $back = 's=contenido'): array
     $starts = localToUtc(param($_POST, 'starts'), $tz);
     $ends = localToUtc(param($_POST, 'ends'), $tz);
     if ($starts === false || $ends === false) {
-        redirectWith('Fecha no válida.', $back);
+        redirectWith(t('Fecha no válida.'), $back);
     }
     if ($starts === null && $ends === null) {
-        redirectWith('Indica al menos una fecha (desde o hasta) o elige "Permanente".', $back);
+        redirectWith(t('Indica al menos una fecha (desde o hasta) o elige "Permanente".'), $back);
     }
     if ($starts !== null && $ends !== null && $ends <= $starts) {
-        redirectWith('La fecha "Hasta" debe ser posterior a "Desde".', $back);
+        redirectWith(t('La fecha "Hasta" debe ser posterior a "Desde".'), $back);
     }
     return [$starts, $ends];
 }
@@ -183,14 +192,14 @@ function scheduleTag(array $m): string
 {
     $state = MediaRepository::state($m);
     [$class, $label] = [
-        'permanent' => ['authorized', 'Permanente'],
-        'active' => ['authorized', 'En curso'],
-        'scheduled' => ['pending', 'Programado'],
-        'ended' => ['revoked', 'Finalizado'],
+        'permanent' => ['authorized', t('Permanente')],
+        'active' => ['authorized', t('En curso')],
+        'scheduled' => ['pending', t('Programado')],
+        'ended' => ['revoked', t('Finalizado')],
     ][$state];
-    $text = $state === 'permanent' ? 'se muestra siempre'
-        : (!empty($m['starts_at']) ? 'desde ' . dateTag((string) $m['starts_at']) : 'desde ya')
-          . ' · ' . (!empty($m['ends_at']) ? 'hasta ' . dateTag((string) $m['ends_at']) : 'sin fecha de fin');
+    $text = $state === 'permanent' ? t('se muestra siempre')
+        : (!empty($m['starts_at']) ? t('desde %s', dateTag((string) $m['starts_at'])) : t('desde ya'))
+          . ' · ' . (!empty($m['ends_at']) ? t('hasta %s', dateTag((string) $m['ends_at'])) : t('sin fecha de fin'));
     return '<span class="badge ' . $class . '">' . $label . '</span> <span class="hint">' . $text . '</span>';
 }
 
@@ -203,21 +212,21 @@ function overlayAssignFields(array $o, array $devices): string
 {
     $scope = (string) $o['scope'];
     $p = 'as' . (int) $o['id'] . '-';
-    $html = '<fieldset class="targets"><legend>Mostrar en</legend>';
-    foreach (['none' => 'Sin asignar', 'all' => 'Todos mis dispositivos', 'devices' => 'Solo en:'] as $k => $text) {
+    $html = '<fieldset class="targets"><legend>' . t('Mostrar en') . '</legend>';
+    foreach (['none' => t('Sin asignar'), 'all' => t('Todos mis dispositivos'), 'devices' => t('Solo en:')] as $k => $text) {
         $html .= '<label class="inline"><input type="radio" name="scope" value="' . $k . '"' . ($scope === $k ? ' checked' : '') . '> ' . $text . '</label>';
     }
     // Buscador de dispositivos (siempre que tenga alguno)
     $html .= '<div class="device-checks">' . ($devices ? deviceFilterBox() : '');
     if (!$devices) {
-        $html .= '<span class="hint">Todavía no tienes dispositivos asignados.</span>';
+        $html .= '<span class="hint">' . t('Todavía no tienes dispositivos asignados.') . '</span>';
     }
     foreach ($devices as $d) {
         $id = (string) $d['device_id'];
         $html .= '<label class="inline"' . deviceSearchAttr([$d['label'], $id, $d['profile_serial'] ?? null], [$d['profile_case_mac'] ?? null]) . '><input type="checkbox" name="devices[]" value="' . h($id) . '" id="' . h($p . $id) . '"'
             . (in_array($id, $o['devices'], true) ? ' checked' : '') . '> '
             . h($d['label'] ? $d['label'] . ' (' . $id . ')' : $id)
-            . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(contenido no habilitado)</span>') . '</label>';
+            . (DeviceRepository::mediaEnabled($d) ? '' : ' <span class="hint">(' . t('contenido no habilitado') . ')</span>') . '</label>';
     }
     return $html . '</div></fieldset>';
 }
@@ -225,7 +234,7 @@ function overlayAssignFields(array $o, array $devices): string
 /** Insignia de una tira/banner: Pausada, o su periodo (Permanente / En curso / Programado / Finalizado). */
 function overlayTag(array $o): string
 {
-    return (int) $o['active'] !== 1 ? '<span class="badge off">Pausada</span>' : scheduleTag($o);
+    return (int) $o['active'] !== 1 ? '<span class="badge off">' . t('Pausada') . '</span>' : scheduleTag($o);
 }
 
 /** Cierra la sesión del usuario. */
@@ -260,8 +269,24 @@ try {
             session_start();
             session_regenerate_id(true);
             $user = null;
-            $_SESSION['flash'] = 'Tu sesión se cerró. Vuelve a entrar.';
+            $_SESSION['flash'] = t('Tu sesión se cerró. Vuelve a entrar.');
         }
+    }
+
+    // Idioma con el usuario ya conocido (su elección guardada manda sobre la cookie)
+    I18n::set(I18n::pick($langRequested, $user['lang'] ?? null, $_COOKIE['sp_lang'] ?? null));
+    if ($langRequested !== null) {
+        // Elegido en el selector: cookie de 1 año (también para la pantalla de entrada) y, con sesión, en su usuario
+        setcookie('sp_lang', $langRequested, ['expires' => time() + 31536000, 'path' => '/cuenta/',
+            'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off', 'httponly' => true, 'samesite' => 'Lax']);
+        if ($user !== null) {
+            UserRepository::setLang((int) $user['id'], $langRequested);
+        }
+        // Misma página sin ?lang= (así recargar no lo repite)
+        $keep = $_GET;
+        unset($keep['lang']);
+        header('Location: ./' . ($keep ? '?' . http_build_query($keep) : ''), true, 303);
+        exit;
     }
 
     // Vista previa de un archivo propio (?file=ID) o su miniatura (?thumb=ID): solo su dueño con sesión
@@ -270,7 +295,7 @@ try {
         $media = MediaRepository::findForUser((int) param($_GET, $thumb ? 'thumb' : 'file'), (int) $user['id']);
         if ($media === null) {
             http_response_code(404);
-            exit('No encontrado');
+            exit(t('No encontrado'));
         }
         $thumb ? MediaRepository::sendThumb($media) : MediaRepository::send($media);
     }
@@ -279,7 +304,7 @@ try {
         $ov = OverlayRepository::findForUser((int) param($_GET, 'ovfile'), (int) $user['id']);
         if ($ov === null || $ov['kind'] !== 'image') {
             http_response_code(404);
-            exit('No encontrado');
+            exit(t('No encontrado'));
         }
         MediaRepository::send($ov);
     }
@@ -289,20 +314,19 @@ try {
        ----------------------------------------------------------------- */
     // Subida más grande que post_max_size de PHP: llega sin datos ni CSRF
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !$_POST && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
-        redirectWith('El archivo es demasiado grande para el servidor (límite de PHP post_max_size: '
-            . ini_get('post_max_size') . ').', 's=contenido');
+        redirectWith(t('El archivo es demasiado grande para el servidor (límite de PHP post_max_size: %s).', (string) ini_get('post_max_size')), 's=contenido');
     }
     if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
         $action = param($_POST, 'action');
         if (!hash_equals(csrfToken(), param($_POST, 'csrf'))) {
-            redirectWith('La sesión caducó. Vuelve a intentarlo.');
+            redirectWith(t('La sesión caducó. Vuelve a intentarlo.'));
         }
 
         if ($action === 'login') {
             $bucket = 'ulogin:' . Http::clientIp();
             $window = (int) $config['login_window_seconds'];
             if (RateLimiter::count($bucket, $window) >= (int) $config['login_fails_per_ip']) {
-                $error = 'Demasiados intentos. Espera unos minutos.';
+                $error = t('Demasiados intentos. Espera unos minutos.');
             } else {
                 $found = UserRepository::verifyLogin(param($_POST, 'email'), param($_POST, 'password'));
                 if ($found !== null) {
@@ -312,15 +336,18 @@ try {
                     $_SESSION['pwd'] = passwordStamp($found);
                     $_SESSION['csrf'] = bin2hex(random_bytes(32));
                     UserRepository::markLogin((int) $found['id']);
+                    if (empty($found['lang'])) {
+                        UserRepository::setLang((int) $found['id'], I18n::lang());
+                    }
                     redirectWith((int) $found['must_change_password'] === 1
-                        ? 'Bienvenido. Antes de continuar, elige tu propia contraseña.'
-                        : 'Sesión iniciada.');
+                        ? t('Bienvenido. Antes de continuar, elige tu propia contraseña.')
+                        : t('Sesión iniciada.'));
                 }
                 RateLimiter::hit($bucket, PHP_INT_MAX, $window);
-                $error = 'Email o contraseña incorrectos.';
+                $error = t('Email o contraseña incorrectos.');
             }
         } elseif ($user === null) {
-            redirectWith('Inicia sesión.');
+            redirectWith(t('Inicia sesión.'));
         } elseif ($action === 'logout') {
             logoutUser();
             header('Location: ./', true, 303);
@@ -330,14 +357,14 @@ try {
             $current = param($_POST, 'current');
             $new = param($_POST, 'new');
             if (!password_verify($current, (string) $user['password_hash'])) {
-                redirectWith('La contraseña actual no es correcta.', 's=cuenta');
+                redirectWith(t('La contraseña actual no es correcta.'), 's=cuenta');
             }
             if ($new !== param($_POST, 'confirm')) {
-                redirectWith('La contraseña nueva y su confirmación no coinciden.', 's=cuenta');
+                redirectWith(t('La contraseña nueva y su confirmación no coinciden.'), 's=cuenta');
             }
             $problem = UserRepository::passwordProblem($new, (string) $user['email']);
             if ($problem === null && hash_equals($current, $new)) {
-                $problem = 'La contraseña nueva debe ser distinta de la actual.';
+                $problem = t('La contraseña nueva debe ser distinta de la actual.');
             }
             if ($problem !== null) {
                 redirectWith($problem, 's=cuenta');
@@ -346,56 +373,56 @@ try {
             // La sesión actual sigue abierta con la contraseña nueva
             session_regenerate_id(true);
             $_SESSION['pwd'] = passwordStamp(UserRepository::find((int) $user['id']) ?? []);
-            redirectWith('Contraseña cambiada.', 's=cuenta');
+            redirectWith(t('Contraseña cambiada.'), 's=cuenta');
         } elseif ($action === 'device_league') {
             /* ---- Liga de uno de SUS equipos: "Sin liga" o UNA de las que le asignó el administrador ---- */
             if ((int) $user['must_change_password'] === 1) {
-                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+                redirectWith(t('Primero elige tu contraseña.'), 's=cuenta');
             }
             $id = strtoupper(trim(param($_POST, 'deviceId')));
             $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
             if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
-                redirectWith('Ese dispositivo no está asignado a tu cuenta.', 's=equipos');
+                redirectWith(t('Ese dispositivo no está asignado a tu cuenta.'), 's=equipos');
             }
             // Con el contenido habilitado el usuario no elige liga (el selector no se muestra)
             if (DeviceRepository::mediaEnabled($device)) {
-                redirectWith('Este dispositivo tiene el contenido habilitado: su liga no se cambia desde aquí.', 's=equipos');
+                redirectWith(t('Este dispositivo tiene el contenido habilitado: su liga no se cambia desde aquí.'), 's=equipos');
             }
             $raw = param($_POST, 'leagueId');
             $leagueId = ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null; // "" = Sin liga
             // setDeviceLeague solo acepta ligas asignadas a este usuario
             if (!LeagueRepository::setDeviceLeague($id, $leagueId)) {
-                redirectWith('Esa liga no está asignada a tu cuenta.', 's=equipos');
+                redirectWith(t('Esa liga no está asignada a tu cuenta.'), 's=equipos');
             }
             $name = $device['label'] ? $device['label'] . " ($id)" : $id;
             $league = $leagueId === null ? null : LeagueRepository::find($leagueId);
-            redirectWith(($league === null ? "$name queda sin liga." : "$name usará la liga «{$league['name']}».")
-                . ' La TV lo recibe en su próxima consulta (≈ 1 min si está mostrando contenido).', 's=equipos');
+            redirectWith(($league === null ? t('%s queda sin liga.', $name) : t('%s usará la liga «%s».', $name, (string) $league['name']))
+                . ' ' . t('La TV lo recibe en su próxima consulta (≈ 1 min si está mostrando contenido).'), 's=equipos');
         } elseif ($action === 'msg_send') {
             /* ---- MENSAJE al administrador (pestaña Mensajes) ---- */
             if ((int) $user['must_change_password'] === 1) {
-                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+                redirectWith(t('Primero elige tu contraseña.'), 's=cuenta');
             }
             $body = MessageRepository::cleanBody(param($_POST, 'body'));
             if ($body === null) {
-                redirectWith('Escribe el mensaje (máximo ' . MessageRepository::MAX_BODY . ' caracteres).', 's=mensajes');
+                redirectWith(t('Escribe el mensaje (máximo %d caracteres).', MessageRepository::MAX_BODY), 's=mensajes');
             }
             // Límite por hora (anti-abuso)
             if (!RateLimiter::hit('msg:' . (int) $user['id'], MessageRepository::USER_PER_HOUR, 3600)) {
-                redirectWith('Has enviado muchos mensajes en poco tiempo. Espera un rato e inténtalo de nuevo.', 's=mensajes');
+                redirectWith(t('Has enviado muchos mensajes en poco tiempo. Espera un rato e inténtalo de nuevo.'), 's=mensajes');
             }
             MessageRepository::send((int) $user['id'], 'user', $body);
-            redirectWith('Mensaje enviado al administrador.', 's=mensajes');
+            redirectWith(t('Mensaje enviado al administrador.'), 's=mensajes');
         } elseif ($action === 'device_label') {
             /* ---- Nombre (alias) de uno de SUS equipos ---- */
             if ((int) $user['must_change_password'] === 1) {
-                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+                redirectWith(t('Primero elige tu contraseña.'), 's=cuenta');
             }
             $id = strtoupper(trim(param($_POST, 'deviceId')));
             $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
             // Solo equipos asignados a este usuario (nunca los de otro)
             if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
-                redirectWith('Ese dispositivo no está asignado a tu cuenta.', 's=equipos');
+                redirectWith(t('Ese dispositivo no está asignado a tu cuenta.'), 's=equipos');
             }
             // Texto en UTF-8 (si llega en Windows-1252 se convierte, para no perder ñ/acentos)
             $raw = param($_POST, 'label');
@@ -405,21 +432,21 @@ try {
             // Sin saltos de línea ni caracteres de control; máx. 100 (setLabel recorta)
             $label = trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $raw));
             DeviceRepository::setLabel($id, $label);
-            redirectWith($label === '' ? "Nombre de $id quitado." : "Nombre de $id guardado: «" . mb_substr($label, 0, 100) . '».', 's=equipos');
+            redirectWith($label === '' ? t('Nombre de %s quitado.', $id) : t('Nombre de %s guardado: «%s».', $id, mb_substr($label, 0, 100)), 's=equipos');
         } elseif (str_starts_with($action, 'overlay_')) {
             /* ---- TIRAS Y BANNERS de sus pantallas (mirror.html) ---- */
             if ((int) $user['must_change_password'] === 1) {
-                redirectWith('Primero elige tu contraseña.', 's=cuenta');
+                redirectWith(t('Primero elige tu contraseña.'), 's=cuenta');
             }
             $uid = (int) $user['id'];
             $oid = (int) param($_POST, 'overlayId');
             $ov = $action === 'overlay_create' ? null : OverlayRepository::findForUser($oid, $uid);
             if ($action !== 'overlay_create' && $ov === null) {
-                redirectWith('Esa tira o banner ya no existe.', 's=tiras');
+                redirectWith(t('Esa tira o banner ya no existe.'), 's=tiras');
             }
             if ($action === 'overlay_create' || $action === 'overlay_update') {
                 if ($action === 'overlay_create' && OverlayRepository::countForUser($uid) >= OverlayRepository::maxPerUser()) {
-                    redirectWith('Has llegado al máximo de ' . OverlayRepository::maxPerUser() . ' tiras y banners. Borra alguno.', 's=tiras');
+                    redirectWith(t('Has llegado al máximo de %d tiras y banners. Borra alguno.', OverlayRepository::maxPerUser()), 's=tiras');
                 }
                 $upload = null;
                 if ($action === 'overlay_create' && param($_POST, 'kind') === 'image') {
@@ -445,10 +472,10 @@ try {
                 [$what, $g] = overlayNoun($style['kind']);
                 if ($action === 'overlay_create') {
                     OverlayRepository::create($data, $upload[0] ?? null, $upload[1] ?? '', $upload[2] ?? null);
-                    redirectWith("$what «{$style['name']}» cread$g. Ahora usa «Asignar a dispositivos» para elegir en qué pantallas y durante cuánto tiempo se muestra.", 's=tiras');
+                    redirectWith(t('%1$s «%2$s» cread%3$s. Ahora usa «Asignar a dispositivos» para elegir en qué pantallas y durante cuánto tiempo se muestra.', $what, $style['name'], $g), 's=tiras');
                 }
                 OverlayRepository::update($oid, $data);
-                redirectWith("$what «{$style['name']}» guardad$g. Tus pantallas lo aplicarán en su próxima consulta (≈ 1 min).", 's=tiras');
+                redirectWith(t('%1$s «%2$s» guardad%3$s. Tus pantallas lo aplicarán en su próxima consulta (≈ 1 min).', $what, $style['name'], $g), 's=tiras');
             }
             if ($action === 'overlay_assign') {
                 /* ---- Asignar a SUS equipos: sin asignar / todos / algunos ---- */
@@ -456,7 +483,7 @@ try {
                 $chosen = isset($_POST['devices']) && is_array($_POST['devices'])
                     ? array_values(array_filter($_POST['devices'], 'is_string')) : [];
                 if ($scope === 'devices' && !$chosen) {
-                    redirectWith('Marca al menos un dispositivo, o elige "Todos mis dispositivos" o "Sin asignar".', 's=tiras');
+                    redirectWith(t('Marca al menos un dispositivo, o elige "Todos mis dispositivos" o "Sin asignar".'), 's=tiras');
                 }
                 // Tiempo de visibilidad de esta asignación: permanente o con fechas
                 [$starts, $ends] = $scope === 'none' ? [null, null] : scheduleData('s=tiras');
@@ -468,109 +495,110 @@ try {
                     $n = (int) $f['id'] === $oid ? count($f['devices']) : $n;
                 }
                 [$what, $g] = overlayNoun((string) $ov['kind']);
-                redirectWith($scope === 'none' ? "$what «{$ov['name']}» sin asignar: no se mostrará en ninguna pantalla."
-                    : "$what «{$ov['name']}» asignad$g a " . ($scope === 'all' ? 'todos tus dispositivos' : "$n dispositivo(s)")
-                    . ($starts === null && $ends === null ? ' de forma permanente' : ' con fechas')
-                    . '. Se aplica en su próxima consulta (≈ 1 min).', 's=tiras');
+                redirectWith($scope === 'none' ? t('%1$s «%2$s» sin asignar: no se mostrará en ninguna pantalla.', $what, (string) $ov['name'])
+                    : t('%1$s «%2$s» asignad%3$s a %4$s', $what, (string) $ov['name'], $g, $scope === 'all' ? t('todos tus dispositivos') : t('%d dispositivo(s)', $n))
+                    . ($starts === null && $ends === null ? t(' de forma permanente') : t(' con fechas'))
+                    . '. ' . t('Se aplica en su próxima consulta (≈ 1 min).'), 's=tiras');
             }
             [$what, $g] = overlayNoun((string) $ov['kind']);
             switch ($action) {
                 case 'overlay_pause':
                 case 'overlay_resume':
                     OverlayRepository::setActive($oid, $action === 'overlay_resume');
-                    redirectWith($action === 'overlay_resume' ? "$what «{$ov['name']}» activad$g." : "$what «{$ov['name']}» pausad$g: tus pantallas lo quitarán en su próxima consulta.", 's=tiras');
+                    redirectWith($action === 'overlay_resume' ? t('%1$s «%2$s» activad%3$s.', $what, (string) $ov['name'], $g)
+                        : t('%1$s «%2$s» pausad%3$s: tus pantallas lo quitarán en su próxima consulta.', $what, (string) $ov['name'], $g), 's=tiras');
                 case 'overlay_delete':
                     OverlayRepository::delete($oid);
-                    redirectWith("$what «{$ov['name']}» eliminad$g. Tus pantallas lo quitarán en su próxima consulta.", 's=tiras');
+                    redirectWith(t('%1$s «%2$s» eliminad%3$s. Tus pantallas lo quitarán en su próxima consulta.', $what, (string) $ov['name'], $g), 's=tiras');
                 default:
-                    redirectWith('Acción desconocida.', 's=tiras');
+                    redirectWith(t('Acción desconocida.'), 's=tiras');
             }
         } elseif (str_starts_with($action, 'media_')) {
             /* ---- Contenido para mirror.html (imágenes y videos) ---- */
             if ((int) $user['must_change_password'] === 1) {
-                redirectWith('Primero elige tu contraseña.', 's=contenido');
+                redirectWith(t('Primero elige tu contraseña.'), 's=contenido');
             }
             $uid = (int) $user['id'];
             $mid = (int) param($_POST, 'mediaId');
             if ($action !== 'media_upload' && MediaRepository::findForUser($mid, $uid) === null) {
-                redirectWith('Ese archivo no existe.', 's=contenido');
+                redirectWith(t('Ese archivo no existe.'), 's=contenido');
             }
             [$all, $chosen] = targetDevices();
             if (in_array($action, ['media_upload', 'media_update'], true) && !$all && !$chosen) {
-                redirectWith('Marca al menos un dispositivo o elige "Todos mis dispositivos".', 's=contenido');
+                redirectWith(t('Marca al menos un dispositivo o elige "Todos mis dispositivos".'), 's=contenido');
             }
             // Permanente o con fechas (solo al subir o editar)
             [$starts, $ends] = in_array($action, ['media_upload', 'media_update'], true) ? scheduleData() : [null, null];
             $when = static function () use ($starts, $ends): string {
                 $s = MediaRepository::state(['starts_at' => $starts, 'ends_at' => $ends]);
-                return ['permanent' => '', 'active' => ' Se muestra desde ya.',
-                    'scheduled' => ' Programado: empezará a mostrarse en la fecha "Desde".',
-                    'ended' => ' Atención: la fecha "Hasta" ya pasó, no se mostrará.'][$s];
+                return ['permanent' => '', 'active' => ' ' . t('Se muestra desde ya.'),
+                    'scheduled' => ' ' . t('Programado: empezará a mostrarse en la fecha "Desde".'),
+                    'ended' => ' ' . t('Atención: la fecha "Hasta" ya pasó, no se mostrará.')][$s];
             };
             switch ($action) {
                 case 'media_upload':
                     $f = $_FILES['file'] ?? null;
                     $err = is_array($f) && is_int($f['error'] ?? null) ? $f['error'] : UPLOAD_ERR_NO_FILE;
                     if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
-                        redirectWith('El archivo supera el límite de PHP (upload_max_filesize: ' . ini_get('upload_max_filesize') . ').', 's=contenido');
+                        redirectWith(t('El archivo supera el límite de PHP (upload_max_filesize: %s).', (string) ini_get('upload_max_filesize')), 's=contenido');
                     }
                     if ($err !== UPLOAD_ERR_OK) {
-                        redirectWith($err === UPLOAD_ERR_NO_FILE ? 'Elige un archivo.' : 'La subida falló (código ' . $err . '). Inténtalo de nuevo.', 's=contenido');
+                        redirectWith($err === UPLOAD_ERR_NO_FILE ? t('Elige un archivo.') : t('La subida falló (código %d). Inténtalo de nuevo.', $err), 's=contenido');
                     }
                     $size = (int) $f['size'];
                     if ($size > MediaRepository::maxBytes()) {
-                        redirectWith('El archivo supera el máximo de ' . formatBytes(MediaRepository::maxBytes()) . '.', 's=contenido');
+                        redirectWith(t('El archivo supera el máximo de %s.', formatBytes(MediaRepository::maxBytes())), 's=contenido');
                     }
                     // LÍMITES del PLAN (2026-11-22): sin plan vigente no se suben archivos nuevos;
                     // con plan, hasta su cantidad de archivos y su almacenamiento
                     $limits = PlanRepository::limits($user);
                     if ($limits === null) {
                         $ps = PlanRepository::forUser($user);
-                        redirectWith(($ps['state'] === 'expired' ? 'Tu plan está vencido' : 'No tienes un plan asignado')
-                            . ': no puedes subir archivos nuevos. Pide al administrador que ' . ($ps['state'] === 'expired' ? 'lo renueve.' : 'te asigne uno.'), 's=contenido');
+                        redirectWith($ps['state'] === 'expired'
+                            ? t('Tu plan está vencido: no puedes subir archivos nuevos. Pide al administrador que lo renueve.')
+                            : t('No tienes un plan asignado: no puedes subir archivos nuevos. Pide al administrador que te asigne uno.'), 's=contenido');
                     }
                     if (MediaRepository::countForUser($uid) >= $limits['files']) {
-                        redirectWith("Llegaste al límite de tu plan: {$limits['files']} archivo(s). Borra alguno o pide al administrador un plan mayor.", 's=contenido');
+                        redirectWith(t('Llegaste al límite de tu plan: %d archivo(s). Borra alguno o pide al administrador un plan mayor.', $limits['files']), 's=contenido');
                     }
                     if (MediaRepository::usedBytes($uid) + $size > $limits['bytes']) {
-                        redirectWith('No queda espacio en tu plan: tu límite es ' . formatBytes($limits['bytes'])
-                            . ' y usas ' . formatBytes(MediaRepository::usedBytes($uid)) . '. Borra algún archivo.', 's=contenido');
+                        redirectWith(t('No queda espacio en tu plan: tu límite es %s y usas %s. Borra algún archivo.', formatBytes($limits['bytes']), formatBytes(MediaRepository::usedBytes($uid))), 's=contenido');
                     }
                     $mime = MediaRepository::detectMime((string) $f['tmp_name']);
                     if ($mime === null) {
-                        redirectWith('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.', 's=contenido');
+                        redirectWith(t('Tipo de archivo no admitido. Usa imágenes JPG, PNG, WEBP o GIF, o videos MP4 (H.264) o WEBM.'), 's=contenido');
                     }
                     // Video que las TV no pueden mostrar fluido (60 fps, 4K, HEVC...): se rechaza
                     $videoProblem = MediaRepository::videoProblem((string) $f['tmp_name'], $mime);
                     if ($videoProblem !== null) {
-                        redirectWith('«' . $f['name'] . '» no se subió. ' . $videoProblem, 's=contenido');
+                        redirectWith(t('«%s» no se subió.', (string) $f['name']) . ' ' . $videoProblem, 's=contenido');
                     }
                     MediaRepository::create($uid, (string) $f['tmp_name'], (string) $f['name'], $mime,
                         (int) param($_POST, 'seconds'), $all, $chosen, $starts, $ends);
-                    redirectWith('«' . $f['name'] . '» subido. Tus dispositivos lo descargarán en su próxima consulta.' . $when(), 's=contenido');
+                    redirectWith(t('«%s» subido. Tus dispositivos lo descargarán en su próxima consulta.', (string) $f['name']) . $when(), 's=contenido');
                 case 'media_update':
                     MediaRepository::update($mid, $uid, (int) param($_POST, 'seconds'), $all, $chosen, $starts, $ends);
-                    redirectWith('Cambios guardados.' . $when(), 's=contenido');
+                    redirectWith(t('Cambios guardados.') . $when(), 's=contenido');
                 case 'media_up':
                 case 'media_down':
                     MediaRepository::move($mid, $uid, $action === 'media_up' ? -1 : 1);
-                    redirectWith('Orden cambiado.', 's=contenido');
+                    redirectWith(t('Orden cambiado.'), 's=contenido');
                 case 'media_pause':
                 case 'media_resume':
                     // Pausar / activar uno de SUS archivos (como las tiras)
                     $on = $action === 'media_resume';
                     MediaRepository::setActive($mid, $uid, $on);
                     $name = (string) (MediaRepository::findForUser($mid, $uid)['original_name'] ?? '');
-                    redirectWith($on ? "«{$name}» activado: tus pantallas lo mostrarán en su próxima consulta."
-                        : "«{$name}» pausado: tus pantallas lo quitarán en su próxima consulta. No se borra.", 's=contenido');
+                    redirectWith($on ? t('«%s» activado: tus pantallas lo mostrarán en su próxima consulta.', $name)
+                        : t('«%s» pausado: tus pantallas lo quitarán en su próxima consulta. No se borra.', $name), 's=contenido');
                 case 'media_delete':
                     MediaRepository::delete($mid, $uid);
-                    redirectWith('Archivo eliminado. Tus dispositivos dejarán de mostrarlo en su próxima consulta.', 's=contenido');
+                    redirectWith(t('Archivo eliminado. Tus dispositivos dejarán de mostrarlo en su próxima consulta.'), 's=contenido');
                 default:
-                    redirectWith('Acción desconocida.', 's=contenido');
+                    redirectWith(t('Acción desconocida.'), 's=contenido');
             }
         } else {
-            redirectWith('Acción desconocida.');
+            redirectWith(t('Acción desconocida.'));
         }
     }
 
@@ -591,8 +619,8 @@ try {
     error_log('smartpizarra cuenta: ' . $e->getMessage());
     http_response_code(500);
     $error = $setupError !== ''
-        ? 'El servicio no está disponible en este momento. Inténtalo más tarde.'
-        : 'Error del servidor. Inténtalo más tarde.';
+        ? t('El servicio no está disponible en este momento. Inténtalo más tarde.')
+        : t('Error del servidor. Inténtalo más tarde.');
     $flash = '';
     $user = null;
     $mustChange = false;
@@ -604,14 +632,14 @@ try {
     $overlays = [];
 }
 
-$statusText = ['pending' => 'Pendiente de autorizar', 'authorized' => 'Autorizado', 'revoked' => 'Revocado'];
+$statusText = ['pending' => t('Pendiente de autorizar'), 'authorized' => t('Autorizado'), 'revoked' => t('Revocado')];
 
 /*
  * Secciones (pestañas) de la página: ?s=inicio | equipos | contenido | tiras | plan | mensajes | cuenta.
  * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
  * "plan" (Mi plan, 2026-11-22): datos del plan, uso e historial de renovaciones (solo lectura).
  */
-$sections = ['inicio' => 'Inicio', 'equipos' => 'Dispositivos', 'contenido' => 'Contenido', 'tiras' => 'Tiras y banners', 'plan' => 'Mi plan', 'mensajes' => 'Mensajes', 'cuenta' => 'Mi cuenta'];
+$sections = ['inicio' => t('Inicio'), 'equipos' => t('Dispositivos'), 'contenido' => t('Contenido'), 'tiras' => t('Tiras y banners'), 'plan' => t('Mi plan'), 'mensajes' => t('Mensajes'), 'cuenta' => t('Mi cuenta')];
 $section = param($_GET, 's');
 if (!isset($sections[$section])) {
     $section = 'inicio';
@@ -664,12 +692,12 @@ if ($validity['state'] !== 'active') {
 }
 ?>
 <!doctype html>
-<html lang="es">
+<html lang="<?= h(I18n::lang()) ?>">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title><?= $user !== null ? h($sections[$section]) . ' - ' : '' ?>Mi cuenta - Smart Pizarra</title>
+  <title><?= $user !== null ? h($sections[$section]) . ' - ' : '' ?><?= t('Mi cuenta') ?> - Smart Pizarra</title>
   <style nonce="<?= h($nonce) ?>">
 <?= baseStyles() ?>
 
@@ -777,6 +805,11 @@ if ($validity['state'] !== 'active') {
     .label-form input[type=text] { flex: 1 1 220px; min-width: 0; padding: 8px 10px; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     .badge.off { color: var(--muted); }
+    /* Selector de idioma (cabecera) */
+    .head-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .lang-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    .lang-switch a { padding: 6px 10px; text-decoration: none; color: var(--muted); font-size: .85rem; font-weight: 600; }
+    .lang-switch a.on { background: var(--accent); color: #fff; }
 <?= overlayStyles() ?>
   </style>
 </head>
@@ -784,12 +817,21 @@ if ($validity['state'] !== 'active') {
 <main>
   <header>
     <div>
-      <h1>Smart Pizarra · Mi cuenta</h1>
+      <h1>Smart Pizarra · <?= t('Mi cuenta') ?></h1>
       <?php if ($user !== null): ?><div class="who"><?= h($user['company']) ?> · <?= h($user['email']) ?></div><?php endif; ?>
     </div>
-    <?php if ($user !== null): ?>
-      <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit">Salir</button></form>
-    <?php endif; ?>
+    <div class="head-tools">
+      <!-- Idioma: enlaces ?lang= (conservan la pestaña); se guarda en el usuario y en una cookie -->
+      <nav class="lang-switch" aria-label="<?= h(t('Idioma')) ?>">
+        <?php foreach (I18n::LANGS as $code => $langName): ?>
+          <a class="<?= I18n::lang() === $code ? 'on' : '' ?>" href="?<?= h(http_build_query(array_filter(['s' => $user !== null ? param($_GET, 's') : '', 'lang' => $code]))) ?>"
+             hreflang="<?= h($code) ?>" lang="<?= h($code) ?>" title="<?= h($langName) ?>"<?= I18n::lang() === $code ? ' aria-current="true"' : '' ?>><?= strtoupper($code) ?></a>
+        <?php endforeach; ?>
+      </nav>
+      <?php if ($user !== null): ?>
+        <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="logout"><button type="submit"><?= t('Salir') ?></button></form>
+      <?php endif; ?>
+    </div>
   </header>
 
 <?php if ($user === null): ?>
@@ -801,16 +843,16 @@ if ($validity['state'] !== 'active') {
     <input type="hidden" name="action" value="login">
     <label for="email">Email</label>
     <input type="email" id="email" name="email" autocomplete="username" required>
-    <label for="password">Contraseña</label>
+    <label for="password"><?= t('Contraseña') ?></label>
     <input type="password" id="password" name="password" autocomplete="current-password" required>
-    <p><button class="primary" type="submit">Entrar</button></p>
-    <p class="hint">¿Olvidaste tu contraseña? Pide al administrador que la restablezca.</p>
+    <p><button class="primary" type="submit"><?= t('Entrar') ?></button></p>
+    <p class="hint"><?= t('¿Olvidaste tu contraseña? Pide al administrador que la restablezca.') ?></p>
   </form>
 <?php else: ?>
 
   <?php if (!$mustChange): ?>
     <!-- Pestañas (enlaces normales: funcionan sin JavaScript) -->
-    <nav class="tabs" aria-label="Secciones">
+    <nav class="tabs" aria-label="<?= h(t('Secciones')) ?>">
       <?php foreach ($sections as $key => $text): ?>
         <a class="<?= $section === $key ? 'on' : '' ?>" href="?s=<?= h($key) ?>" <?= $section === $key ? 'aria-current="page"' : '' ?>>
           <?= h($text) ?><?php if ($key === 'equipos'): ?><span class="count"><?= count($devices) ?></span><?php elseif ($key === 'contenido'): ?><span class="count"><?= count($mediaList) ?></span><?php elseif ($key === 'tiras'): ?><span class="count"><?= count($overlays) ?></span><?php elseif ($key === 'mensajes' && $unreadMsgs): ?><span class="unread"><?= (int) $unreadMsgs ?></span><?php endif; ?>
@@ -825,74 +867,73 @@ if ($validity['state'] !== 'active') {
     <!-- ======================= INICIO: resumen ======================= -->
     <?php if ($unreadMsgs): ?>
       <!-- Aviso de mensajes nuevos del administrador -->
-      <a class="card block msg-notice" href="?s=mensajes">Tienes <strong><?= (int) $unreadMsgs ?></strong> mensaje(s) nuevo(s) del administrador. Ver mensajes &rarr;</a>
+      <a class="card block msg-notice" href="?s=mensajes"><?= t('Tienes %s mensaje(s) nuevo(s) del administrador.', '<strong>' . (int) $unreadMsgs . '</strong>') ?> <?= t('Ver mensajes') ?> &rarr;</a>
     <?php endif; ?>
     <div class="stats">
-      <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl">Dispositivos</div></a>
-      <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl">Autorizados</div></a>
-      <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl">En línea ahora</div></a>
-      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?><?= $planLimits !== null ? '/' . $maxFiles : '' ?></div><div class="lbl">Archivos de contenido</div></a>
+      <a class="card stat" href="?s=equipos"><div class="num"><?= count($devices) ?></div><div class="lbl"><?= t('Dispositivos') ?></div></a>
+      <a class="card stat" href="?s=equipos"><div class="num"><?= $authorizedCount ?></div><div class="lbl"><?= t('Autorizados') ?></div></a>
+      <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl"><?= t('En línea ahora') ?></div></a>
+      <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?><?= $planLimits !== null ? '/' . $maxFiles : '' ?></div><div class="lbl"><?= t('Archivos de contenido') ?></div></a>
     </div>
     <!-- Vigencia: hasta cuándo se muestra el contenido en las pantallas -->
     <section class="card block validity <?= h($validity['state']) ?>">
-      <h2>Vigencia del contenido</h2>
-      <div class="vnum"><?= $validity['state'] === 'active' ? (int) $validity['days'] . ($validity['days'] === 1 ? ' día' : ' días') : ($validity['state'] === 'expired' ? 'Vencida' : 'Sin vigencia') ?></div>
+      <h2><?= t('Vigencia del contenido') ?></h2>
+      <div class="vnum"><?= $validity['state'] === 'active' ? ($validity['days'] === 1 ? t('1 día') : t('%d días', (int) $validity['days'])) : ($validity['state'] === 'expired' ? t('Vencida') : t('Sin vigencia')) ?></div>
       <div class="meta"><?= $validity['text'] ?>.
         <?= $validity['state'] === 'active'
-            ? 'Tus pantallas muestran tu contenido hasta esa fecha.'
-            : 'Tus pantallas no muestran tu contenido. Para renovarla, contacta al administrador.' ?></div>
+            ? t('Tus pantallas muestran tu contenido hasta esa fecha.')
+            : t('Tus pantallas no muestran tu contenido. Para renovarla, contacta al administrador.') ?></div>
     </section>
     <!-- Plan: nombre, días que quedan y espacio usado (detalle e historial en "Mi plan") -->
     <section class="card block validity <?= h($planState['state']) ?>">
-      <h2>Mi plan</h2>
+      <h2><?= t('Mi plan') ?></h2>
       <?php if ($planState['plan'] === null): ?>
-        <div class="vnum">Sin plan</div>
-        <div class="meta">No puedes subir archivos nuevos hasta que el administrador te asigne un plan.</div>
+        <div class="vnum"><?= t('Sin plan') ?></div>
+        <div class="meta"><?= t('No puedes subir archivos nuevos hasta que el administrador te asigne un plan.') ?></div>
       <?php else: $pl = $planState['plan']; ?>
-        <div class="vnum"><?= h($pl['name']) ?> · <?= $planState['state'] === 'active' ? (int) $planState['days'] . ($planState['days'] === 1 ? ' día' : ' días') : 'Vencido' ?></div>
+        <div class="vnum"><?= h($pl['name']) ?> · <?= $planState['state'] === 'active' ? ($planState['days'] === 1 ? t('1 día') : t('%d días', (int) $planState['days'])) : t('Vencido') ?></div>
         <?php if ($quota > 0): ?>
           <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
-          <div class="meta">Espacio: usado <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?></div>
+          <div class="meta"><?= t('Espacio: usado %s de %s', h(formatBytes($usedBytes)), h(formatBytes($quota))) ?></div>
         <?php else: ?>
-          <div class="meta">Plan vencido: no puedes subir archivos nuevos. Pide al administrador que lo renueve.</div>
+          <div class="meta"><?= t('Plan vencido: no puedes subir archivos nuevos. Pide al administrador que lo renueve.') ?></div>
         <?php endif; ?>
       <?php endif; ?>
-      <div class="actions"><a class="btn" href="?s=plan">Ver mi plan e historial</a></div>
+      <div class="actions"><a class="btn" href="?s=plan"><?= t('Ver mi plan e historial') ?></a></div>
     </section>
     <section class="card block">
-      <h2>¿Qué muestran mis pantallas?</h2>
+      <h2><?= t('¿Qué muestran mis pantallas?') ?></h2>
       <div class="meta">
-        <?= $mediaOnCount ?> de <?= count($devices) ?> dispositivo(s) pueden mostrar tus imágenes y videos
-        (autorizados, con el contenido habilitado por el administrador y con la vigencia activa).
+        <?= t('%d de %d dispositivo(s) pueden mostrar tus imágenes y videos (autorizados, con el contenido habilitado por el administrador y con la vigencia activa).', $mediaOnCount, count($devices)) ?>
       </div>
       <div class="actions">
-        <a class="btn" href="?s=contenido">Subir o cambiar contenido</a>
-        <a class="btn" href="?s=equipos">Ver mis dispositivos</a>
+        <a class="btn" href="?s=contenido"><?= t('Subir o cambiar contenido') ?></a>
+        <a class="btn" href="?s=equipos"><?= t('Ver mis dispositivos') ?></a>
       </div>
     </section>
 
   <?php elseif ($section === 'equipos'): ?>
     <!-- ============ EQUIPOS (solo el nombre es editable) ============ -->
     <div class="section-head">
-      <h2>Mis dispositivos</h2>
-      <span class="hint">Puedes ponerle un nombre a cada dispositivo y una liga a los que no tienen el contenido habilitado. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
+      <h2><?= t('Mis dispositivos') ?></h2>
+      <span class="hint"><?= t('Puedes ponerle un nombre a cada dispositivo y una liga a los que no tienen el contenido habilitado. Autorizar, revocar o habilitar el contenido lo hace el administrador.') ?></span>
     </div>
     <?php if (!$devices): ?>
-      <div class="card empty block">Todavía no tienes dispositivos asignados.</div>
+      <div class="card empty block"><?= t('Todavía no tienes dispositivos asignados.') ?></div>
     <?php else: ?>
       <!-- Buscar uno de MIS equipos por la MAC que sale en su case (o por su nombre o ID) -->
       <form method="get" class="device-search" role="search">
         <input type="hidden" name="s" value="equipos">
-        <label for="dq" class="sr">Buscar dispositivo</label>
+        <label for="dq" class="sr"><?= t('Buscar dispositivo') ?></label>
         <input type="search" id="dq" name="q" value="<?= h($deviceQuery) ?>" maxlength="40"
-               placeholder="Buscar por MAC (p. ej. E8:BB:3E:C8:FB:5A), S/N, nombre o ID" spellcheck="false">
-        <button type="submit">Buscar</button>
-        <?php if ($deviceQuery !== ''): ?><a class="btn" href="?s=equipos">Ver todos</a><?php endif; ?>
+               placeholder="<?= h(t('Buscar por MAC (p. ej. E8:BB:3E:C8:FB:5A), S/N, nombre o ID')) ?>" spellcheck="false">
+        <button type="submit"><?= t('Buscar') ?></button>
+        <?php if ($deviceQuery !== ''): ?><a class="btn" href="?s=equipos"><?= t('Ver todos') ?></a><?php endif; ?>
       </form>
       <?php if ($deviceQuery !== ''): ?>
         <p class="hint"><?= $shownDevices
-            ? count($shownDevices) . ' dispositivo(s) coinciden con «' . h($deviceQuery) . '».'
-            : 'Ninguno de tus dispositivos coincide con «' . h($deviceQuery) . '».' ?></p>
+            ? t('%d dispositivo(s) coinciden con «%s».', count($shownDevices), h($deviceQuery))
+            : t('Ninguno de tus dispositivos coincide con «%s».', h($deviceQuery)) ?></p>
       <?php endif; ?>
     <?php endif; ?>
     <?php foreach ($shownDevices as $d): $st = (string) $d['status']; $mOn = DeviceRepository::mediaEnabled($d); ?>
@@ -903,7 +944,7 @@ if ($validity['state'] !== 'active') {
             <span class="device-id"><?= h($d['device_id']) ?></span>
           </span>
           <span>
-            <span class="badge <?= $mOn ? 'authorized' : 'pending' ?>"><?= $mOn ? 'Contenido habilitado' : 'Contenido no habilitado' ?></span>
+            <span class="badge <?= $mOn ? 'authorized' : 'pending' ?>"><?= $mOn ? t('Contenido habilitado') : t('Contenido no habilitado') ?></span>
             <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
           </span>
         </div>
@@ -911,41 +952,41 @@ if ($validity['state'] !== 'active') {
           <!-- MAC impresa en el case (la registra el administrador en el perfil del equipo) -->
           MAC: <?= !empty($d['profile_case_mac'])
             ? '<span class="case-mac">' . h($d['profile_case_mac']) . '</span>'
-            : '<em>sin registrar</em> <span class="hint">(la registra el administrador)</span>' ?><br>
+            : '<em>' . t('sin registrar') . '</em> <span class="hint">(' . t('la registra el administrador') . ')</span>' ?><br>
           <?php if (!empty($d['profile_serial'])): ?>
             <!-- S/N de la caja (del perfil que registra el administrador; se puede buscar por él) -->
             S/N: <span class="case-mac"><?= h($d['profile_serial']) ?></span><br>
           <?php endif; ?>
-          Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
-          Registrado el <?= dateTag($d['created_at']) ?>
-          · Arranques: <?= (int) ($d['boots'] ?? 0) ?>
-          <?= !empty($d['last_boot_at']) ? '(último ' . dateTag($d['last_boot_at']) . ')' : '' ?>
+          <?= t('Última conexión:') ?> <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
+          <?= t('Registrado el %s', dateTag($d['created_at'])) ?>
+          · <?= t('Arranques:') ?> <?= (int) ($d['boots'] ?? 0) ?>
+          <?= !empty($d['last_boot_at']) ? '(' . t('último %s', dateTag($d['last_boot_at'])) . ')' : '' ?>
           <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
-          <?= $mOn ? '' : '<br><span class="hint">Para mostrar tus imágenes y videos aquí, pide al administrador que habilite el contenido.</span>' ?>
+          <?= $mOn ? '' : '<br><span class="hint">' . t('Para mostrar tus imágenes y videos aquí, pide al administrador que habilite el contenido.') . '</span>' ?>
         </div>
         <!-- Nombre del equipo (vacío = sin nombre, se muestra solo el ID) -->
         <form method="post" class="label-form" autocomplete="off"><?= csrfField() ?>
           <input type="hidden" name="action" value="device_label">
           <input type="hidden" name="deviceId" value="<?= h($d['device_id']) ?>">
-          <label for="lbl-<?= h($d['device_id']) ?>" class="sr">Nombre del dispositivo</label>
+          <label for="lbl-<?= h($d['device_id']) ?>" class="sr"><?= t('Nombre del dispositivo') ?></label>
           <input type="text" id="lbl-<?= h($d['device_id']) ?>" name="label" value="<?= h((string) $d['label']) ?>"
-                 maxlength="100" placeholder="Nombre del dispositivo (p. ej. Local Centro)">
-          <button type="submit">Guardar nombre</button>
+                 maxlength="100" placeholder="<?= h(t('Nombre del dispositivo (p. ej. Local Centro)')) ?>">
+          <button type="submit"><?= t('Guardar nombre') ?></button>
         </form>
         <!-- Liga de este equipo: "Sin liga" o UNA de mis ligas (llega a la TV en ≈ 1 min).
              Con el CONTENIDO HABILITADO no se muestra (2026-11-22, petición del usuario):
              la TV muestra imágenes/videos y el usuario no elige liga. -->
         <?php if ($mOn): ?>
         <?php elseif (!$myLeagues): ?>
-          <p class="hint">Liga: sin liga (el administrador todavía no te asignó ligas).</p>
+          <p class="hint"><?= t('Liga: sin liga (el administrador todavía no te asignó ligas).') ?></p>
         <?php else: $devLeague = LeagueRepository::deviceLeague($d); $did = h($d['device_id']); ?>
           <form method="post" class="league-form"><?= csrfField() ?>
             <input type="hidden" name="action" value="device_league">
             <input type="hidden" name="deviceId" value="<?= $did ?>">
-            <label for="lg-<?= $did ?>">Liga de este dispositivo</label>
+            <label for="lg-<?= $did ?>"><?= t('Liga de este dispositivo') ?></label>
             <div class="league-row">
               <select id="lg-<?= $did ?>" name="leagueId">
-                <option value="">Sin liga</option>
+                <option value=""><?= t('Sin liga') ?></option>
                 <?php $lastType = null; foreach ($myLeagues as $l): ?>
                   <?php if ($lastType !== (int) $l['type_id']): ?>
                     <?= $lastType !== null ? '</optgroup>' : '' ?><optgroup label="<?= h($l['type_name']) ?>">
@@ -955,7 +996,7 @@ if ($validity['state'] !== 'active') {
                 <?php endforeach; ?>
                 <?= $lastType !== null ? '</optgroup>' : '' ?>
               </select>
-              <button type="submit">Guardar liga</button>
+              <button type="submit"><?= t('Guardar liga') ?></button>
             </div>
           </form>
         <?php endif; ?>
@@ -968,45 +1009,44 @@ if ($validity['state'] !== 'active') {
          carrusel, en este orden, desde su propia memoria. -->
     <form class="card block upload" method="post" enctype="multipart/form-data" id="uploadForm">
       <?= csrfField() ?>
-      <h2>Subir un archivo</h2>
+      <h2><?= t('Subir un archivo') ?></h2>
       <?php if ($validity['state'] !== 'active'): ?>
-        <p class="hint"><strong><?= $validity['state'] === 'expired' ? 'Tu vigencia está vencida' : 'No tienes vigencia asignada' ?>:</strong>
-          puedes preparar tu contenido, pero las pantallas no lo mostrarán hasta que el administrador la renueve.</p>
+        <p class="hint"><strong><?= $validity['state'] === 'expired' ? t('Tu vigencia está vencida') : t('No tienes vigencia asignada') ?>:</strong>
+          <?= t('puedes preparar tu contenido, pero las pantallas no lo mostrarán hasta que el administrador la renueve.') ?></p>
       <?php endif; ?>
-      <p class="hint">Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta <?= h(formatBytes(MediaRepository::maxBytes())) ?>.
-        Los videos se reproducen sin sonido. <strong>Videos: 30 fps como máximo</strong>, H.264 y hasta 1920×1080
-        (los de 60 fps o 4K se ven a saltos en las pantallas y no se aceptan).</p>
+      <p class="hint"><?= t('Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta %s. Los videos se reproducen sin sonido.', h(formatBytes(MediaRepository::maxBytes()))) ?>
+        <strong><?= t('Videos: 30 fps como máximo') ?></strong>, <?= t('H.264 y hasta 1920×1080 (los de 60 fps o 4K se ven a saltos en las pantallas y no se aceptan).') ?></p>
       <!-- Límites del PLAN (cantidad de archivos y espacio); sin plan vigente no se sube nada nuevo -->
       <?php if ($planLimits === null): ?>
-        <p class="file-limit full"><strong><?= $planState['state'] === 'expired' ? 'Tu plan «' . h($planState['plan']['name']) . '» está vencido' : 'No tienes un plan asignado' ?>:</strong>
-          no puedes subir archivos nuevos. Pide al administrador que <?= $planState['state'] === 'expired' ? 'lo renueve' : 'te asigne uno' ?>. <a href="?s=plan">Mi plan</a></p>
+        <p class="file-limit full"><strong><?= $planState['state'] === 'expired' ? t('Tu plan «%s» está vencido', h($planState['plan']['name'])) : t('No tienes un plan asignado') ?>:</strong>
+          <?= $planState['state'] === 'expired' ? t('no puedes subir archivos nuevos. Pide al administrador que lo renueve.') : t('no puedes subir archivos nuevos. Pide al administrador que te asigne uno.') ?> <a href="?s=plan"><?= t('Mi plan') ?></a></p>
       <?php else: ?>
-        <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>">Plan <?= h($planState['plan']['name']) ?> · Archivos: <strong><?= count($mediaList) ?> de <?= $maxFiles ?></strong>
-          · Espacio: <?= h(formatBytes($usedBytes)) ?> de <?= h(formatBytes($quota)) ?>
-          <?= $atFileLimit ? '· Llegaste al límite de tu plan: borra alguno o pide al administrador un plan mayor.' : '· Puedes subir ' . ($maxFiles - count($mediaList)) . ' más.' ?></p>
+        <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>"><?= t('Plan') ?> <?= h($planState['plan']['name']) ?> · <?= t('Archivos:') ?> <strong><?= t('%d de %d', count($mediaList), $maxFiles) ?></strong>
+          · <?= t('Espacio: %s de %s', h(formatBytes($usedBytes)), h(formatBytes($quota))) ?>
+          <?= $atFileLimit ? '· ' . t('Llegaste al límite de tu plan: borra alguno o pide al administrador un plan mayor.') : '· ' . t('Puedes subir %d más.', $maxFiles - count($mediaList)) ?></p>
       <?php endif; ?>
       <input type="hidden" name="action" value="media_upload">
       <div class="row">
         <div>
-          <label for="file">Archivo</label>
+          <label for="file"><?= t('Archivo') ?></label>
           <input type="file" id="file" name="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" required <?= $atFileLimit ? 'disabled' : '' ?>>
         </div>
         <div>
-          <label for="seconds">Segundos en pantalla (solo imágenes)</label>
+          <label for="seconds"><?= t('Segundos en pantalla (solo imágenes)') ?></label>
           <input type="number" id="seconds" name="seconds" value="10" min="<?= MediaRepository::MIN_SECONDS ?>" max="<?= MediaRepository::MAX_SECONDS ?>">
         </div>
       </div>
       <?= targetFields($devices, true, [], 'new') ?>
       <?= scheduleFields(null, 'new-') ?>
-      <button class="primary" type="submit" id="uploadBtn" <?= $atFileLimit ? 'disabled' : '' ?>>Subir</button>
+      <button class="primary" type="submit" id="uploadBtn" <?= $atFileLimit ? 'disabled' : '' ?>><?= t('Subir') ?></button>
     </form>
 
     <div class="section-head">
-      <h2>Mis archivos (<?= count($mediaList) ?><?= $planLimits !== null ? ' de ' . $maxFiles : '' ?>)</h2>
-      <span class="hint">Usado <?= h(formatBytes($usedBytes)) ?><?= $planLimits !== null ? ' de ' . h(formatBytes($quota)) : '' ?> · se muestran en este orden</span>
+      <h2><?= t('Mis archivos') ?> (<?= $planLimits !== null ? t('%d de %d', count($mediaList), $maxFiles) : count($mediaList) ?>)</h2>
+      <span class="hint"><?= $planLimits !== null ? t('Usado %s de %s', h(formatBytes($usedBytes)), h(formatBytes($quota))) : t('Usado %s', h(formatBytes($usedBytes))) ?> · <?= t('se muestran en este orden') ?></span>
     </div>
     <?php if (!$mediaList): ?>
-      <div class="card empty block">Todavía no has subido nada. Usa «Subir un archivo».</div>
+      <div class="card empty block"><?= t('Todavía no has subido nada. Usa «Subir un archivo».') ?></div>
     <?php endif; ?>
     <?php foreach ($mediaList as $i => $m): $mid = (int) $m['id']; $isImg = $m['kind'] === 'image'; ?>
       <section class="card device">
@@ -1014,45 +1054,45 @@ if ($validity['state'] !== 'active') {
           <?php if ($isImg): ?>
             <a href="?file=<?= $mid ?>" target="_blank" rel="noopener"><img class="thumb" src="?thumb=<?= $mid ?>" alt="" loading="lazy"></a>
           <?php else: ?>
-            <a class="thumb" href="?file=<?= $mid ?>" target="_blank" rel="noopener">&#9654; Video</a>
+            <a class="thumb" href="?file=<?= $mid ?>" target="_blank" rel="noopener">&#9654; <?= t('Video') ?></a>
           <?php endif; ?>
           <div class="media-body">
             <div class="media-name"><span class="pos"><?= $i + 1 ?></span><?= h($m['original_name']) ?></div>
             <div class="meta">
-              <?= $isImg ? 'Imagen · ' . (int) $m['seconds'] . ' s' : 'Video' ?> · <?= h(formatBytes((int) $m['size_bytes'])) ?>
-              · Subido el <?= dateTag($m['created_at']) ?><br>
-              Se muestra en: <?= (int) $m['all_devices'] === 1 ? 'todos mis dispositivos' : count($m['devices']) . ' dispositivo(s)' ?><br>
+              <?= $isImg ? t('Imagen') . ' · ' . (int) $m['seconds'] . ' s' : t('Video') ?> · <?= h(formatBytes((int) $m['size_bytes'])) ?>
+              · <?= t('Subido el %s', dateTag($m['created_at'])) ?><br>
+              <?= t('Se muestra en:') ?> <?= (int) $m['all_devices'] === 1 ? t('todos mis dispositivos') : t('%d dispositivo(s)', count($m['devices'])) ?><br>
               <!-- Pausado, o su periodo (permanente o con fechas) -->
-              <?= MediaRepository::isActive($m) ? scheduleTag($m) : '<span class="badge off">Pausado</span> <span class="hint">no se muestra en tus pantallas</span>' ?>
+              <?= MediaRepository::isActive($m) ? scheduleTag($m) : '<span class="badge off">' . t('Pausado') . '</span> <span class="hint">' . t('no se muestra en tus pantallas') . '</span>' ?>
             </div>
             <div class="actions">
               <!-- Pausar / activar (como las tiras y banners) -->
               <form method="post"><?= csrfField() ?><input type="hidden" name="mediaId" value="<?= $mid ?>">
                 <input type="hidden" name="action" value="<?= MediaRepository::isActive($m) ? 'media_pause' : 'media_resume' ?>">
-                <button class="<?= MediaRepository::isActive($m) ? 'bad' : 'ok' ?>" type="submit"><?= MediaRepository::isActive($m) ? 'Pausar' : 'Activar' ?></button></form>
+                <button class="<?= MediaRepository::isActive($m) ? 'bad' : 'ok' ?>" type="submit"><?= MediaRepository::isActive($m) ? t('Pausar') : t('Activar') ?></button></form>
               <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_up"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-                <button type="submit" <?= $i === 0 ? 'disabled' : '' ?> title="Mostrar antes">&#9650;</button></form>
+                <button type="submit" <?= $i === 0 ? 'disabled' : '' ?> title="<?= h(t('Mostrar antes')) ?>">&#9650;</button></form>
               <form method="post"><?= csrfField() ?><input type="hidden" name="action" value="media_down"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-                <button type="submit" <?= $i === count($mediaList) - 1 ? 'disabled' : '' ?> title="Mostrar después">&#9660;</button></form>
-              <form method="post" data-confirm="¿Eliminar «<?= h($m['original_name']) ?>»? Tus pantallas dejarán de mostrarlo."><?= csrfField() ?>
+                <button type="submit" <?= $i === count($mediaList) - 1 ? 'disabled' : '' ?> title="<?= h(t('Mostrar después')) ?>">&#9660;</button></form>
+              <form method="post" data-confirm="<?= h(t('¿Eliminar «%s»? Tus pantallas dejarán de mostrarlo.', $m['original_name'])) ?>"><?= csrfField() ?>
                 <input type="hidden" name="action" value="media_delete"><input type="hidden" name="mediaId" value="<?= $mid ?>">
-                <button class="bad" type="submit">Eliminar</button></form>
+                <button class="bad" type="submit"><?= t('Eliminar') ?></button></form>
             </div>
             <!-- Edición plegada: duración y equipos -->
             <details class="edit">
-              <summary>Editar duración, dispositivos y fechas</summary>
+              <summary><?= t('Editar duración, dispositivos y fechas') ?></summary>
               <form method="post">
                 <?= csrfField() ?>
                 <input type="hidden" name="action" value="media_update"><input type="hidden" name="mediaId" value="<?= $mid ?>">
                 <?php if ($isImg): ?>
-                  <label for="s<?= $mid ?>">Segundos en pantalla</label>
+                  <label for="s<?= $mid ?>"><?= t('Segundos en pantalla') ?></label>
                   <input type="number" id="s<?= $mid ?>" name="seconds" value="<?= (int) $m['seconds'] ?>" min="<?= MediaRepository::MIN_SECONDS ?>" max="<?= MediaRepository::MAX_SECONDS ?>">
                 <?php else: ?>
                   <input type="hidden" name="seconds" value="<?= (int) $m['seconds'] ?>">
                 <?php endif; ?>
                 <?= targetFields($devices, (int) $m['all_devices'] === 1, $m['devices'], 'm' . $mid . '-') ?>
                 <?= scheduleFields($m, 'm' . $mid . '-') ?>
-                <button class="primary" type="submit">Guardar cambios</button>
+                <button class="primary" type="submit"><?= t('Guardar cambios') ?></button>
               </form>
             </details>
           </div>
@@ -1063,25 +1103,22 @@ if ($validity['state'] !== 'active') {
   <?php elseif ($section === 'tiras'): ?>
     <!-- ============ TIRAS Y BANNERS (franja arriba/abajo de mirror.html) ============ -->
     <details class="card block" <?= !$overlays ? 'open' : '' ?>>
-      <summary><strong>+ Nueva tira o banner</strong></summary>
+      <summary><strong>+ <?= t('Nueva tira o banner') ?></strong></summary>
       <form method="post" enctype="multipart/form-data" autocomplete="off"><?= csrfField() ?>
         <input type="hidden" name="action" value="overlay_create">
-        <p class="hint">Una franja con un mensaje (tira) o una imagen (banner) arriba o abajo de la pantalla, sobre tus
-          imágenes y videos. Se ve en tus dispositivos que muestran contenido (autorizados, con el contenido habilitado y vigencia activa).</p>
+        <p class="hint"><?= t('Una franja con un mensaje (tira) o una imagen (banner) arriba o abajo de la pantalla, sobre tus imágenes y videos. Se ve en tus dispositivos que muestran contenido (autorizados, con el contenido habilitado y vigencia activa).') ?></p>
         <?= overlayFields(null, 'new-') ?>
-        <p class="hint">Se crea <strong>sin dispositivos</strong>: después, en la lista, usa «Asignar a dispositivos» para elegir
-          en qué pantallas y durante cuánto tiempo (permanente o con fechas) se muestra.</p>
-        <button class="primary" type="submit">Crear</button>
+        <p class="hint"><?= t('Se crea sin dispositivos: después, en la lista, usa «Asignar a dispositivos» para elegir en qué pantallas y durante cuánto tiempo (permanente o con fechas) se muestra.') ?></p>
+        <button class="primary" type="submit"><?= t('Crear') ?></button>
       </form>
     </details>
 
     <div class="section-head">
-      <h2>Mis tiras y banners (<?= count($overlays) ?>)</h2>
-      <span class="hint">Máx. <?= OverlayRepository::maxPerUser() ?> · en cada pantalla se ve una arriba y una abajo
-        (la más concreta y reciente). Si el administrador pone una en la misma posición, se ve la suya.</span>
+      <h2><?= t('Mis tiras y banners') ?> (<?= count($overlays) ?>)</h2>
+      <span class="hint"><?= t('Máx. %d · en cada pantalla se ve una arriba y una abajo (la más concreta y reciente). Si el administrador pone una en la misma posición, se ve la suya.', OverlayRepository::maxPerUser()) ?></span>
     </div>
     <?php if (!$overlays): ?>
-      <div class="card empty block">Todavía no tienes tiras ni banners.</div>
+      <div class="card empty block"><?= t('Todavía no tienes tiras ni banners.') ?></div>
     <?php endif; ?>
     <?php foreach ($overlays as $o): $oid = (int) $o['id']; $o['_img'] = $o['kind'] === 'image' ? '?ovfile=' . $oid : ''; ?>
       <section class="card device">
@@ -1093,36 +1130,36 @@ if ($validity['state'] !== 'active') {
         <div class="meta">
           <?= h(overlaySummary($o)) ?><br>
           <?php if (!overlayAssigned($o)): ?>
-            <span class="badge pending">Sin asignar</span> no se muestra en ninguna pantalla
+            <span class="badge pending"><?= t('Sin asignar') ?></span> <?= t('no se muestra en ninguna pantalla') ?>
           <?php else: ?>
-            Asignada a: <?= $o['scope'] === 'all' ? 'todos mis dispositivos' : count($o['devices']) . ' dispositivo(s)' ?>
+            <?= t('Asignada a:') ?> <?= $o['scope'] === 'all' ? t('todos mis dispositivos') : t('%d dispositivo(s)', count($o['devices'])) ?>
           <?php endif; ?>
         </div>
         <div class="actions">
           <form method="post"><?= csrfField() ?><input type="hidden" name="overlayId" value="<?= $oid ?>">
             <input type="hidden" name="action" value="<?= (int) $o['active'] === 1 ? 'overlay_pause' : 'overlay_resume' ?>">
-            <button class="<?= (int) $o['active'] === 1 ? 'bad' : 'ok' ?>" type="submit"><?= (int) $o['active'] === 1 ? 'Pausar' : 'Activar' ?></button></form>
-          <form method="post" data-confirm="¿Eliminar «<?= h($o['name']) ?>»? Tus pantallas dejarán de mostrarlo."><?= csrfField() ?>
+            <button class="<?= (int) $o['active'] === 1 ? 'bad' : 'ok' ?>" type="submit"><?= (int) $o['active'] === 1 ? t('Pausar') : t('Activar') ?></button></form>
+          <form method="post" data-confirm="<?= h(t('¿Eliminar «%s»? Tus pantallas dejarán de mostrarlo.', $o['name'])) ?>"><?= csrfField() ?>
             <input type="hidden" name="overlayId" value="<?= $oid ?>"><input type="hidden" name="action" value="overlay_delete">
-            <button class="bad" type="submit">Eliminar</button></form>
+            <button class="bad" type="submit"><?= t('Eliminar') ?></button></form>
         </div>
         <!-- Asignación a equipos (aparte de la edición) -->
         <details class="edit" <?= overlayAssigned($o) ? '' : 'open' ?>>
-          <summary>Asignar a dispositivos</summary>
+          <summary><?= t('Asignar a dispositivos') ?></summary>
           <form method="post"><?= csrfField() ?>
             <input type="hidden" name="action" value="overlay_assign"><input type="hidden" name="overlayId" value="<?= $oid ?>">
             <?= overlayAssignFields($o, $devices) ?>
             <!-- Tiempo de visibilidad de esta asignación -->
             <?= scheduleFields($o, 'as' . $oid . '-') ?>
-            <button class="primary" type="submit">Guardar asignación</button>
+            <button class="primary" type="submit"><?= t('Guardar asignación') ?></button>
           </form>
         </details>
         <details class="edit">
-          <summary>Editar</summary>
+          <summary><?= t('Editar') ?></summary>
           <form method="post" autocomplete="off"><?= csrfField() ?>
             <input type="hidden" name="action" value="overlay_update"><input type="hidden" name="overlayId" value="<?= $oid ?>">
             <?= overlayFields($o, 'o' . $oid . '-') ?>
-            <button class="primary" type="submit">Guardar cambios</button>
+            <button class="primary" type="submit"><?= t('Guardar cambios') ?></button>
           </form>
         </details>
       </section>
@@ -1131,48 +1168,47 @@ if ($validity['state'] !== 'active') {
   <?php elseif ($section === 'plan'): ?>
     <!-- ============ MI PLAN (solo lectura; lo asigna y renueva el administrador) ============ -->
     <section class="card block validity <?= h($planState['state']) ?>">
-      <h2>Mi plan</h2>
+      <h2><?= t('Mi plan') ?></h2>
       <?php if ($planState['plan'] === null): ?>
-        <div class="vnum">Sin plan</div>
-        <div class="meta">No tienes un plan asignado: puedes ver y ordenar lo que ya subiste, pero no subir archivos nuevos.
-          Pide al administrador que te asigne uno.</div>
+        <div class="vnum"><?= t('Sin plan') ?></div>
+        <div class="meta"><?= t('No tienes un plan asignado: puedes ver y ordenar lo que ya subiste, pero no subir archivos nuevos. Pide al administrador que te asigne uno.') ?></div>
       <?php else: $pl = $planState['plan']; ?>
         <div class="vnum"><?= h($pl['name']) ?></div>
         <dl class="plan-data">
-          <dt>Estado</dt><dd><?= $planState['state'] === 'active'
-              ? '<strong>Vigente</strong> · quedan ' . (int) $planState['days'] . ($planState['days'] === 1 ? ' día' : ' días')
-              : '<strong>Vencido</strong>: pide al administrador que lo renueve' ?></dd>
-          <dt><?= $planState['state'] === 'active' ? 'Vence el' : 'Venció el' ?></dt><dd><?= $planState['until'] ? dateTag($planState['until']) : '—' ?></dd>
-          <dt>Duración</dt><dd><?= (int) $pl['days'] ?> días por periodo</dd>
-          <dt>Cantidad de contenido</dt><dd><?= (int) $pl['max_files'] ?> archivo(s) · tienes <?= count($mediaList) ?></dd>
-          <dt>Almacenamiento</dt><dd><?= h(PlanRepository::storageText((int) $pl['storage_mb'])) ?> · usas <?= h(formatBytes($usedBytes)) ?></dd>
-          <dt>Costo</dt><dd><?= h(PlanRepository::priceText($pl)) ?> por periodo</dd>
+          <dt><?= t('Estado') ?></dt><dd><?= $planState['state'] === 'active'
+              ? '<strong>' . t('Vigente') . '</strong> · ' . ($planState['days'] === 1 ? t('queda 1 día') : t('quedan %d días', (int) $planState['days']))
+              : '<strong>' . t('Vencido') . '</strong>: ' . t('pide al administrador que lo renueve') ?></dd>
+          <dt><?= $planState['state'] === 'active' ? t('Vence el') : t('Venció el') ?></dt><dd><?= $planState['until'] ? dateTag($planState['until']) : '—' ?></dd>
+          <dt><?= t('Duración') ?></dt><dd><?= t('%d días por periodo', (int) $pl['days']) ?></dd>
+          <dt><?= t('Cantidad de contenido') ?></dt><dd><?= t('%d archivo(s) · tienes %d', (int) $pl['max_files'], count($mediaList)) ?></dd>
+          <dt><?= t('Almacenamiento') ?></dt><dd><?= t('%s · usas %s', h(PlanRepository::storageText((int) $pl['storage_mb'])), h(formatBytes($usedBytes))) ?></dd>
+          <dt><?= t('Costo') ?></dt><dd><?= t('%s por periodo', h(PlanRepository::priceText($pl))) ?></dd>
         </dl>
         <?php if ($planState['state'] === 'active'): ?>
           <progress value="<?= (int) $usedBytes ?>" max="<?= (int) ((int) $pl['storage_mb'] * 1048576) ?>"></progress>
         <?php endif; ?>
       <?php endif; ?>
-      <p class="hint">La vigencia del contenido en tus pantallas: <?= $validity['text'] ?>. Al renovar el plan se suman sus días.</p>
+      <p class="hint"><?= t('La vigencia del contenido en tus pantallas: %s. Al renovar el plan se suman sus días.', $validity['text']) ?></p>
     </section>
     <!-- PLANES DISPONIBLES (2026-11-22): todos, con sus características y el comentario del
          administrador; el suyo va marcado. Para cambiar de plan, el usuario se lo pide al administrador. -->
     <?php if ($allPlans): ?>
       <div class="section-head">
-        <h2>Planes disponibles</h2>
-        <span class="hint">Para cambiar de plan, escríbele al administrador en <a href="?s=mensajes">Mensajes</a>.</span>
+        <h2><?= t('Planes disponibles') ?></h2>
+        <span class="hint"><?= t('Para cambiar de plan, escríbele al administrador en %s.', '<a href="?s=mensajes">' . t('Mensajes') . '</a>') ?></span>
       </div>
       <div class="plan-grid">
         <?php foreach ($allPlans as $ap): $mine = $planState['plan'] !== null && (int) $planState['plan']['id'] === (int) $ap['id']; ?>
           <section class="card plan-card<?= $mine ? ' mine' : '' ?>">
             <div class="plan-head">
               <strong class="plan-name"><?= h($ap['name']) ?></strong>
-              <?php if ($mine): ?><span class="badge authorized">Tu plan</span><?php endif; ?>
+              <?php if ($mine): ?><span class="badge authorized"><?= t('Tu plan') ?></span><?php endif; ?>
             </div>
-            <div class="plan-price"><?= h(PlanRepository::priceText($ap)) ?> <span class="hint">/ <?= (int) $ap['days'] ?> días</span></div>
+            <div class="plan-price"><?= h(PlanRepository::priceText($ap)) ?> <span class="hint">/ <?= t('%d días', (int) $ap['days']) ?></span></div>
             <ul class="plan-features">
-              <li><?= (int) $ap['max_files'] ?> archivo(s) de contenido</li>
-              <li><?= h(PlanRepository::storageText((int) $ap['storage_mb'])) ?> de almacenamiento</li>
-              <li><?= (int) $ap['days'] ?> días por periodo</li>
+              <li><?= t('%d archivo(s) de contenido', (int) $ap['max_files']) ?></li>
+              <li><?= t('%s de almacenamiento', h(PlanRepository::storageText((int) $ap['storage_mb']))) ?></li>
+              <li><?= t('%d días por periodo', (int) $ap['days']) ?></li>
             </ul>
             <?php if (!empty($ap['comment'])): ?><p class="plan-comment"><?= nl2br(h((string) $ap['comment'])) ?></p><?php endif; ?>
           </section>
@@ -1181,13 +1217,13 @@ if ($validity['state'] !== 'active') {
     <?php endif; ?>
     <!-- Historial de asignaciones y renovaciones, con su ID de transacción; se busca por ID y fechas -->
     <section class="card block" id="historial">
-      <h2>Historial de renovaciones</h2>
+      <h2><?= t('Historial de renovaciones') ?></h2>
       <?= planHistoryFilter(['s' => 'plan'], $planFilter) ?>
       <?php $filtering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
       <?php if (!$planHistory): ?>
-        <p class="hint"><?= $filtering ? 'Ninguna transacción coincide con la búsqueda.' : 'Todavía no hay renovaciones.' ?></p>
+        <p class="hint"><?= $filtering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay renovaciones.') ?></p>
       <?php else: ?>
-        <?= $filtering ? '<p class="hint">' . count($planHistory) . ' transacción(es) encontrada(s).</p>' : '' ?>
+        <?= $filtering ? '<p class="hint">' . t('%d transacción(es) encontrada(s).', count($planHistory)) . '</p>' : '' ?>
         <?= planHistoryTable($planHistory, false, 'history') ?>
       <?php endif; ?>
     </section>
@@ -1195,16 +1231,16 @@ if ($validity['state'] !== 'active') {
   <?php elseif ($section === 'mensajes'): ?>
     <!-- ======================= MENSAJES con el administrador ======================= -->
     <div class="section-head">
-      <h2>Mensajes</h2>
-      <span class="hint">Tu conversación con el administrador.</span>
+      <h2><?= t('Mensajes') ?></h2>
+      <span class="hint"><?= t('Tu conversación con el administrador.') ?></span>
     </div>
     <section class="card block">
-      <?= messageThread($msgThread, 'user', 'Administrador') ?>
+      <?= messageThread($msgThread, 'user', t('Administrador')) ?>
       <form method="post" class="msg-form" autocomplete="off"><?= csrfField() ?>
         <input type="hidden" name="action" value="msg_send">
-        <?= messageField('msg-body', 'Escribe al administrador…') ?>
-        <div class="row"><button class="primary" type="submit">Enviar</button>
-          <span class="hint">Máximo <?= MessageRepository::MAX_BODY ?> caracteres.</span></div>
+        <?= messageField('msg-body', t('Escribe al administrador…')) ?>
+        <div class="row"><button class="primary" type="submit"><?= t('Enviar') ?></button>
+          <span class="hint"><?= t('Máximo %d caracteres.', MessageRepository::MAX_BODY) ?></span></div>
       </form>
     </section>
 
@@ -1213,39 +1249,39 @@ if ($validity['state'] !== 'active') {
     <div class="two">
       <?php if (!$mustChange): ?>
         <section class="card">
-          <h2>Mis datos</h2>
+          <h2><?= t('Mis datos') ?></h2>
           <dl class="data">
-            <dt>Empresa</dt><dd><?= h($user['company']) ?></dd>
+            <dt><?= t('Empresa') ?></dt><dd><?= h($user['company']) ?></dd>
             <dt>Email</dt><dd><?= h($user['email']) ?></dd>
-            <dt>Teléfono</dt><dd><?= h($user['phone']) ?></dd>
-            <dt>Cliente desde</dt><dd><?= dateTag($user['created_at']) ?></dd>
-            <dt>Vigencia</dt><dd><?= $validity['text'] ?></dd>
+            <dt><?= t('Teléfono') ?></dt><dd><?= h($user['phone']) ?></dd>
+            <dt><?= t('Cliente desde') ?></dt><dd><?= dateTag($user['created_at']) ?></dd>
+            <dt><?= t('Vigencia') ?></dt><dd><?= $validity['text'] ?></dd>
             <!-- Ligas asignadas por el administrador (opciones del selector de ligas de sus TV) -->
-            <dt>Ligas</dt><dd><?php if (!$myLeagues): ?>Ninguna asignada (tus dispositivos quedan sin liga)<?php else: ?>
+            <dt><?= t('Ligas') ?></dt><dd><?php if (!$myLeagues): ?><?= t('Ninguna asignada (tus dispositivos quedan sin liga)') ?><?php else: ?>
               <?php foreach ($myLeagues as $i => $l): ?><?= $i ? '<br>' : '' ?><strong><?= h($l['type_name']) ?></strong> · <?= h($l['name']) ?>
                 <span class="hint"><?= h(str_replace(',', ', ', $l['codes'])) ?></span><?php endforeach; ?>
             <?php endif; ?></dd>
           </dl>
-          <p class="hint">Para cambiar estos datos, contacta al administrador.</p>
+          <p class="hint"><?= t('Para cambiar estos datos, contacta al administrador.') ?></p>
         </section>
       <?php endif; ?>
       <!-- Cambio de contraseña (obligatorio si es la temporal) -->
       <form class="card" method="post" autocomplete="off">
         <?= csrfField() ?>
-        <h2><?= $mustChange ? 'Elige tu contraseña' : 'Cambiar contraseña' ?></h2>
+        <h2><?= $mustChange ? t('Elige tu contraseña') : t('Cambiar contraseña') ?></h2>
         <?php if ($mustChange): ?>
-          <p class="hint">Estás usando una contraseña temporal. Cámbiala para entrar a tu cuenta.</p>
+          <p class="hint"><?= t('Estás usando una contraseña temporal. Cámbiala para entrar a tu cuenta.') ?></p>
         <?php endif; ?>
         <input type="hidden" name="action" value="password">
         <!-- Campo oculto con el email: ayuda a los gestores de contraseñas -->
         <input type="email" name="username" value="<?= h($user['email']) ?>" autocomplete="username" hidden>
-        <label for="current"><?= $mustChange ? 'Contraseña temporal' : 'Contraseña actual' ?></label>
+        <label for="current"><?= $mustChange ? t('Contraseña temporal') : t('Contraseña actual') ?></label>
         <input type="password" id="current" name="current" autocomplete="current-password" required>
-        <label for="new">Contraseña nueva (mínimo <?= UserRepository::MIN_PASSWORD ?> caracteres)</label>
+        <label for="new"><?= t('Contraseña nueva (mínimo %d caracteres)', UserRepository::MIN_PASSWORD) ?></label>
         <input type="password" id="new" name="new" autocomplete="new-password" minlength="<?= UserRepository::MIN_PASSWORD ?>" required>
-        <label for="confirm">Repite la contraseña nueva</label>
+        <label for="confirm"><?= t('Repite la contraseña nueva') ?></label>
         <input type="password" id="confirm" name="confirm" autocomplete="new-password" minlength="<?= UserRepository::MIN_PASSWORD ?>" required>
-        <p><button class="primary" type="submit">Guardar contraseña</button></p>
+        <p><button class="primary" type="submit"><?= t('Guardar contraseña') ?></button></p>
       </form>
     </div>
   <?php endif; ?>
@@ -1263,7 +1299,7 @@ if ($validity['state'] !== 'active') {
       form.addEventListener("submit", function () {
         var b = document.getElementById("uploadBtn");
         b.disabled = true;
-        b.textContent = "Subiendo… no cierres la página";
+        b.textContent = <?= json_encode(t('Subiendo… no cierres la página'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) ?>;
       });
     }
 
