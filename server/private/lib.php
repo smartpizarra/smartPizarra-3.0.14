@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.6 (2026-11-17)
+// Versión del archivo: 1.0.7 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -683,6 +683,9 @@ final class DeviceRepository
         $sql = 'SELECT d.*, u.company AS user_company, u.email AS user_email, u.content_until AS user_content_until,
                   p.id AS profile_id, p.brand AS profile_brand, p.model AS profile_model,
                   p.case_mac AS profile_case_mac, p.installed_on AS profile_installed_on,
+                  -- mac_from_exists: el equipo anterior ("antes en SP-…") sigue en la base; si se
+                  -- eliminó, el panel muestra el ID sin enlace (el enlace llevaba a una lista vacía)
+                  (d.mac_from IS NOT NULL AND EXISTS (SELECT 1 FROM sp_devices o WHERE o.device_id = d.mac_from)) AS mac_from_exists,
                   (SELECT COUNT(*) FROM sp_boots b WHERE b.device_id = d.device_id) AS boots,
                   (SELECT MAX(b.booted_at) FROM sp_boots b WHERE b.device_id = d.device_id) AS last_boot_at
                 FROM sp_devices d LEFT JOIN sp_users u ON u.id = d.user_id
@@ -751,9 +754,18 @@ final class DeviceRepository
      * @param int|null $userId Igual que en search(): null todos, 0 sin asignar, >0 ese usuario.
      * @return array<string,int> Cantidad de equipos por estado (+ "all").
      */
-    public static function counts(?int $userId = null): array
+    public static function counts(?int $userId = null, string $search = '', bool $admin = false): array
     {
         $out = ['pending' => 0, 'authorized' => 0, 'revoked' => 0, 'all' => 0];
+        if ($search !== '') {
+            // Con BÚSQUEDA, las pestañas cuentan lo mismo que mostraría la lista
+            // (antes contaban todos los equipos y la lista salía vacía con "Pendientes (2)")
+            foreach (['pending', 'authorized', 'revoked'] as $st) {
+                $out[$st] = self::searchCount($st, $search, $userId, $admin);
+                $out['all'] += $out[$st];
+            }
+            return $out;
+        }
         $where = $userId === 0 ? ' WHERE user_id IS NULL' : ($userId !== null ? ' WHERE user_id = ?' : '');
         $stmt = Database::pdo()->prepare('SELECT status, COUNT(*) n FROM sp_devices' . $where . ' GROUP BY status');
         $stmt->execute($userId ? [$userId] : []);

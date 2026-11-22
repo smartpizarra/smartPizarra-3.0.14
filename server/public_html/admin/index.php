@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.6 (2026-11-17)
+// Versión del archivo: 1.0.7 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -1200,7 +1200,8 @@ try {
         : [];
     // Estado de la cola de descargas (recuadro de la lista)
     $queueStatus = $loggedIn && $view === 'list' ? DownloadQueue::status() : null;
-    $counts = $loggedIn ? DeviceRepository::counts($userFilter) : [];
+    // Cantidades de las pestañas: con búsqueda, solo de los equipos que coinciden
+    $counts = $loggedIn ? DeviceRepository::counts($userFilter, $view === 'list' ? $q : '', true) : [];
     // Contenido de los usuarios (?view=media[&user=ID])
     $mediaUser = $userFilter !== null && $userFilter > 0 ? $userFilter : null;
     $mediaAll = $loggedIn && $view === 'media' ? MediaRepository::allForAdmin($mediaUser) : [];
@@ -2375,7 +2376,9 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
 
   <?php if (!$devices): ?>
     <div class="card empty">
-      <?= $q !== '' ? 'Ningún equipo coincide con «' . h($q) . '». Si es nuevo, abre en la TV la pantalla del código QR para que se registre.' : 'No hay equipos en esta lista.' ?>
+      <?= $q !== '' ? 'Ningún equipo coincide con «' . h($q) . '». Si es nuevo, abre en la TV la pantalla del código QR para que se registre.'
+          // Salida directa: la búsqueda se mantiene al cambiar de pestaña
+          . ' <a href="' . h(panelUrl(['filter' => $filter, 'user' => $userParam])) . '">Quitar la búsqueda</a>' : 'No hay equipos en esta lista.' ?>
     </div>
   <?php endif; ?>
 
@@ -2479,8 +2482,13 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <!-- MAC (la envía loading.html; una MAC solo está en un equipo) y, si la tenía otro equipo, cuál -->
         MAC: <?= !empty($d['mac']) ? '<span class="device-mac">' . h($d['mac']) . '</span>'
             . ' <span class="owner">· desde ' . dateTag($d['mac_at']) . '</span>'
-            . (!empty($d['mac_from']) ? ' <span class="owner">· antes en <a href="./?' . h(http_build_query(['filter' => 'all', 'q' => $d['mac_from']])) . '">'
-              . h($d['mac_from']) . '</a> (equipo restablecido)</span>' : '')
+            // El equipo anterior: enlace si sigue en la base; si se eliminó, solo el ID (el
+            // enlace llevaba a «Ningún equipo coincide»)
+            . (!empty($d['mac_from']) ? ' <span class="owner">· antes en '
+              . (!empty($d['mac_from_exists'])
+                  ? '<a href="./?' . h(http_build_query(['filter' => 'all', 'q' => $d['mac_from']])) . '">' . h($d['mac_from']) . '</a> (equipo restablecido)'
+                  : h($d['mac_from']) . ' (equipo restablecido, ya eliminado)')
+              . '</span>' : '')
           : '<em>sin MAC</em>' ?><br>
         <!-- Última conexión: cualquier consulta de las páginas de la TV (device.php / media.php) o señal de la app nativa (ping.php) -->
         Última conexión: <?= onlineTag($d['online_at'] ?? null, $onlineTimeout) ?><br>
