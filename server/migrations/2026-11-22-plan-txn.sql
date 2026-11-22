@@ -1,3 +1,4 @@
+-- Versión del archivo: 1.0.0 (2026-11-22)
 -- =====================================================================
 --  MIGRACIÓN 2026-11-22: ID DE TRANSACCIÓN EN EL HISTORIAL DE PLANES
 --  Solo si la base YA existía (si importas schema.sql desde cero, ya
