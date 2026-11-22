@@ -1,3 +1,4 @@
+/* Versión del archivo: 1.0.0 (2026-11-22) */
 /*
  * Smart Pizarra · Freno del reloj de la pizarra externa (SmartBet "PizarrasV2")
  *
