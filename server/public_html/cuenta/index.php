@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.4 (2026-11-17)
+// Versión del archivo: 1.0.5 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -39,6 +39,8 @@
  *  - LIGA DE CADA EQUIPO (acción device_league): para cada uno de sus
  *    equipos elige "Sin liga" o UNA de las ligas que le asignó el
  *    administrador (es el ÚNICO sitio donde se cambia la liga de una TV).
+ *    Si el equipo tiene el CONTENIDO HABILITADO, el selector no se muestra y
+ *    la acción se rechaza (2026-11-22).
  *    La TV la recibe en api/media.php (mirror.html, ≈ 1 min) o
  *    api/device.php y la guarda en su localStorage (smartpizarra.league =
  *    código del tipo, smartpizarra.leagues = códigos; "" sin liga).
@@ -351,6 +353,10 @@ try {
             $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
             if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
                 redirectWith('Ese dispositivo no está asignado a tu cuenta.', 's=equipos');
+            }
+            // Con el contenido habilitado el usuario no elige liga (el selector no se muestra)
+            if (DeviceRepository::mediaEnabled($device)) {
+                redirectWith('Este dispositivo tiene el contenido habilitado: su liga no se cambia desde aquí.', 's=equipos');
             }
             $raw = param($_POST, 'leagueId');
             $leagueId = ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null; // "" = Sin liga
@@ -816,7 +822,7 @@ if ($validity['state'] !== 'active') {
     <!-- ============ EQUIPOS (solo el nombre es editable) ============ -->
     <div class="section-head">
       <h2>Mis dispositivos</h2>
-      <span class="hint">Puedes ponerle un nombre y una liga a cada dispositivo. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
+      <span class="hint">Puedes ponerle un nombre a cada dispositivo y una liga a los que no tienen el contenido habilitado. Autorizar, revocar o habilitar el contenido lo hace el administrador.</span>
     </div>
     <?php if (!$devices): ?>
       <div class="card empty block">Todavía no tienes dispositivos asignados.</div>
@@ -869,8 +875,11 @@ if ($validity['state'] !== 'active') {
                  maxlength="100" placeholder="Nombre del dispositivo (p. ej. Local Centro)">
           <button type="submit">Guardar nombre</button>
         </form>
-        <!-- Liga de este equipo: "Sin liga" o UNA de mis ligas (llega a la TV en ≈ 1 min) -->
-        <?php if (!$myLeagues): ?>
+        <!-- Liga de este equipo: "Sin liga" o UNA de mis ligas (llega a la TV en ≈ 1 min).
+             Con el CONTENIDO HABILITADO no se muestra (2026-11-22, petición del usuario):
+             la TV muestra imágenes/videos y el usuario no elige liga. -->
+        <?php if ($mOn): ?>
+        <?php elseif (!$myLeagues): ?>
           <p class="hint">Liga: sin liga (el administrador todavía no te asignó ligas).</p>
         <?php else: $devLeague = LeagueRepository::deviceLeague($d); $did = h($d['device_id']); ?>
           <form method="post" class="league-form"><?= csrfField() ?>
