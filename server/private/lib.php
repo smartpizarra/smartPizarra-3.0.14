@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.17 (2026-11-23)
+// Versión del archivo: 1.0.18 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -3911,13 +3911,20 @@ final class CreditRepository
      * @param int|null $userId Un usuario o null = todos (con la empresa).
      * @return array<int,array<string,mixed>>
      */
-    public static function search(?int $userId, string $txn, string $from, string $to, int $tzOffset): array
+    public static function search(?int $userId, string $txn, string $from, string $to, int $tzOffset, string $device = ''): array
     {
         $where = [];
         $args = [];
         if ($userId !== null) {
             $where[] = 'm.user_id = ?';
             $args[] = $userId;
+        }
+        // Dispositivo: el nombre guardado en el movimiento, el nombre actual o el ID (un trozo vale)
+        $device = trim($device);
+        if ($device !== '') {
+            $like = '%' . addcslashes($device, '%_\\') . '%';
+            $where[] = '(m.device_name LIKE ? OR d.label LIKE ? OR m.device_id LIKE ?)';
+            array_push($args, $like, $like, $like);
         }
         $txn = strtoupper((string) preg_replace('/[^A-Za-z0-9\-]/', '', $txn));
         if ($txn !== '') {

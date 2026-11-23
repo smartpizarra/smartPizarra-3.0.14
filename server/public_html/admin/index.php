@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.16 (2026-11-22)
+// Versión del archivo: 1.0.17 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -1420,9 +1420,9 @@ try {
     $tariffs = $loggedIn && ($view === 'tariffs' || $userCard) ? TariffRepository::all() : [];
     $planFilterC = planHistoryParams();
     $userCredits = $loggedIn && $userCard
-        ? CreditRepository::search((int) $userCard['id'], $planFilterC['tq'], $planFilterC['tf'], $planFilterC['tt'], $planFilterC['tz']) : [];
+        ? CreditRepository::search((int) $userCard['id'], $planFilterC['tq'], $planFilterC['tf'], $planFilterC['tt'], $planFilterC['tz'], $planFilterC['td']) : [];
     $allCredits = $loggedIn && $view === 'tariffs'
-        ? CreditRepository::search(null, $planFilterC['tq'], $planFilterC['tf'], $planFilterC['tt'], $planFilterC['tz']) : [];
+        ? CreditRepository::search(null, $planFilterC['tq'], $planFilterC['tf'], $planFilterC['tt'], $planFilterC['tz'], $planFilterC['td']) : [];
     // PLANES (2026-11-22): la vista ?view=plans y el selector de la ficha del usuario; su plan e historial
     $plans = $loggedIn && ($view === 'plans' || $userCard) ? PlanRepository::all() : [];
     $userPlan = $loggedIn && $userCard ? PlanRepository::forUser($userCard) : null;
@@ -1501,7 +1501,7 @@ try {
     $tariffs = [];
     $userCredits = [];
     $allCredits = [];
-    $planFilterC = ['tq' => '', 'tf' => '', 'tt' => '', 'tz' => 0];
+    $planFilterC = ['tq' => '', 'tf' => '', 'tt' => '', 'tz' => 0, 'td' => ''];
     $plans = [];
     $userPlan = null;
     $userPlanHistory = [];
@@ -1840,10 +1840,10 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         <div class="meta"><?= t('Todavía no hay tarifas: créalas en') ?> <a href="?view=tariffs"><?= t('Tarifas') ?></a>.</div>
       <?php endif; ?>
       <!-- Movimientos de créditos (lo mismo que ve el usuario en /cuenta/), con ID de transacción y búsqueda -->
-      <?php $crFiltering = $planFilterC['tq'] !== '' || $planFilterC['tf'] !== '' || $planFilterC['tt'] !== ''; ?>
+      <?php $crFiltering = $planFilterC['tq'] !== '' || $planFilterC['tf'] !== '' || $planFilterC['tt'] !== '' || $planFilterC['td'] !== ''; ?>
       <details class="edit" id="historial" <?= $crFiltering ? 'open' : '' ?>>
         <summary><?= t('Movimientos de créditos (%d)', count($userCredits)) ?></summary>
-        <?= planHistoryFilter(['view' => 'users', 'user' => (string) $uid], $planFilterC) ?>
+        <?= planHistoryFilter(['view' => 'users', 'user' => (string) $uid], $planFilterC, 'historial', true) ?>
         <?php if (!$userCredits): ?>
           <p class="owner"><?= $crFiltering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay movimientos.') ?></p>
         <?php else: ?>
@@ -2339,11 +2339,11 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </section>
     <?php endforeach; ?>
     <!-- Movimientos de créditos de todos los usuarios (ID de transacción y fechas) -->
-    <?php $crFiltering = $planFilterC['tq'] !== '' || $planFilterC['tf'] !== '' || $planFilterC['tt'] !== ''; ?>
+    <?php $crFiltering = $planFilterC['tq'] !== '' || $planFilterC['tf'] !== '' || $planFilterC['tt'] !== '' || $planFilterC['td'] !== ''; ?>
     <section class="card" id="historial">
       <h2><?= t('Buscar transacciones') ?></h2>
       <div class="meta"><?= t('Recargas, descuentos y cobros diarios de todos los usuarios, por ID de transacción o por fechas (máx. 500).') ?></div>
-      <?= planHistoryFilter(['view' => 'tariffs'], $planFilterC) ?>
+      <?= planHistoryFilter(['view' => 'tariffs'], $planFilterC, 'historial', true) ?>
       <?php if (!$allCredits): ?>
         <p class="owner"><?= $crFiltering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay transacciones.') ?></p>
       <?php else: ?>

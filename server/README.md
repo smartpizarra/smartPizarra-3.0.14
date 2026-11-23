@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.18 (2026-11-23) -->
+<!-- Versión del archivo: 1.0.19 (2026-11-23) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -316,7 +316,7 @@ Para las **TARIFAS Y CRÉDITOS** (2026-11-23; **sustituyen a los planes y a la v
 
 1. Ejecuta una vez `migrations/2026-11-23-tariffs.sql` (tablas `sp_tariffs` y `sp_credit_moves`, columnas `sp_users.tariff_id` y `credits`, `sp_devices.media_paid_until`). Si sale _Duplicate column name 'tariff_id'_, ya estaba hecha.
 2. Sube `private/lib.php`, `private/web.php`, `private/i18n_en_admin.php`, `admin/index.php`, `cuenta/index.php` y `api/media.php`.
-3. **Nombre del dispositivo en los movimientos** (2026-11-23): ejecuta `migrations/2026-11-23-credit-device-name.sql` (columna `sp_credit_moves.device_name`). Cada cobro guarda el nombre que tenía el dispositivo en ese momento; el historial (columna *Dispositivo*: nombre e ID) lo conserva aunque luego se renombre o se elimine.
+3. **Nombre del dispositivo en los movimientos** (2026-11-23): ejecuta `migrations/2026-11-23-credit-device-name.sql` (columna `sp_credit_moves.device_name`). Cada cobro guarda el nombre que tenía el dispositivo en ese momento; el historial (columna *Dispositivo*: nombre e ID) lo conserva aunque luego se renombre o se elimine. El buscador de movimientos tiene el campo **Dispositivo**: filtra por el nombre (completo o un trozo, el que tenía al cobrar o el actual) o por el ID, en `/cuenta/` y en el panel.
 4. **Antes de que las TV vuelvan a consultar**, crea las tarifas, asígnalas y recarga créditos: un dispositivo con el contenido activado cuyo usuario no tiene tarifa o saldo se desactiva en su próxima consulta.
 
 Cómo funciona:

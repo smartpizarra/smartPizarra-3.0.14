@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-23)
+// Versión del archivo: 1.0.3 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - TRADUCCIONES AL INGLÉS, FASE 2 (2026-11-22)
@@ -870,4 +870,6 @@ return [
     'Dispositivo' => 'Device',
     'Falta el nombre del dispositivo en los movimientos (columna sp_credit_moves.device_name):' => 'The device name in the movements (sp_credit_moves.device_name column) is missing:',
     'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-23-credit-device-name.sql.' => 'run server/migrations/2026-11-23-credit-device-name.sql in phpMyAdmin (SQL tab).',
+    // Filtro por dispositivo (2026-11-23)
+    'Nombre o ID' => 'Name or ID',
 ];

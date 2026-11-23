@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.11 (2026-11-22)
+// Versión del archivo: 1.0.12 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -713,7 +713,7 @@ $credits = $user !== null ? (float) $user['credits'] : 0.0;
 $daysLeft = $daily['cost'] > 0 ? (int) floor($credits / $daily['cost']) : null;
 $planFilter = planHistoryParams();
 $creditMoves = $user !== null && $section === 'creditos'
-    ? CreditRepository::search((int) $user['id'], $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz']) : [];
+    ? CreditRepository::search((int) $user['id'], $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz'], $planFilter['td']) : [];
 $allTariffs = $user !== null && $section === 'creditos' ? TariffRepository::all() : [];
 $cur = $tariff['currency'] ?? '';
 $quota = $planLimits['bytes'] ?? 0;
@@ -1249,8 +1249,8 @@ $myLeagues = $user !== null && in_array($section, ['cuenta', 'equipos'], true) ?
     <!-- Historial de movimientos (recargas, descuentos, cobros diarios), con ID de transacción y búsqueda -->
     <section class="card block" id="historial">
       <h2><?= t('Movimientos de créditos') ?></h2>
-      <?= planHistoryFilter(['s' => 'creditos'], $planFilter) ?>
-      <?php $filtering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
+      <?= planHistoryFilter(['s' => 'creditos'], $planFilter, 'historial', true) ?>
+      <?php $filtering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== '' || $planFilter['td'] !== ''; ?>
       <?php if (!$creditMoves): ?>
         <p class="hint"><?= $filtering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay movimientos.') ?></p>
       <?php else: ?>

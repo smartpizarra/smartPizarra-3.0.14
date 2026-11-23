@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.5 (2026-11-23)
+// Versión del archivo: 1.0.6 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - UTILIDADES DE LAS PÁGINAS WEB
@@ -751,8 +751,10 @@ function planHistoryParams(): array
     $tq = mb_substr(trim(param($_GET, 'tq')), 0, 20);
     $tf = param($_GET, 'tf');
     $tt = param($_GET, 'tt');
+    // td: dispositivo (nombre o ID, un trozo vale) para los movimientos de créditos (2026-11-23)
+    $td = mb_substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', param($_GET, 'td'))), 0, 60);
     return ['tq' => $tq, 'tf' => PlanRepository::validDate($tf) ? $tf : '', 'tt' => PlanRepository::validDate($tt) ? $tt : '',
-        'tz' => (int) param($_GET, 'tz')];
+        'tz' => (int) param($_GET, 'tz'), 'td' => $td];
 }
 
 /**
@@ -761,7 +763,7 @@ function planHistoryParams(): array
  * @param array{tq:string,tf:string,tt:string,tz:int} $f Filtros actuales.
  * @param string $anchor Ancla a la que vuelve la página (#historial).
  */
-function planHistoryFilter(array $keep, array $f, string $anchor = 'historial'): string
+function planHistoryFilter(array $keep, array $f, string $anchor = 'historial', bool $withDevice = false): string
 {
     $html = '<form method="get" class="history-filter" action="#' . h($anchor) . '">';
     foreach ($keep as $k => $v) {
@@ -769,10 +771,12 @@ function planHistoryFilter(array $keep, array $f, string $anchor = 'historial'):
     }
     $html .= '<input type="hidden" name="tz" value="0" data-tz>'
         . '<label>' . t('ID de transacción') . '<input type="search" name="tq" value="' . h($f['tq']) . '" maxlength="20" placeholder="TX-20261122-4F7A2C" autocapitalize="characters" spellcheck="false"></label>'
+        // Campo Dispositivo: solo en el historial de créditos
+        . ($withDevice ? '<label>' . t('Dispositivo') . '<input type="search" name="td" value="' . h($f['td'] ?? '') . '" maxlength="60" placeholder="' . h(t('Nombre o ID')) . '"></label>' : '')
         . '<label>' . t('Desde') . '<input type="date" name="tf" value="' . h($f['tf']) . '"></label>'
         . '<label>' . t('Hasta') . '<input type="date" name="tt" value="' . h($f['tt']) . '"></label>'
         . '<button type="submit">' . t('Buscar') . '</button>';
-    if ($f['tq'] !== '' || $f['tf'] !== '' || $f['tt'] !== '') {
+    if ($f['tq'] !== '' || $f['tf'] !== '' || $f['tt'] !== '' || ($withDevice && ($f['td'] ?? '') !== '')) {
         $html .= ' <a class="btn" href="?' . h(http_build_query($keep)) . '#' . h($anchor) . '">' . t('Ver todo') . '</a>';
     }
     return $html . '</form>';
