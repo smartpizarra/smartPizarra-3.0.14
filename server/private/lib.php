@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.16 (2026-11-22)
+// Versión del archivo: 1.0.17 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -300,6 +300,14 @@ final class Database
         if (!in_array('txn_id', $renewalCols, true)) {
             return t('Falta el ID de transacción del historial de planes (columna sp_plan_renewals.txn_id):') . ' '
                 . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plan-txn.sql.');
+        }
+        // Nombre del dispositivo en los movimientos de créditos (2026-11-23)
+        if (in_array('sp_credit_moves', $tables, true)) {
+            $moveCols = $pdo->query('SHOW COLUMNS FROM sp_credit_moves')->fetchAll(PDO::FETCH_COLUMN);
+            if (!in_array('device_name', $moveCols, true)) {
+                return t('Falta el nombre del dispositivo en los movimientos (columna sp_credit_moves.device_name):') . ' '
+                    . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-23-credit-device-name.sql.');
+            }
         }
         // Tarifas y créditos (2026-11-23)
         if (!in_array('sp_tariffs', $tables, true) || !in_array('sp_credit_moves', $tables, true) || !in_array('tariff_id', $userCols, true)
@@ -3692,11 +3700,19 @@ final class CreditRepository
                                  int $images = 0, int $videos = 0, ?string $note = null): string
     {
         $txn = self::newTxnId();
+        // Nombre que tiene AHORA el dispositivo: queda guardado en el movimiento (2026-11-23)
+        $name = null;
+        if ($deviceId !== null) {
+            $q = Database::pdo()->prepare('SELECT label FROM sp_devices WHERE device_id = ?');
+            $q->execute([$deviceId]);
+            $label = trim((string) $q->fetchColumn());
+            $name = $label === '' ? null : mb_substr($label, 0, 100);
+        }
         Database::pdo()->prepare(
-            'INSERT INTO sp_credit_moves (txn_id, user_id, kind, amount, balance_after, device_id, images, videos, note, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO sp_credit_moves (txn_id, user_id, kind, amount, balance_after, device_id, device_name, images, videos, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         )->execute([$txn, $userId, $kind, number_format($amount, 4, '.', ''), number_format($balance, 4, '.', ''),
-            $deviceId, $images, $videos, $note, Database::now()]);
+            $deviceId, $name, $images, $videos, $note, Database::now()]);
         return $txn;
     }
 

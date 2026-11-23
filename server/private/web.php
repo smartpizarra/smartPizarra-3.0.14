@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.4 (2026-11-22)
+// Versión del archivo: 1.0.5 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - UTILIDADES DE LAS PÁGINAS WEB
@@ -869,14 +869,19 @@ function creditHistoryTable(array $rows, bool $withUser, string $class): string
 {
     $kinds = ['topup' => t('Recarga'), 'adjust' => t('Descuento'), 'charge' => t('Cobro diario'), 'off' => t('Desactivado por saldo')];
     $html = '<div class="table-wrap"><table class="' . h($class) . '"><tr><th>' . t('ID de transacción') . '</th><th>' . t('Fecha') . '</th>'
-        . ($withUser ? '<th>' . t('Usuario') . '</th>' : '') . '<th>' . t('Movimiento') . '</th><th>' . t('Detalle') . '</th><th>'
+        . ($withUser ? '<th>' . t('Usuario') . '</th>' : '') . '<th>' . t('Movimiento') . '</th><th>' . t('Dispositivo') . '</th><th>' . t('Detalle') . '</th><th>'
         . t('Importe') . '</th><th>' . t('Saldo') . '</th></tr>';
     foreach ($rows as $r) {
-        // Detalle: dispositivo y lo cobrado (imágenes / videos) o la nota del administrador
+        // Dispositivo: el nombre que tenía al cobrar (o el actual) + su ID
+        $device = '—';
+        if (!empty($r['device_id'])) {
+            $dname = (string) ($r['device_name'] ?? '') !== '' ? (string) $r['device_name'] : (string) ($r['device_label'] ?? '');
+            $device = ($dname !== '' ? '<strong>' . h($dname) . '</strong><br>' : '') . '<span class="owner">' . h((string) $r['device_id']) . '</span>';
+        }
+        // Detalle: lo cobrado (imágenes / videos) o la nota del administrador
         $detail = '';
         if (!empty($r['device_id'])) {
-            $detail = h((string) ($r['device_label'] ?: $r['device_id']))
-                . ' <span class="owner">(' . t('%d imagen(es), %d video(s)', (int) $r['images'], (int) $r['videos']) . ')</span>';
+            $detail = t('%d imagen(es), %d video(s)', (int) $r['images'], (int) $r['videos']);
         }
         if (!empty($r['note'])) {
             $detail .= ($detail !== '' ? ' · ' : '') . h(t((string) $r['note']));
@@ -886,7 +891,7 @@ function creditHistoryTable(array $rows, bool $withUser, string $class): string
             . ($withUser ? '<td>' . ($r['user_company'] !== null
                 ? '<a href="./?' . h(http_build_query(['view' => 'users', 'user' => (int) $r['user_id']])) . '">' . h((string) $r['user_company']) . '</a>'
                 : '<em>' . t('usuario eliminado') . '</em>') . '</td>' : '')
-            . '<td>' . ($kinds[$r['kind']] ?? h((string) $r['kind'])) . '</td><td>' . ($detail !== '' ? $detail : '—') . '</td>'
+            . '<td>' . ($kinds[$r['kind']] ?? h((string) $r['kind'])) . '</td><td>' . $device . '</td><td>' . ($detail !== '' ? $detail : '—') . '</td>'
             . '<td class="' . ($amount > 0 ? 'amount-plus' : ($amount < 0 ? 'amount-minus' : '')) . '">' . ($amount > 0 ? '+' : '')
             . h(TariffRepository::num($amount)) . '</td><td>' . h(TariffRepository::num($r['balance_after'])) . '</td></tr>';
     }

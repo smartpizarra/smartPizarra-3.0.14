@@ -1,4 +1,4 @@
--- Versión del archivo: 1.0.9 (2026-11-22)
+-- Versión del archivo: 1.0.10 (2026-11-23)
 -- =====================================================================
 --  SMART PIZARRA - BASE DE DATOS DE DISPOSITIVOS (MySQL / MariaDB)
 --  Importar UNA vez en phpMyAdmin (hPanel de Hostinger > Bases de datos
@@ -418,6 +418,7 @@ CREATE TABLE IF NOT EXISTS sp_credit_moves (
   amount        DECIMAL(12,4) NOT NULL,               -- + recarga / - descuento o cobro / 0 desactivación
   balance_after DECIMAL(12,4) NOT NULL,               -- saldo después del movimiento
   device_id     VARCHAR(32)   NULL DEFAULT NULL,      -- equipo del cobro (sin FK: el historial se conserva)
+  device_name   VARCHAR(100)  NULL DEFAULT NULL,      -- nombre del equipo al cobrar. Ver migrations/2026-11-23-credit-device-name.sql
   images        INT UNSIGNED  NOT NULL DEFAULT 0,     -- imágenes cobradas
   videos        INT UNSIGNED  NOT NULL DEFAULT 0,     -- videos cobrados
   note          VARCHAR(255)  NULL DEFAULT NULL,      -- nota del administrador o detalle
