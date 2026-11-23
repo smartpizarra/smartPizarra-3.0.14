@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.16 (2026-11-22) -->
+<!-- Versión del archivo: 1.0.17 (2026-11-22) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -312,7 +312,25 @@ Cómo funciona:
 
 **Contenido habilitado en el JSON de todas las páginas** (2026-11-12): `api/device.php` devuelve también `"mediaEnabled": true|false`, el permiso de contenido que da el administrador en la tarjeta del equipo (`api/media.php` ya lo devolvía). Las 6 páginas de Kodular (`loading`, `config`, `connection`, `fingerprint`, `mirror` y `none`) lo guardan en `smartpizarra.mediaEnabled` (`"true"`/`"false"`; `loading.html` lo crea con `"false"` si no existe o no es válido) cada vez que el servidor responde y lo envían **siempre** en su JSON a la app como `"mediaEnabled": true|false` (`false` mientras no se sepa). Sube `api/device.php` y las 6 páginas a los assets de Kodular.
 
-Para los **PLANES de contenido** (2026-11-22; **sustituye al límite de archivos por usuario** de abajo):
+Para las **TARIFAS Y CRÉDITOS** (2026-11-23; **sustituyen a los planes y a la vigencia** de abajo):
+
+1. Ejecuta una vez `migrations/2026-11-23-tariffs.sql` (tablas `sp_tariffs` y `sp_credit_moves`, columnas `sp_users.tariff_id` y `credits`, `sp_devices.media_paid_until`). Si sale _Duplicate column name 'tariff_id'_, ya estaba hecha.
+2. Sube `private/lib.php`, `private/web.php`, `private/i18n_en_admin.php`, `admin/index.php`, `cuenta/index.php` y `api/media.php`.
+3. **Antes de que las TV vuelvan a consultar**, crea las tarifas, asígnalas y recarga créditos: un dispositivo con el contenido activado cuyo usuario no tiene tarifa o saldo se desactiva en su próxima consulta.
+
+Cómo funciona:
+
+- Botón **Tarifas** del panel (sustituye a Planes): nombre, **precio por imagen** y **precio por video** (créditos por dispositivo y por día, hasta 4 decimales, p. ej. 0.13 y 0.25), máximo de archivos, almacenamiento en GB, moneda y comentario. Debajo, **Buscar transacciones** de todos los usuarios.
+- Ficha del usuario → **Tarifa y créditos**: elegir su tarifa, **+ Recargar** o **− Descontar** créditos (con nota), su saldo, su gasto diario y para cuántos días alcanza, y sus **movimientos** con ID de transacción y búsqueda por fechas. La lista de usuarios muestra saldo y tarifa (filtros *Con saldo*, *Sin saldo*, *Sin tarifa*).
+- **El usuario activa el contenido** de cada dispositivo en `/cuenta/` → *Dispositivos* (*Activar contenido* / *Desactivar contenido*; cada tarjeta dice cuántas imágenes y videos muestra y cuánto cuesta al día). Al activarlo se cobra **al momento el primer día**: imágenes × precio de imagen + videos × precio de video de lo que muestra ESE dispositivo. Después se cobra **cada 24 h** mientras siga activado, con lo que muestre en ese momento. Desactivar no devuelve lo pagado; reactivarlo dentro del día pagado no cobra otra vez. Desde el panel también se puede activar (cobra igual al usuario) o desactivar.
+- **Sin saldo** para el día siguiente (o sin tarifa), el contenido de ese dispositivo **se desactiva solo** y queda en el historial (*Desactivado por saldo*). Lo subido no se borra.
+- Los cobros se hacen solos al consultar las TV (`api/media.php`, cada minuto), al abrir `/cuenta/` y al abrir el panel: no hace falta cron. Si un día nadie consulta, al volver se cobran los días pendientes.
+- La TV muestra el contenido si está **activado y pagado**; `secondsLeft` = lo que queda del día pagado.
+- Límites de subida = los de su **tarifa**; sin tarifa no puede subir archivos nuevos.
+- El usuario ve en `/cuenta/` → **Mis créditos**: saldo, tarifa, gasto diario, tarifas disponibles y movimientos con búsqueda; *Inicio* muestra su saldo y para cuántos días alcanza.
+- Planes, vigencia e historial de planes siguen en la base, pero los paneles ya no los usan.
+
+Para los **PLANES de contenido** (2026-11-22; **sustituido el 2026-11-23 por las tarifas**):
 
 1. Ejecuta una vez `migrations/2026-11-22-plans.sql` (tablas `sp_plans` y `sp_plan_renewals`, columnas `sp_users.plan_id` y `plan_until`). Si sale _Duplicate column name 'plan_id'_, ya estaba hecha.
 2. Sube `private/lib.php`, `admin/index.php` y `cuenta/index.php`.

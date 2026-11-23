@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-13)
+// Versión del archivo: 1.0.3 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - API DE CONTENIDO (imágenes y videos) PARA mirror.html
@@ -47,10 +47,11 @@
  *  503 {"ok":false,"error":"busy","position":N,"retryAfter":S} + cabecera
  *  Retry-After (las versiones viejas de mirror.html entran así en la cola).
  *
- *  Solo reciben contenido los equipos AUTORIZADOS, con el permiso de
- *  CONTENIDO habilitado por el administrador (sp_devices.media_enabled) y
- *  cuyo USUARIO tiene la VIGENCIA activa (sp_users.content_until, días que
- *  suma/resta el administrador). Si falta algo, la lista llega vacía (con
+ *  Solo reciben contenido los equipos AUTORIZADOS con el CONTENIDO
+ *  ACTIVADO por su usuario y el día PAGADO (2026-11-23, tarifas y créditos:
+ *  sp_devices.media_enabled + media_paid_until; cada consulta cobra los días
+ *  vencidos con CreditRepository::settle y, sin saldo, lo desactiva). Antes
+ *  dependía de la vigencia del usuario (sp_users.content_until). Si falta algo, la lista llega vacía (con
  *  "authorized", "mediaEnabled" y "contentActive") para que el equipo deje
  *  de mostrarlo. Con la vigencia activa se envía "secondsLeft": el equipo
  *  deja de mostrar el contenido al vencer aunque no tenga internet.
@@ -109,11 +110,18 @@ try {
     // última conexión del panel (online_at); el historial NO (solo loading.html)
     DeviceRepository::touch($id, null, Http::clientIp());
     $auth = DeviceRepository::authPayload($device);
-    // Permiso de contenido (aparte de la autorización); solo lo da el administrador
+    // TARIFAS Y CRÉDITOS (2026-11-23): si a este equipo le vence el día pagado, se cobra
+    // ahora el día siguiente (o se desactiva su contenido si no hay saldo) y se relee.
+    if (!empty($device['user_id']) && DeviceRepository::mediaEnabled($device)
+        && (empty($device['media_paid_until']) || strtotime($device['media_paid_until'] . ' UTC') <= time())) {
+        CreditRepository::settle((int) $device['user_id']);
+        $device = DeviceRepository::find($id) ?? $device;
+    }
+    // Contenido ACTIVADO por el usuario (lo activa en /cuenta/ y se cobra por día)
     $mediaEnabled = DeviceRepository::mediaEnabled($device);
-    // Vigencia del usuario dueño (días que asigna el administrador)
-    $until = $device['user_content_until'] ?? null;
-    $contentActive = UserRepository::contentActive($until);
+    // "Vigente" = activado y con el día pagado (antes: vigencia del usuario)
+    $until = $device['media_paid_until'] ?? null;
+    $contentActive = $mediaEnabled && $until !== null && strtotime($until . ' UTC') > time();
     $allowed = $auth['authorized'] && $mediaEnabled && $contentActive;
 
     // ---- Cola de descargas: pedir / liberar turno ----
@@ -227,7 +235,7 @@ try {
         // Nombre del equipo en el panel (label; "" = sin nombre): las páginas lo muestran
         'deviceName' => (string) ($device['label'] ?? ''),
         'contentActive' => $contentActive,
-        // Segundos de vigencia restantes (el equipo los cuenta con su propio reloj)
+        // Segundos que quedan del día pagado (el equipo los cuenta con su propio reloj; se renueva al cobrar)
         'secondsLeft' => $contentActive ? max(0, (int) strtotime($until . ' UTC') - time()) : 0,
         'revision' => $revision,
     ];

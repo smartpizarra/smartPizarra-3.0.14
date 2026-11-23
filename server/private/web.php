@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.3 (2026-11-22)
+// Versión del archivo: 1.0.4 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - UTILIDADES DE LAS PÁGINAS WEB
@@ -284,6 +284,8 @@ function baseStyles(): string
     .device-filter-title { display: block; font-weight: 600; font-size: .9rem; margin-top: 8px; }
     .device-filter { display: block; width: 100%; margin: 4px 0 6px; }
     .device-hidden { display: none !important; }
+    /* Importes del historial de créditos */
+    .amount-plus { color: var(--ok); } .amount-minus { color: var(--bad); }
     /* Selector de idioma ES | EN (langSwitch) */
     .lang-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; vertical-align: middle; }
     .lang-switch a { padding: 6px 10px; text-decoration: none; color: var(--muted); font-size: .85rem; font-weight: 600; }
@@ -853,4 +855,40 @@ function langSwitch(): string
             . '" title="' . h($name) . '"' . ($on ? ' aria-current="true"' : '') . '>' . strtoupper($code) . '</a>';
     }
     return $html . '</nav>';
+}
+
+/**
+ * HISTORIAL DE CRÉDITOS (2026-11-23, tarifas): recargas, descuentos, cobros diarios y
+ * desactivaciones por saldo, con su ID de transacción. El buscador es el mismo del
+ * historial de planes (planHistoryFilter / planHistoryParams).
+ * @param array<int,array<string,mixed>> $rows CreditRepository::search().
+ * @param bool $withUser true = columna Usuario (búsqueda en todos los usuarios del panel).
+ * @param string $class Clase de la tabla (boots en el panel, history en /cuenta/).
+ */
+function creditHistoryTable(array $rows, bool $withUser, string $class): string
+{
+    $kinds = ['topup' => t('Recarga'), 'adjust' => t('Descuento'), 'charge' => t('Cobro diario'), 'off' => t('Desactivado por saldo')];
+    $html = '<div class="table-wrap"><table class="' . h($class) . '"><tr><th>' . t('ID de transacción') . '</th><th>' . t('Fecha') . '</th>'
+        . ($withUser ? '<th>' . t('Usuario') . '</th>' : '') . '<th>' . t('Movimiento') . '</th><th>' . t('Detalle') . '</th><th>'
+        . t('Importe') . '</th><th>' . t('Saldo') . '</th></tr>';
+    foreach ($rows as $r) {
+        // Detalle: dispositivo y lo cobrado (imágenes / videos) o la nota del administrador
+        $detail = '';
+        if (!empty($r['device_id'])) {
+            $detail = h((string) ($r['device_label'] ?: $r['device_id']))
+                . ' <span class="owner">(' . t('%d imagen(es), %d video(s)', (int) $r['images'], (int) $r['videos']) . ')</span>';
+        }
+        if (!empty($r['note'])) {
+            $detail .= ($detail !== '' ? ' · ' : '') . h(t((string) $r['note']));
+        }
+        $amount = (float) $r['amount'];
+        $html .= '<tr><td><code class="txn">' . h((string) $r['txn_id']) . '</code></td><td>' . dateTag($r['created_at']) . '</td>'
+            . ($withUser ? '<td>' . ($r['user_company'] !== null
+                ? '<a href="./?' . h(http_build_query(['view' => 'users', 'user' => (int) $r['user_id']])) . '">' . h((string) $r['user_company']) . '</a>'
+                : '<em>' . t('usuario eliminado') . '</em>') . '</td>' : '')
+            . '<td>' . ($kinds[$r['kind']] ?? h((string) $r['kind'])) . '</td><td>' . ($detail !== '' ? $detail : '—') . '</td>'
+            . '<td class="' . ($amount > 0 ? 'amount-plus' : ($amount < 0 ? 'amount-minus' : '')) . '">' . ($amount > 0 ? '+' : '')
+            . h(TariffRepository::num($amount)) . '</td><td>' . h(TariffRepository::num($r['balance_after'])) . '</td></tr>';
+    }
+    return $html . '</table></div>';
 }

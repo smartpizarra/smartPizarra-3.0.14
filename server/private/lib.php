@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.15 (2026-11-22)
+// Versión del archivo: 1.0.16 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -300,6 +300,12 @@ final class Database
         if (!in_array('txn_id', $renewalCols, true)) {
             return t('Falta el ID de transacción del historial de planes (columna sp_plan_renewals.txn_id):') . ' '
                 . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plan-txn.sql.');
+        }
+        // Tarifas y créditos (2026-11-23)
+        if (!in_array('sp_tariffs', $tables, true) || !in_array('sp_credit_moves', $tables, true) || !in_array('tariff_id', $userCols, true)
+            || !in_array('media_paid_until', $cols, true)) {
+            return t('Faltan las tarifas y los créditos (tablas sp_tariffs / sp_credit_moves, columnas sp_users.tariff_id / credits, sp_devices.media_paid_until):')
+                . ' ' . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-23-tariffs.sql.');
         }
         // Comentario de los planes (2026-11-22)
         $planCols = $pdo->query('SHOW COLUMNS FROM sp_plans')->fetchAll(PDO::FETCH_COLUMN);
@@ -942,8 +948,9 @@ final class UserRepository
                (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id) AS devices,
                (SELECT COUNT(*) FROM sp_devices d WHERE d.user_id = u.id AND d.status = \'authorized\') AS authorized,
                (SELECT COUNT(*) FROM sp_media m WHERE m.user_id = u.id) AS media,
-               pl.name AS plan_name
-             FROM sp_users u LEFT JOIN sp_plans pl ON pl.id = u.plan_id ORDER BY u.company, u.email'
+               pl.name AS plan_name, tf.name AS tariff_name
+             FROM sp_users u LEFT JOIN sp_plans pl ON pl.id = u.plan_id LEFT JOIN sp_tariffs tf ON tf.id = u.tariff_id
+             ORDER BY u.company, u.email'
         )->fetchAll();
     }
 
@@ -1018,7 +1025,8 @@ final class UserRepository
      */
     public static function maxFiles(array $user): int
     {
-        $limits = PlanRepository::limits($user);
+        // Desde 2026-11-23 el límite lo da la TARIFA del usuario (antes, el plan)
+        $limits = TariffRepository::limits($user);
         return $limits === null ? 0 : $limits['files'];
     }
 
@@ -3468,6 +3476,455 @@ final class PlanRepository
     public static function storageGbValue(int $mb): string
     {
         return rtrim(rtrim(number_format($mb / 1024, 3, '.', ''), '0'), '.');
+    }
+}
+
+/**
+ * TARIFAS (tabla sp_tariffs; sp_users.tariff_id), 2026-11-23. Sustituyen a los planes.
+ *
+ * Una tarifa fija el PRECIO EN CRÉDITOS por imagen y por video, por dispositivo y
+ * por día, más el máximo de archivos y el almacenamiento que puede usar el usuario.
+ * El administrador las crea y asigna una a cada usuario. Sin tarifa el usuario no
+ * puede subir archivos ni activar el contenido de sus dispositivos.
+ */
+final class TariffRepository
+{
+    public const MAX_FILES = 1000;
+    public const MAX_STORAGE_MB = 1048576; // 1 TB
+    public const MAX_PRICE = 1000000;
+
+    /**
+     * Valida el formulario de una tarifa.
+     * @param array<string,mixed> $in name, image_price, video_price, max_files, storage_gb, currency, comment.
+     * @return array<string,mixed>|string Datos limpios o el error.
+     */
+    public static function clean(array $in): array|string
+    {
+        $name = (string) ($in['name'] ?? '');
+        if (!mb_check_encoding($name, 'UTF-8')) {
+            $name = mb_convert_encoding($name, 'UTF-8', 'Windows-1252');
+        }
+        $name = mb_substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $name)), 0, 60);
+        if ($name === '') {
+            return t('La tarifa necesita un nombre.');
+        }
+        // Precios: hasta 4 decimales, coma o punto
+        $price = static function ($v): ?string {
+            $v = str_replace(',', '.', trim((string) $v));
+            if (!preg_match('/^\d+(\.\d{1,4})?$/', $v) || (float) $v > self::MAX_PRICE) {
+                return null;
+            }
+            return number_format((float) $v, 4, '.', '');
+        };
+        $img = $price($in['image_price'] ?? '');
+        $vid = $price($in['video_price'] ?? '');
+        if ($img === null || $vid === null) {
+            return t('Escribe el precio de la imagen y del video como número (p. ej. 0.13 y 0.25).');
+        }
+        $files = ctype_digit(trim((string) ($in['max_files'] ?? ''))) ? (int) $in['max_files'] : -1;
+        if ($files < 1 || $files > self::MAX_FILES) {
+            return t('La cantidad de contenido debe ser de 1 a %d archivos.', self::MAX_FILES);
+        }
+        $gb = str_replace(',', '.', trim((string) ($in['storage_gb'] ?? '')));
+        if (!preg_match('/^\d+(\.\d{1,3})?$/', $gb) || (float) $gb <= 0) {
+            return t('Escribe el almacenamiento en GB (p. ej. 1 o 0.5).');
+        }
+        $mb = (int) round((float) $gb * 1024);
+        if ($mb < 1 || $mb > self::MAX_STORAGE_MB) {
+            return t('El almacenamiento debe ser de 0.001 a %s GB.', (string) (self::MAX_STORAGE_MB / 1024));
+        }
+        $currency = strtoupper(trim((string) ($in['currency'] ?? 'USD')));
+        if (!preg_match('/^[A-Z]{3}$/', $currency)) {
+            return t('La moneda son 3 letras (p. ej. USD).');
+        }
+        $comment = str_replace(["\r\n", "\r"], "\n", (string) ($in['comment'] ?? ''));
+        $comment = mb_substr(trim((string) preg_replace('/[\x00-\x09\x0B-\x1F\x7F]+/u', ' ', $comment)), 0, 500);
+        return ['name' => $name, 'image_price' => $img, 'video_price' => $vid, 'max_files' => $files, 'storage_mb' => $mb,
+            'currency' => $currency, 'comment' => $comment === '' ? null : $comment];
+    }
+
+    public static function nameTaken(string $name, int $exceptId = 0): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_tariffs WHERE name = ? AND id <> ?');
+        $stmt->execute([$name, $exceptId]);
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    /** @return array<int,array<string,mixed>> Tarifas con cuántos usuarios la tienen (users). */
+    public static function all(): array
+    {
+        return Database::pdo()->query(
+            'SELECT t.*, (SELECT COUNT(*) FROM sp_users u WHERE u.tariff_id = t.id) AS users
+             FROM sp_tariffs t ORDER BY t.image_price, t.video_price, t.name'
+        )->fetchAll();
+    }
+
+    public static function find(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_tariffs WHERE id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch() ?: null;
+    }
+
+    public static function create(array $d): int
+    {
+        $now = Database::now();
+        $pdo = Database::pdo();
+        $pdo->prepare(
+            'INSERT INTO sp_tariffs (name, image_price, video_price, max_files, storage_mb, currency, comment, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$d['name'], $d['image_price'], $d['video_price'], $d['max_files'], $d['storage_mb'], $d['currency'], $d['comment'], $now, $now]);
+        return (int) $pdo->lastInsertId();
+    }
+
+    /** Cambia una tarifa: los precios nuevos valen desde el próximo cobro diario. */
+    public static function update(int $id, array $d): void
+    {
+        Database::pdo()->prepare(
+            'UPDATE sp_tariffs SET name = ?, image_price = ?, video_price = ?, max_files = ?, storage_mb = ?, currency = ?, comment = ?,
+               updated_at = ? WHERE id = ?'
+        )->execute([$d['name'], $d['image_price'], $d['video_price'], $d['max_files'], $d['storage_mb'], $d['currency'], $d['comment'],
+            Database::now(), $id]);
+    }
+
+    /** Borra una tarifa: sus usuarios quedan sin tarifa (FK SET NULL) y su contenido se desactiva al cobrar. */
+    public static function delete(int $id): void
+    {
+        Database::pdo()->prepare('DELETE FROM sp_tariffs WHERE id = ?')->execute([$id]);
+    }
+
+    /** Asigna (o quita con null) la tarifa de un usuario. */
+    public static function assign(int $userId, ?int $tariffId): bool
+    {
+        if ($tariffId !== null && self::find($tariffId) === null) {
+            return false;
+        }
+        Database::pdo()->prepare('UPDATE sp_users SET tariff_id = ? WHERE id = ?')->execute([$tariffId, $userId]);
+        return true;
+    }
+
+    /** Tarifa del usuario (o null). */
+    public static function forUser(array $user): ?array
+    {
+        return !empty($user['tariff_id']) ? self::find((int) $user['tariff_id']) : null;
+    }
+
+    /**
+     * LÍMITES de subida: los de su tarifa; sin tarifa, null (no puede subir archivos nuevos).
+     * @return array{files:int,bytes:int}|null
+     */
+    public static function limits(array $user): ?array
+    {
+        $t = self::forUser($user);
+        return $t === null ? null : ['files' => (int) $t['max_files'], 'bytes' => (int) $t['storage_mb'] * 1048576];
+    }
+
+    /** Precio legible: 0.1300 => "0.13"; 2.5000 => "2.50"; 1 => "1.00". */
+    public static function num(string|float $n): string
+    {
+        $s = number_format((float) $n, 4, '.', ',');
+        $s = rtrim($s, '0');
+        $dot = strpos($s, '.');
+        // al menos 2 decimales
+        return $dot === false ? $s . '.00' : (strlen($s) - $dot - 1 < 2 ? str_pad($s, $dot + 3, '0') : $s);
+    }
+}
+
+/**
+ * CRÉDITOS Y COBROS (sp_users.credits, sp_devices.media_paid_until, sp_credit_moves), 2026-11-23.
+ *
+ *  - El administrador RECARGA (topup) o DESCUENTA (adjust) créditos.
+ *  - El usuario ACTIVA el contenido de un dispositivo: se cobra al momento el primer
+ *    día = (imágenes × precio de imagen + videos × precio de video) de lo que muestra
+ *    ESE dispositivo, y media_paid_until = ahora + 24 h. Si lo desactiva y lo vuelve a
+ *    activar dentro del día ya pagado, no se cobra otra vez.
+ *  - COBRO DIARIO (settle): cada vez que vence media_paid_until de un dispositivo con
+ *    el contenido activado se cobra otro día con lo que muestre entonces. Si no hay
+ *    saldo (o el usuario no tiene tarifa), se DESACTIVA el contenido de ese
+ *    dispositivo (movimiento "off"). Se ejecuta solo al consultar las TV
+ *    (api/media.php), al abrir /cuenta/ y al abrir el panel: no hace falta cron.
+ *  - Cada movimiento tiene su ID de transacción "TX-AAAAMMDD-XXXXXX".
+ */
+final class CreditRepository
+{
+    public const MAX_AMOUNT = 1000000;
+
+    /** ID de transacción nuevo y único (también frente al historial de planes). */
+    public static function newTxnId(): string
+    {
+        $pdo = Database::pdo();
+        $a = $pdo->prepare('SELECT COUNT(*) FROM sp_credit_moves WHERE txn_id = ?');
+        $b = $pdo->prepare('SELECT COUNT(*) FROM sp_plan_renewals WHERE txn_id = ?');
+        do {
+            $id = 'TX-' . gmdate('Ymd') . '-' . strtoupper(bin2hex(random_bytes(3)));
+            $a->execute([$id]);
+            $b->execute([$id]);
+        } while ((int) $a->fetchColumn() + (int) $b->fetchColumn() > 0);
+        return $id;
+    }
+
+    /** Importe escrito por el administrador ("10", "2,5") => "10.0000" o null. */
+    public static function cleanAmount(string $v): ?string
+    {
+        $v = str_replace(',', '.', trim($v));
+        if (!preg_match('/^\d+(\.\d{1,4})?$/', $v) || (float) $v <= 0 || (float) $v > self::MAX_AMOUNT) {
+            return null;
+        }
+        return number_format((float) $v, 4, '.', '');
+    }
+
+    /**
+     * Coste diario del contenido que muestra AHORA un dispositivo con una tarifa.
+     * @return array{images:int,videos:int,cost:float}
+     */
+    public static function deviceCost(?array $tariff, string $deviceId): array
+    {
+        $img = $vid = 0;
+        foreach (MediaRepository::forDevice($deviceId) as $m) {
+            $m['kind'] === 'video' ? $vid++ : $img++;
+        }
+        $cost = $tariff === null ? 0.0 : round($img * (float) $tariff['image_price'] + $vid * (float) $tariff['video_price'], 4);
+        return ['images' => $img, 'videos' => $vid, 'cost' => $cost];
+    }
+
+    /** Anota un movimiento (dentro de la transacción del llamador). @return string ID de transacción */
+    private static function move(int $userId, string $kind, float $amount, float $balance, ?string $deviceId = null,
+                                 int $images = 0, int $videos = 0, ?string $note = null): string
+    {
+        $txn = self::newTxnId();
+        Database::pdo()->prepare(
+            'INSERT INTO sp_credit_moves (txn_id, user_id, kind, amount, balance_after, device_id, images, videos, note, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$txn, $userId, $kind, number_format($amount, 4, '.', ''), number_format($balance, 4, '.', ''),
+            $deviceId, $images, $videos, $note, Database::now()]);
+        return $txn;
+    }
+
+    /** Saldo bloqueado para escribir (FOR UPDATE) dentro de una transacción; null si el usuario no existe. */
+    private static function lockedUser(int $userId): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM sp_users WHERE id = ? FOR UPDATE');
+        $stmt->execute([$userId]);
+        return $stmt->fetch() ?: null;
+    }
+
+    /**
+     * RECARGA (+) o DESCUENTO (-) de créditos por el administrador.
+     * @return array{txn:string,balance:float}|string Resultado o error.
+     */
+    public static function adminMove(int $userId, string $amount, bool $subtract, string $note): array|string
+    {
+        $amt = self::cleanAmount($amount);
+        if ($amt === null) {
+            return t('Escribe un importe mayor que 0 (p. ej. 10 o 2.50).');
+        }
+        $note = mb_substr(trim((string) preg_replace('/[\x00-\x1F\x7F]+/u', ' ', $note)), 0, 255);
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $u = self::lockedUser($userId);
+            if ($u === null) {
+                $pdo->rollBack();
+                return t('Ese usuario ya no existe.');
+            }
+            $delta = $subtract ? -(float) $amt : (float) $amt;
+            $balance = round((float) $u['credits'] + $delta, 4);
+            if ($balance < 0) {
+                $pdo->rollBack();
+                return t('No se puede descontar más de lo que tiene (%s).', TariffRepository::num($u['credits']));
+            }
+            $pdo->prepare('UPDATE sp_users SET credits = ? WHERE id = ?')->execute([number_format($balance, 4, '.', ''), $userId]);
+            $txn = self::move($userId, $subtract ? 'adjust' : 'topup', $delta, $balance, null, 0, 0, $note === '' ? null : $note);
+            $pdo->commit();
+            return ['txn' => $txn, 'balance' => $balance];
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            error_log('smartpizarra créditos ' . $userId . ': ' . $e->getMessage());
+            return t('No se pudo guardar el movimiento (no se cambió nada).');
+        }
+    }
+
+    /**
+     * El USUARIO activa el contenido de uno de sus dispositivos: cobra el primer día
+     * (si no está ya pagado) y lo activa.
+     * @return array{charged:float,txn:?string,images:int,videos:int}|string Resultado o error.
+     */
+    public static function activate(int $userId, string $deviceId): array|string
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+        try {
+            $u = self::lockedUser($userId);
+            $d = DeviceRepository::find($deviceId);
+            if ($u === null || $d === null || (int) ($d['user_id'] ?? 0) !== $userId) {
+                $pdo->rollBack();
+                return t('Ese dispositivo no está asignado a tu cuenta.');
+            }
+            if ($d['status'] !== 'authorized') {
+                $pdo->rollBack();
+                return t('Este dispositivo todavía no está autorizado por el administrador.');
+            }
+            $tariff = TariffRepository::forUser($u);
+            if ($tariff === null) {
+                $pdo->rollBack();
+                return t('No tienes una tarifa asignada: pide al administrador que te asigne una.');
+            }
+            $now = time();
+            $paid = !empty($d['media_paid_until']) ? (int) strtotime($d['media_paid_until'] . ' UTC') : 0;
+            $cost = self::deviceCost($tariff, $deviceId);
+            $charged = 0.0;
+            $txn = null;
+            if ($paid <= $now) {
+                // Primer día: se cobra al momento
+                if ((float) $u['credits'] < $cost['cost']) {
+                    $pdo->rollBack();
+                    return t('Saldo insuficiente: activar este dispositivo cuesta %s al día y tienes %s.',
+                        TariffRepository::num($cost['cost']), TariffRepository::num($u['credits']));
+                }
+                $balance = round((float) $u['credits'] - $cost['cost'], 4);
+                $pdo->prepare('UPDATE sp_users SET credits = ? WHERE id = ?')->execute([number_format($balance, 4, '.', ''), $userId]);
+                $txn = self::move($userId, 'charge', -$cost['cost'], $balance, $deviceId, $cost['images'], $cost['videos']);
+                $charged = $cost['cost'];
+                $pdo->prepare('UPDATE sp_devices SET media_paid_until = ? WHERE device_id = ?')
+                    ->execute([gmdate('Y-m-d H:i:s', $now + 86400), $deviceId]);
+            }
+            $pdo->prepare('UPDATE sp_devices SET media_enabled = 1, media_enabled_at = ? WHERE device_id = ?')
+                ->execute([Database::now(), $deviceId]);
+            $pdo->commit();
+            return ['charged' => $charged, 'txn' => $txn, 'images' => $cost['images'], 'videos' => $cost['videos']];
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            error_log('smartpizarra activar ' . $deviceId . ': ' . $e->getMessage());
+            return t('No se pudo activar el contenido (no se cambió nada).');
+        }
+    }
+
+    /** Desactiva el contenido de un dispositivo (lo ya pagado del día se conserva). */
+    public static function deactivate(string $deviceId): void
+    {
+        Database::pdo()->prepare('UPDATE sp_devices SET media_enabled = 0, media_enabled_at = ? WHERE device_id = ?')
+            ->execute([Database::now(), $deviceId]);
+    }
+
+    /**
+     * COBRO DIARIO de un usuario: cobra cada día vencido de sus dispositivos con el
+     * contenido activado; sin saldo o sin tarifa, los desactiva. Barato si no hay nada
+     * vencido (una consulta).
+     */
+    public static function settle(int $userId): void
+    {
+        $pdo = Database::pdo();
+        $due = $pdo->prepare('SELECT COUNT(*) FROM sp_devices WHERE user_id = ? AND media_enabled = 1
+                                AND (media_paid_until IS NULL OR media_paid_until <= ?)');
+        $due->execute([$userId, Database::now()]);
+        if ((int) $due->fetchColumn() === 0) {
+            return;
+        }
+        $pdo->beginTransaction();
+        try {
+            $u = self::lockedUser($userId);
+            if ($u === null) {
+                $pdo->rollBack();
+                return;
+            }
+            $tariff = TariffRepository::forUser($u);
+            $balance = (float) $u['credits'];
+            $now = time();
+            $devs = $pdo->prepare('SELECT device_id, media_paid_until FROM sp_devices WHERE user_id = ? AND media_enabled = 1
+                                     AND (media_paid_until IS NULL OR media_paid_until <= ?) FOR UPDATE');
+            $devs->execute([$userId, Database::now()]);
+            foreach ($devs->fetchAll() as $d) {
+                $id = (string) $d['device_id'];
+                $paid = !empty($d['media_paid_until']) ? (int) strtotime($d['media_paid_until'] . ' UTC') : $now;
+                $cost = self::deviceCost($tariff, $id);
+                // Un cobro por cada día vencido (máx. 366 de una vez)
+                for ($i = 0; $paid <= $now && $i < 366; $i++) {
+                    if ($tariff === null || $balance < $cost['cost']) {
+                        $pdo->prepare('UPDATE sp_devices SET media_enabled = 0, media_enabled_at = ? WHERE device_id = ?')
+                            ->execute([Database::now(), $id]);
+                        self::move($userId, 'off', 0, $balance, $id, $cost['images'], $cost['videos'],
+                            $tariff === null ? 'sin tarifa' : 'saldo insuficiente');
+                        break;
+                    }
+                    $balance = round($balance - $cost['cost'], 4);
+                    self::move($userId, 'charge', -$cost['cost'], $balance, $id, $cost['images'], $cost['videos']);
+                    $paid += 86400;
+                }
+                $pdo->prepare('UPDATE sp_devices SET media_paid_until = ? WHERE device_id = ?')
+                    ->execute([gmdate('Y-m-d H:i:s', $paid), $id]);
+            }
+            $pdo->prepare('UPDATE sp_users SET credits = ? WHERE id = ?')->execute([number_format($balance, 4, '.', ''), $userId]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            error_log('smartpizarra cobro diario usuario ' . $userId . ': ' . $e->getMessage());
+        }
+    }
+
+    /** Cobro diario de TODOS los usuarios con algo vencido (lo llama el panel). */
+    public static function settleAll(): void
+    {
+        $stmt = Database::pdo()->prepare('SELECT DISTINCT user_id FROM sp_devices WHERE media_enabled = 1 AND user_id IS NOT NULL
+                                            AND (media_paid_until IS NULL OR media_paid_until <= ?)');
+        $stmt->execute([Database::now()]);
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $uid) {
+            self::settle((int) $uid);
+        }
+    }
+
+    /**
+     * Gasto diario actual del usuario (suma de sus dispositivos con el contenido activado).
+     * @return array{cost:float,devices:int}
+     */
+    public static function dailyCost(array $user): array
+    {
+        $tariff = TariffRepository::forUser($user);
+        $stmt = Database::pdo()->prepare('SELECT device_id FROM sp_devices WHERE user_id = ? AND media_enabled = 1');
+        $stmt->execute([(int) $user['id']]);
+        $total = 0.0;
+        $n = 0;
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $id) {
+            $total += self::deviceCost($tariff, (string) $id)['cost'];
+            $n++;
+        }
+        return ['cost' => round($total, 4), 'devices' => $n];
+    }
+
+    /**
+     * Historial con búsqueda (ID de transacción y fechas locales), igual que el de planes.
+     * @param int|null $userId Un usuario o null = todos (con la empresa).
+     * @return array<int,array<string,mixed>>
+     */
+    public static function search(?int $userId, string $txn, string $from, string $to, int $tzOffset): array
+    {
+        $where = [];
+        $args = [];
+        if ($userId !== null) {
+            $where[] = 'm.user_id = ?';
+            $args[] = $userId;
+        }
+        $txn = strtoupper((string) preg_replace('/[^A-Za-z0-9\-]/', '', $txn));
+        if ($txn !== '') {
+            $where[] = 'm.txn_id LIKE ?';
+            $args[] = '%' . $txn . '%';
+        }
+        $tzOffset = max(-900, min(900, $tzOffset));
+        $utc = static fn(string $d, string $time) => gmdate('Y-m-d H:i:s', (int) strtotime($d . ' ' . $time . ' UTC') + $tzOffset * 60);
+        if (PlanRepository::validDate($from)) {
+            $where[] = 'm.created_at >= ?';
+            $args[] = $utc($from, '00:00:00');
+        }
+        if (PlanRepository::validDate($to)) {
+            $where[] = 'm.created_at <= ?';
+            $args[] = $utc($to, '23:59:59');
+        }
+        $stmt = Database::pdo()->prepare(
+            'SELECT m.*, u.company AS user_company, d.label AS device_label FROM sp_credit_moves m
+             LEFT JOIN sp_users u ON u.id = m.user_id LEFT JOIN sp_devices d ON d.device_id = m.device_id'
+            . ($where ? ' WHERE ' . implode(' AND ', $where) : '') . ' ORDER BY m.id DESC LIMIT 500'
+        );
+        $stmt->execute($args);
+        return $stmt->fetchAll();
     }
 }
 

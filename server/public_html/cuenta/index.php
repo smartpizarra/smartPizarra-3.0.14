@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.10 (2026-11-22)
+// Versión del archivo: 1.0.11 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CUENTA DEL USUARIO (EMPRESA)
@@ -17,7 +17,14 @@
  *    "Activar", como las tiras (acciones media_pause / media_resume,
  *    MediaRepository::setActive). Pausado no se envía a las pantallas pero
  *    se conserva (sigue contando para el límite de archivos).
- *  - LÍMITES DEL PLAN (2026-11-22; sustituye al límite de archivos fijo):
+ *  - TARIFAS Y CRÉDITOS (2026-11-23; sustituyen a planes y vigencia): el
+ *    usuario ACTIVA el contenido de cada dispositivo (device_media_on/off);
+ *    activarlo cobra el primer día (archivos × precio de su tarifa) y luego
+ *    cada día (CreditRepository::settle al abrir la página y en cada consulta
+ *    de las TV); sin saldo se desactiva solo. Límites de subida = su tarifa.
+ *    Pestaña "Mis créditos" (?s=creditos): saldo, tarifa, gasto, tarifas
+ *    disponibles e historial de movimientos con búsqueda.
+ *  - (Sustituido el 2026-11-23) LÍMITES DEL PLAN (2026-11-22):
  *    con el PLAN vigente puede tener hasta max_files archivos y storage_mb
  *    de espacio (PlanRepository::limits); sin plan o con el plan vencido no
  *    sube nada nuevo (lo ya subido se conserva). Contenido e Inicio lo
@@ -273,6 +280,11 @@ try {
         }
     }
 
+    // COBRO DIARIO pendiente de sus dispositivos (tarifas y créditos, 2026-11-23) y saldo al día
+    if ($user !== null) {
+        CreditRepository::settle((int) $user['id']);
+        $user = UserRepository::find((int) $user['id']) ?? $user;
+    }
     // Idioma con el usuario ya conocido (su elección guardada manda sobre la cookie)
     I18n::set(I18n::pick($langRequested, $user['lang'] ?? null, $_COOKIE['sp_lang'] ?? null));
     if ($langRequested !== null) {
@@ -398,6 +410,29 @@ try {
             $league = $leagueId === null ? null : LeagueRepository::find($leagueId);
             redirectWith(($league === null ? t('%s queda sin liga.', $name) : t('%s usará la liga «%s».', $name, (string) $league['name']))
                 . ' ' . t('La TV lo recibe en su próxima consulta (≈ 1 min si está mostrando contenido).'), 's=equipos');
+        } elseif ($action === 'device_media_on' || $action === 'device_media_off') {
+            /* ---- ACTIVAR / DESACTIVAR el contenido de uno de SUS dispositivos (2026-11-23) ----
+               Activar cobra al momento el primer día (archivos que muestra × precio de su tarifa) */
+            if ((int) $user['must_change_password'] === 1) {
+                redirectWith(t('Primero elige tu contraseña.'), 's=cuenta');
+            }
+            $id = strtoupper(trim(param($_POST, 'deviceId')));
+            $device = DeviceRepository::isValidId($id) ? DeviceRepository::find($id) : null;
+            if ($device === null || (int) ($device['user_id'] ?? 0) !== (int) $user['id']) {
+                redirectWith(t('Ese dispositivo no está asignado a tu cuenta.'), 's=equipos');
+            }
+            $name = $device['label'] ? $device['label'] . " ($id)" : $id;
+            if ($action === 'device_media_off') {
+                CreditRepository::deactivate($id);
+                redirectWith(t('Contenido desactivado en %s: deja de mostrarse en su próxima consulta y ya no se cobra.', $name), 's=equipos');
+            }
+            $res = CreditRepository::activate((int) $user['id'], $id);
+            if (is_string($res)) {
+                redirectWith($res, 's=equipos');
+            }
+            redirectWith(t('Contenido activado en %s.', $name) . ' ' . ($res['charged'] > 0
+                ? t('Se descontaron %s créditos por el primer día (transacción %s). Se cobra cada día mientras siga activado.', TariffRepository::num($res['charged']), (string) $res['txn'])
+                : t('El día ya estaba pagado: no se descontó nada.')), 's=equipos');
         } elseif ($action === 'msg_send') {
             /* ---- MENSAJE al administrador (pestaña Mensajes) ---- */
             if ((int) $user['must_change_password'] === 1) {
@@ -551,18 +586,16 @@ try {
                     }
                     // LÍMITES del PLAN (2026-11-22): sin plan vigente no se suben archivos nuevos;
                     // con plan, hasta su cantidad de archivos y su almacenamiento
-                    $limits = PlanRepository::limits($user);
+                    // Límites de la TARIFA (2026-11-23): sin tarifa no se suben archivos nuevos
+                    $limits = TariffRepository::limits($user);
                     if ($limits === null) {
-                        $ps = PlanRepository::forUser($user);
-                        redirectWith($ps['state'] === 'expired'
-                            ? t('Tu plan está vencido: no puedes subir archivos nuevos. Pide al administrador que lo renueve.')
-                            : t('No tienes un plan asignado: no puedes subir archivos nuevos. Pide al administrador que te asigne uno.'), 's=contenido');
+                        redirectWith(t('No tienes una tarifa asignada: no puedes subir archivos nuevos. Pide al administrador que te asigne una.'), 's=contenido');
                     }
                     if (MediaRepository::countForUser($uid) >= $limits['files']) {
-                        redirectWith(t('Llegaste al límite de tu plan: %d archivo(s). Borra alguno o pide al administrador un plan mayor.', $limits['files']), 's=contenido');
+                        redirectWith(t('Llegaste al límite de tu tarifa: %d archivo(s). Borra alguno o pide al administrador una tarifa mayor.', $limits['files']), 's=contenido');
                     }
                     if (MediaRepository::usedBytes($uid) + $size > $limits['bytes']) {
-                        redirectWith(t('No queda espacio en tu plan: tu límite es %s y usas %s. Borra algún archivo.', formatBytes($limits['bytes']), formatBytes(MediaRepository::usedBytes($uid))), 's=contenido');
+                        redirectWith(t('No queda espacio en tu tarifa: tu límite es %s y usas %s. Borra algún archivo.', formatBytes($limits['bytes']), formatBytes(MediaRepository::usedBytes($uid))), 's=contenido');
                     }
                     $mime = MediaRepository::detectMime((string) $f['tmp_name']);
                     if ($mime === null) {
@@ -639,7 +672,7 @@ $statusText = ['pending' => t('Pendiente de autorizar'), 'authorized' => t('Auto
  * Con la contraseña temporal solo existe "cuenta" (cambio obligatorio).
  * "plan" (Mi plan, 2026-11-22): datos del plan, uso e historial de renovaciones (solo lectura).
  */
-$sections = ['inicio' => t('Inicio'), 'equipos' => t('Dispositivos'), 'contenido' => t('Contenido'), 'tiras' => t('Tiras y banners'), 'plan' => t('Mi plan'), 'mensajes' => t('Mensajes'), 'cuenta' => t('Mi cuenta')];
+$sections = ['inicio' => t('Inicio'), 'equipos' => t('Dispositivos'), 'contenido' => t('Contenido'), 'tiras' => t('Tiras y banners'), 'creditos' => t('Mis créditos'), 'mensajes' => t('Mensajes'), 'cuenta' => t('Mi cuenta')];
 $section = param($_GET, 's');
 if (!isset($sections[$section])) {
     $section = 'inicio';
@@ -672,24 +705,22 @@ foreach ($devices as $d) {
 }
 // PLAN del usuario (2026-11-22): estado, límites (archivos y espacio) e historial.
 // Sin plan vigente: límites 0 (no puede subir; lo ya subido sigue ahí).
-$planState = $user !== null ? PlanRepository::forUser($user) : ['state' => 'none', 'plan' => null, 'days' => 0, 'until' => null];
-$planLimits = $user !== null ? PlanRepository::limits($user) : null;
-// Historial con búsqueda por ID de transacción y fechas (?tq= &tf= &tt=)
+// TARIFA Y CRÉDITOS (2026-11-23): tarifa, límites, gasto diario, historial con búsqueda y tarifas disponibles
+$tariff = $user !== null ? TariffRepository::forUser($user) : null;
+$planLimits = $user !== null ? TariffRepository::limits($user) : null;
+$daily = $user !== null ? CreditRepository::dailyCost($user) : ['cost' => 0.0, 'devices' => 0];
+$credits = $user !== null ? (float) $user['credits'] : 0.0;
+$daysLeft = $daily['cost'] > 0 ? (int) floor($credits / $daily['cost']) : null;
 $planFilter = planHistoryParams();
-$planHistory = $user !== null && $section === 'plan'
-    ? PlanRepository::searchHistory((int) $user['id'], $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz']) : [];
-// Todos los planes disponibles con sus características y comentario (Mi plan; solo lectura)
-$allPlans = $user !== null && $section === 'plan' ? PlanRepository::all() : [];
+$creditMoves = $user !== null && $section === 'creditos'
+    ? CreditRepository::search((int) $user['id'], $planFilter['tq'], $planFilter['tf'], $planFilter['tt'], $planFilter['tz']) : [];
+$allTariffs = $user !== null && $section === 'creditos' ? TariffRepository::all() : [];
+$cur = $tariff['currency'] ?? '';
 $quota = $planLimits['bytes'] ?? 0;
 $maxFiles = $planLimits['files'] ?? 0;
 $atFileLimit = count($mediaList) >= $maxFiles;
 // Ligas que le asignó el administrador (solo lectura; llegan a sus TV)
 $myLeagues = $user !== null && in_array($section, ['cuenta', 'equipos'], true) ? LeagueRepository::forUser((int) $user['id']) : [];
-// Vigencia del contenido (la asigna el administrador en días)
-$validity = $user !== null ? contentValidity($user['content_until'] ?? null) : ['state' => 'none', 'days' => 0, 'text' => ''];
-if ($validity['state'] !== 'active') {
-    $mediaOnCount = 0; // sin vigencia ninguna pantalla muestra el contenido
-}
 ?>
 <!doctype html>
 <html lang="<?= h(I18n::lang()) ?>">
@@ -805,6 +836,9 @@ if ($validity['state'] !== 'active') {
     .label-form input[type=text] { flex: 1 1 220px; min-width: 0; padding: 8px 10px; }
     .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
     .badge.off { color: var(--muted); }
+    /* Activar / desactivar el contenido de un dispositivo */
+    .media-toggle { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0 4px; }
+    .media-toggle form { margin: 0; }
     /* Selector de idioma (cabecera) */
     .head-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .lang-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
@@ -875,36 +909,29 @@ if ($validity['state'] !== 'active') {
       <a class="card stat" href="?s=equipos"><div class="num"><?= $onlineCount ?></div><div class="lbl"><?= t('En línea ahora') ?></div></a>
       <a class="card stat" href="?s=contenido"><div class="num"><?= count($mediaList) ?><?= $planLimits !== null ? '/' . $maxFiles : '' ?></div><div class="lbl"><?= t('Archivos de contenido') ?></div></a>
     </div>
-    <!-- Vigencia: hasta cuándo se muestra el contenido en las pantallas -->
-    <section class="card block validity <?= h($validity['state']) ?>">
-      <h2><?= t('Vigencia del contenido') ?></h2>
-      <div class="vnum"><?= $validity['state'] === 'active' ? ($validity['days'] === 1 ? t('1 día') : t('%d días', (int) $validity['days'])) : ($validity['state'] === 'expired' ? t('Vencida') : t('Sin vigencia')) ?></div>
-      <div class="meta"><?= $validity['text'] ?>.
-        <?= $validity['state'] === 'active'
-            ? t('Tus pantallas muestran tu contenido hasta esa fecha.')
-            : t('Tus pantallas no muestran tu contenido. Para renovarla, contacta al administrador.') ?></div>
-    </section>
-    <!-- Plan: nombre, días que quedan y espacio usado (detalle e historial en "Mi plan") -->
-    <section class="card block validity <?= h($planState['state']) ?>">
-      <h2><?= t('Mi plan') ?></h2>
-      <?php if ($planState['plan'] === null): ?>
-        <div class="vnum"><?= t('Sin plan') ?></div>
-        <div class="meta"><?= t('No puedes subir archivos nuevos hasta que el administrador te asigne un plan.') ?></div>
-      <?php else: $pl = $planState['plan']; ?>
-        <div class="vnum"><?= h($pl['name']) ?> · <?= $planState['state'] === 'active' ? ($planState['days'] === 1 ? t('1 día') : t('%d días', (int) $planState['days'])) : t('Vencido') ?></div>
-        <?php if ($quota > 0): ?>
-          <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
-          <div class="meta"><?= t('Espacio: usado %s de %s', h(formatBytes($usedBytes)), h(formatBytes($quota))) ?></div>
+    <!-- Créditos: saldo, gasto diario y para cuántos días alcanza (detalle e historial en "Mis créditos") -->
+    <section class="card block validity <?= $credits > 0 ? 'active' : 'expired' ?>">
+      <h2><?= t('Mis créditos') ?></h2>
+      <div class="vnum"><?= h(TariffRepository::num($credits)) ?> <?= h($cur) ?></div>
+      <div class="meta">
+        <?php if ($tariff === null): ?>
+          <?= t('No tienes una tarifa asignada: no puedes subir archivos ni activar contenido. Pide al administrador que te asigne una.') ?>
         <?php else: ?>
-          <div class="meta"><?= t('Plan vencido: no puedes subir archivos nuevos. Pide al administrador que lo renueve.') ?></div>
+          <?= t('Tarifa %s: imagen %s · video %s por dispositivo y día.', h($tariff['name']), h(TariffRepository::num($tariff['image_price'])), h(TariffRepository::num($tariff['video_price']))) ?><br>
+          <?= t('Gasto actual: %s al día en %d dispositivo(s).', h(TariffRepository::num($daily['cost'])), $daily['devices']) ?>
+          <?= $daysLeft !== null ? t('Alcanza para unos %d día(s).', $daysLeft) : '' ?>
         <?php endif; ?>
+      </div>
+      <?php if ($planLimits !== null): ?>
+        <progress value="<?= (int) $usedBytes ?>" max="<?= (int) $quota ?>"></progress>
+        <div class="meta"><?= t('Espacio: usado %s de %s', h(formatBytes($usedBytes)), h(formatBytes($quota))) ?></div>
       <?php endif; ?>
-      <div class="actions"><a class="btn" href="?s=plan"><?= t('Ver mi plan e historial') ?></a></div>
+      <div class="actions"><a class="btn" href="?s=creditos"><?= t('Ver mis créditos e historial') ?></a></div>
     </section>
     <section class="card block">
       <h2><?= t('¿Qué muestran mis pantallas?') ?></h2>
       <div class="meta">
-        <?= t('%d de %d dispositivo(s) pueden mostrar tus imágenes y videos (autorizados, con el contenido habilitado por el administrador y con la vigencia activa).', $mediaOnCount, count($devices)) ?>
+        <?= t('%d de %d dispositivo(s) muestran tus imágenes y videos (autorizados y con el contenido activado). Actívalo en Dispositivos.', $mediaOnCount, count($devices)) ?>
       </div>
       <div class="actions">
         <a class="btn" href="?s=contenido"><?= t('Subir o cambiar contenido') ?></a>
@@ -916,7 +943,7 @@ if ($validity['state'] !== 'active') {
     <!-- ============ EQUIPOS (solo el nombre es editable) ============ -->
     <div class="section-head">
       <h2><?= t('Mis dispositivos') ?></h2>
-      <span class="hint"><?= t('Puedes ponerle un nombre a cada dispositivo y una liga a los que no tienen el contenido habilitado. Autorizar, revocar o habilitar el contenido lo hace el administrador.') ?></span>
+      <span class="hint"><?= t('Activa el contenido de cada dispositivo para que muestre tus imágenes y videos: se cobra por día según tu tarifa. También puedes ponerle un nombre y una liga a los que no tienen el contenido activado.') ?></span>
     </div>
     <?php if (!$devices): ?>
       <div class="card empty block"><?= t('Todavía no tienes dispositivos asignados.') ?></div>
@@ -944,7 +971,7 @@ if ($validity['state'] !== 'active') {
             <span class="device-id"><?= h($d['device_id']) ?></span>
           </span>
           <span>
-            <span class="badge <?= $mOn ? 'authorized' : 'pending' ?>"><?= $mOn ? t('Contenido habilitado') : t('Contenido no habilitado') ?></span>
+            <span class="badge <?= $mOn ? 'authorized' : 'pending' ?>"><?= $mOn ? t('Contenido activado') : t('Contenido desactivado') ?></span>
             <span class="badge <?= h($st) ?>"><?= h($statusText[$st] ?? $st) ?></span>
           </span>
         </div>
@@ -962,7 +989,21 @@ if ($validity['state'] !== 'active') {
           · <?= t('Arranques:') ?> <?= (int) ($d['boots'] ?? 0) ?>
           <?= !empty($d['last_boot_at']) ? '(' . t('último %s', dateTag($d['last_boot_at'])) . ')' : '' ?>
           <?= $d['app_version'] ? ' · v' . h($d['app_version']) : '' ?>
-          <?= $mOn ? '' : '<br><span class="hint">' . t('Para mostrar tus imágenes y videos aquí, pide al administrador que habilite el contenido.') . '</span>' ?>
+        </div>
+        <!-- CONTENIDO (2026-11-23): lo activa el usuario; activarlo cobra el primer día y luego cada día -->
+        <?php $dc = CreditRepository::deviceCost($tariff, (string) $d['device_id']); $paidUntil = $d['media_paid_until'] ?? null; ?>
+        <div class="media-toggle">
+          <form method="post" <?= $mOn ? '' : 'data-confirm="' . h(t('¿Activar el contenido en este dispositivo? Se descontarán %s créditos ahora y lo mismo cada día mientras siga activado.', TariffRepository::num($dc['cost']))) . '"' ?>><?= csrfField() ?>
+            <input type="hidden" name="action" value="<?= $mOn ? 'device_media_off' : 'device_media_on' ?>">
+            <input type="hidden" name="deviceId" value="<?= h($d['device_id']) ?>">
+            <button class="<?= $mOn ? 'bad' : 'ok' ?>" type="submit" <?= !$mOn && ($st !== 'authorized' || $tariff === null) ? 'disabled' : '' ?>><?= $mOn ? t('Desactivar contenido') : t('Activar contenido') ?></button>
+          </form>
+          <span class="hint">
+            <?= t('Muestra %d imagen(es) y %d video(s): %s al día.', $dc['images'], $dc['videos'], h(TariffRepository::num($dc['cost']))) ?>
+            <?php if ($mOn && $paidUntil): ?> <?= t('Pagado hasta el %s.', dateTag($paidUntil)) ?><?php endif; ?>
+            <?php if (!$mOn && $st !== 'authorized'): ?> <?= t('El administrador todavía no autorizó este dispositivo.') ?><?php endif; ?>
+            <?php if (!$mOn && $tariff === null): ?> <?= t('Necesitas una tarifa asignada.') ?><?php endif; ?>
+          </span>
         </div>
         <!-- Nombre del equipo (vacío = sin nombre, se muestra solo el ID) -->
         <form method="post" class="label-form" autocomplete="off"><?= csrfField() ?>
@@ -1010,20 +1051,16 @@ if ($validity['state'] !== 'active') {
     <form class="card block upload" method="post" enctype="multipart/form-data" id="uploadForm">
       <?= csrfField() ?>
       <h2><?= t('Subir un archivo') ?></h2>
-      <?php if ($validity['state'] !== 'active'): ?>
-        <p class="hint"><strong><?= $validity['state'] === 'expired' ? t('Tu vigencia está vencida') : t('No tienes vigencia asignada') ?>:</strong>
-          <?= t('puedes preparar tu contenido, pero las pantallas no lo mostrarán hasta que el administrador la renueve.') ?></p>
-      <?php endif; ?>
       <p class="hint"><?= t('Imágenes JPG, PNG, WEBP o GIF y videos MP4 (H.264) o WEBM de hasta %s. Los videos se reproducen sin sonido.', h(formatBytes(MediaRepository::maxBytes()))) ?>
         <strong><?= t('Videos: 30 fps como máximo') ?></strong>, <?= t('H.264 y hasta 1920×1080 (los de 60 fps o 4K se ven a saltos en las pantallas y no se aceptan).') ?></p>
-      <!-- Límites del PLAN (cantidad de archivos y espacio); sin plan vigente no se sube nada nuevo -->
+      <!-- Límites de la TARIFA (cantidad de archivos y espacio); sin tarifa no se sube nada nuevo -->
       <?php if ($planLimits === null): ?>
-        <p class="file-limit full"><strong><?= $planState['state'] === 'expired' ? t('Tu plan «%s» está vencido', h($planState['plan']['name'])) : t('No tienes un plan asignado') ?>:</strong>
-          <?= $planState['state'] === 'expired' ? t('no puedes subir archivos nuevos. Pide al administrador que lo renueve.') : t('no puedes subir archivos nuevos. Pide al administrador que te asigne uno.') ?> <a href="?s=plan"><?= t('Mi plan') ?></a></p>
+        <p class="file-limit full"><strong><?= t('No tienes una tarifa asignada') ?>:</strong>
+          <?= t('no puedes subir archivos nuevos. Pide al administrador que te asigne una.') ?> <a href="?s=creditos"><?= t('Mis créditos') ?></a></p>
       <?php else: ?>
-        <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>"><?= t('Plan') ?> <?= h($planState['plan']['name']) ?> · <?= t('Archivos:') ?> <strong><?= t('%d de %d', count($mediaList), $maxFiles) ?></strong>
+        <p class="file-limit <?= $atFileLimit ? 'full' : '' ?>"><?= t('Tarifa') ?> <?= h($tariff['name']) ?> · <?= t('Archivos:') ?> <strong><?= t('%d de %d', count($mediaList), $maxFiles) ?></strong>
           · <?= t('Espacio: %s de %s', h(formatBytes($usedBytes)), h(formatBytes($quota))) ?>
-          <?= $atFileLimit ? '· ' . t('Llegaste al límite de tu plan: borra alguno o pide al administrador un plan mayor.') : '· ' . t('Puedes subir %d más.', $maxFiles - count($mediaList)) ?></p>
+          <?= $atFileLimit ? '· ' . t('Llegaste al límite de tu tarifa: borra alguno o pide al administrador una tarifa mayor.') : '· ' . t('Puedes subir %d más.', $maxFiles - count($mediaList)) ?></p>
       <?php endif; ?>
       <input type="hidden" name="action" value="media_upload">
       <div class="row">
@@ -1165,66 +1202,60 @@ if ($validity['state'] !== 'active') {
       </section>
     <?php endforeach; ?>
 
-  <?php elseif ($section === 'plan'): ?>
-    <!-- ============ MI PLAN (solo lectura; lo asigna y renueva el administrador) ============ -->
-    <section class="card block validity <?= h($planState['state']) ?>">
-      <h2><?= t('Mi plan') ?></h2>
-      <?php if ($planState['plan'] === null): ?>
-        <div class="vnum"><?= t('Sin plan') ?></div>
-        <div class="meta"><?= t('No tienes un plan asignado: puedes ver y ordenar lo que ya subiste, pero no subir archivos nuevos. Pide al administrador que te asigne uno.') ?></div>
-      <?php else: $pl = $planState['plan']; ?>
-        <div class="vnum"><?= h($pl['name']) ?></div>
+  <?php elseif ($section === 'creditos'): ?>
+    <!-- ============ MIS CRÉDITOS (2026-11-23; sustituye a Mi plan): saldo, tarifa, gasto por
+         dispositivo, tarifas disponibles e historial de movimientos (solo lectura; recarga el admin) ============ -->
+    <section class="card block validity <?= $credits > 0 ? 'active' : 'expired' ?>">
+      <h2><?= t('Mis créditos') ?></h2>
+      <div class="vnum"><?= h(TariffRepository::num($credits)) ?> <?= h($cur) ?></div>
+      <?php if ($tariff === null): ?>
+        <div class="meta"><?= t('No tienes una tarifa asignada: no puedes subir archivos ni activar contenido. Pide al administrador que te asigne una.') ?></div>
+      <?php else: ?>
         <dl class="plan-data">
-          <dt><?= t('Estado') ?></dt><dd><?= $planState['state'] === 'active'
-              ? '<strong>' . t('Vigente') . '</strong> · ' . ($planState['days'] === 1 ? t('queda 1 día') : t('quedan %d días', (int) $planState['days']))
-              : '<strong>' . t('Vencido') . '</strong>: ' . t('pide al administrador que lo renueve') ?></dd>
-          <dt><?= $planState['state'] === 'active' ? t('Vence el') : t('Venció el') ?></dt><dd><?= $planState['until'] ? dateTag($planState['until']) : '—' ?></dd>
-          <dt><?= t('Duración') ?></dt><dd><?= t('%d días por periodo', (int) $pl['days']) ?></dd>
-          <dt><?= t('Cantidad de contenido') ?></dt><dd><?= t('%d archivo(s) · tienes %d', (int) $pl['max_files'], count($mediaList)) ?></dd>
-          <dt><?= t('Almacenamiento') ?></dt><dd><?= t('%s · usas %s', h(PlanRepository::storageText((int) $pl['storage_mb'])), h(formatBytes($usedBytes))) ?></dd>
-          <dt><?= t('Costo') ?></dt><dd><?= t('%s por periodo', h(PlanRepository::priceText($pl))) ?></dd>
+          <dt><?= t('Tarifa') ?></dt><dd><strong><?= h($tariff['name']) ?></strong></dd>
+          <dt><?= t('Precio por imagen') ?></dt><dd><?= t('%s por dispositivo y día', h(TariffRepository::num($tariff['image_price']) . ' ' . $tariff['currency'])) ?></dd>
+          <dt><?= t('Precio por video') ?></dt><dd><?= t('%s por dispositivo y día', h(TariffRepository::num($tariff['video_price']) . ' ' . $tariff['currency'])) ?></dd>
+          <dt><?= t('Gasto actual') ?></dt><dd><?= t('%s al día en %d dispositivo(s)', h(TariffRepository::num($daily['cost'])), $daily['devices']) ?><?= $daysLeft !== null ? ' · ' . t('alcanza para unos %d día(s)', $daysLeft) : '' ?></dd>
+          <dt><?= t('Cantidad de contenido') ?></dt><dd><?= t('%d archivo(s) · tienes %d', (int) $tariff['max_files'], count($mediaList)) ?></dd>
+          <dt><?= t('Almacenamiento') ?></dt><dd><?= t('%s · usas %s', h(PlanRepository::storageText((int) $tariff['storage_mb'])), h(formatBytes($usedBytes))) ?></dd>
         </dl>
-        <?php if ($planState['state'] === 'active'): ?>
-          <progress value="<?= (int) $usedBytes ?>" max="<?= (int) ((int) $pl['storage_mb'] * 1048576) ?>"></progress>
-        <?php endif; ?>
       <?php endif; ?>
-      <p class="hint"><?= t('La vigencia del contenido en tus pantallas: %s. Al renovar el plan se suman sus días.', $validity['text']) ?></p>
+      <p class="hint"><?= t('Cada día se cobra, por cada dispositivo con el contenido activado, cada imagen y cada video que muestra. Si el saldo no alcanza, el contenido se desactiva solo. Para recargar, escríbele al administrador en %s.', '<a href="?s=mensajes">' . t('Mensajes') . '</a>') ?></p>
     </section>
-    <!-- PLANES DISPONIBLES (2026-11-22): todos, con sus características y el comentario del
-         administrador; el suyo va marcado. Para cambiar de plan, el usuario se lo pide al administrador. -->
-    <?php if ($allPlans): ?>
+    <!-- TARIFAS DISPONIBLES: todas, con sus precios y el comentario del administrador; la suya marcada -->
+    <?php if ($allTariffs): ?>
       <div class="section-head">
-        <h2><?= t('Planes disponibles') ?></h2>
-        <span class="hint"><?= t('Para cambiar de plan, escríbele al administrador en %s.', '<a href="?s=mensajes">' . t('Mensajes') . '</a>') ?></span>
+        <h2><?= t('Tarifas disponibles') ?></h2>
+        <span class="hint"><?= t('Para cambiar de tarifa, escríbele al administrador en %s.', '<a href="?s=mensajes">' . t('Mensajes') . '</a>') ?></span>
       </div>
       <div class="plan-grid">
-        <?php foreach ($allPlans as $ap): $mine = $planState['plan'] !== null && (int) $planState['plan']['id'] === (int) $ap['id']; ?>
+        <?php foreach ($allTariffs as $at): $mine = $tariff !== null && (int) $tariff['id'] === (int) $at['id']; ?>
           <section class="card plan-card<?= $mine ? ' mine' : '' ?>">
             <div class="plan-head">
-              <strong class="plan-name"><?= h($ap['name']) ?></strong>
-              <?php if ($mine): ?><span class="badge authorized"><?= t('Tu plan') ?></span><?php endif; ?>
+              <strong class="plan-name"><?= h($at['name']) ?></strong>
+              <?php if ($mine): ?><span class="badge authorized"><?= t('Tu tarifa') ?></span><?php endif; ?>
             </div>
-            <div class="plan-price"><?= h(PlanRepository::priceText($ap)) ?> <span class="hint">/ <?= t('%d días', (int) $ap['days']) ?></span></div>
             <ul class="plan-features">
-              <li><?= t('%d archivo(s) de contenido', (int) $ap['max_files']) ?></li>
-              <li><?= t('%s de almacenamiento', h(PlanRepository::storageText((int) $ap['storage_mb']))) ?></li>
-              <li><?= t('%d días por periodo', (int) $ap['days']) ?></li>
+              <li><?= t('Imagen: %s por dispositivo y día', h(TariffRepository::num($at['image_price']) . ' ' . $at['currency'])) ?></li>
+              <li><?= t('Video: %s por dispositivo y día', h(TariffRepository::num($at['video_price']) . ' ' . $at['currency'])) ?></li>
+              <li><?= t('%d archivo(s) de contenido', (int) $at['max_files']) ?></li>
+              <li><?= t('%s de almacenamiento', h(PlanRepository::storageText((int) $at['storage_mb']))) ?></li>
             </ul>
-            <?php if (!empty($ap['comment'])): ?><p class="plan-comment"><?= nl2br(h((string) $ap['comment'])) ?></p><?php endif; ?>
+            <?php if (!empty($at['comment'])): ?><p class="plan-comment"><?= nl2br(h((string) $at['comment'])) ?></p><?php endif; ?>
           </section>
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
-    <!-- Historial de asignaciones y renovaciones, con su ID de transacción; se busca por ID y fechas -->
+    <!-- Historial de movimientos (recargas, descuentos, cobros diarios), con ID de transacción y búsqueda -->
     <section class="card block" id="historial">
-      <h2><?= t('Historial de renovaciones') ?></h2>
-      <?= planHistoryFilter(['s' => 'plan'], $planFilter) ?>
+      <h2><?= t('Movimientos de créditos') ?></h2>
+      <?= planHistoryFilter(['s' => 'creditos'], $planFilter) ?>
       <?php $filtering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
-      <?php if (!$planHistory): ?>
-        <p class="hint"><?= $filtering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay renovaciones.') ?></p>
+      <?php if (!$creditMoves): ?>
+        <p class="hint"><?= $filtering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay movimientos.') ?></p>
       <?php else: ?>
-        <?= $filtering ? '<p class="hint">' . t('%d transacción(es) encontrada(s).', count($planHistory)) . '</p>' : '' ?>
-        <?= planHistoryTable($planHistory, false, 'history') ?>
+        <?= $filtering ? '<p class="hint">' . t('%d transacción(es) encontrada(s).', count($creditMoves)) . '</p>' : '' ?>
+        <?= creditHistoryTable($creditMoves, false, 'history') ?>
       <?php endif; ?>
     </section>
 
@@ -1255,7 +1286,7 @@ if ($validity['state'] !== 'active') {
             <dt>Email</dt><dd><?= h($user['email']) ?></dd>
             <dt><?= t('Teléfono') ?></dt><dd><?= h($user['phone']) ?></dd>
             <dt><?= t('Cliente desde') ?></dt><dd><?= dateTag($user['created_at']) ?></dd>
-            <dt><?= t('Vigencia') ?></dt><dd><?= $validity['text'] ?></dd>
+            <dt><?= t('Créditos') ?></dt><dd><?= h(TariffRepository::num($credits)) ?> <?= h($cur) ?><?= $tariff ? ' · ' . t('tarifa %s', h($tariff['name'])) : '' ?></dd>
             <!-- Ligas asignadas por el administrador (opciones del selector de ligas de sus TV) -->
             <dt><?= t('Ligas') ?></dt><dd><?php if (!$myLeagues): ?><?= t('Ninguna asignada (tus dispositivos quedan sin liga)') ?><?php else: ?>
               <?php foreach ($myLeagues as $i => $l): ?><?= $i ? '<br>' : '' ?><strong><?= h($l['type_name']) ?></strong> · <?= h($l['name']) ?>

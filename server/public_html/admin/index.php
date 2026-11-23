@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.15 (2026-11-22)
+// Versión del archivo: 1.0.16 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - PANEL DE ADMINISTRACIÓN DE DISPOSITIVOS
@@ -190,33 +190,32 @@ function panelUrl(array $params): string
 const DEVICES_PER_PAGE = 50;
 
 /**
- * Bloque de VIGENCIA de un usuario: estado + sumar/restar días + quitar.
- * @param array<string,mixed> $u    Fila de UserRepository::all().
+ * Bloque de TARIFA Y CRÉDITOS de un usuario (2026-11-23; sustituye a la vigencia):
+ * tarifa, saldo, gasto diario y formularios de recarga (+) / descuento (−) con nota.
+ * @param array<string,mixed> $u    Fila de UserRepository::all() (credits, tariff_name).
  * @param string              $back Consulta a la que volver tras el cambio.
  */
-function validityBlock(array $u, string $back): string
+function creditBlock(array $u, string $back): string
 {
-    $v = contentValidity($u['content_until'] ?? null);
-    $badge = ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$v['state']];
-    $label = ['active' => t('Vigente'), 'expired' => t('Vencida'), 'none' => t('Sin vigencia')][$v['state']];
     $uid = (int) $u['id'];
-    $html = '<div class="validity"><div class="validity-head"><span class="badge ' . $badge . '">' . $label . '</span> '
-        . '<span class="owner">' . $v['text'] . '</span></div>'
+    $tariff = TariffRepository::forUser($u);
+    $daily = CreditRepository::dailyCost($u);
+    $cur = $tariff['currency'] ?? '';
+    $credits = (float) $u['credits'];
+    $html = '<div class="validity"><div class="validity-head">'
+        . '<span class="badge ' . ($credits > 0 ? 'authorized' : 'revoked') . '">' . t('Saldo: %s', h(TariffRepository::num($credits) . ($cur ? ' ' . $cur : ''))) . '</span> '
+        . '<span class="owner">' . ($tariff ? t('Tarifa %s', h($tariff['name'])) : t('Sin tarifa'))
+        . ' · ' . t('gasto actual %s al día en %d dispositivo(s)', h(TariffRepository::num($daily['cost'])), $daily['devices'])
+        . ($daily['cost'] > 0 ? ' · ' . t('alcanza para unos %d día(s)', (int) floor($credits / $daily['cost'])) : '') . '</span></div>'
         . '<form method="post" class="days-form">' . csrfField()
-        . '<input type="hidden" name="action" value="user_days"><input type="hidden" name="userId" value="' . $uid . '">'
+        . '<input type="hidden" name="action" value="user_credits"><input type="hidden" name="userId" value="' . $uid . '">'
         . '<input type="hidden" name="back" value="' . h($back) . '">'
-        . '<label for="days' . $uid . '" class="sr">' . t('Días') . '</label>'
-        . '<input type="number" id="days' . $uid . '" name="days" value="30" min="1" max="' . UserRepository::MAX_DAYS . '" required>'
-        . '<span class="owner">' . t('días') . '</span>'
-        . '<button class="ok" type="submit" name="op" value="add">+ Sumar</button>'
-        . '<button class="bad" type="submit" name="op" value="sub"' . ($v['state'] === 'none' ? ' disabled' : '') . '>− Restar</button>'
+        . '<label for="cr' . $uid . '" class="sr">' . t('Importe') . '</label>'
+        . '<input type="text" id="cr' . $uid . '" name="amount" inputmode="decimal" placeholder="10" required class="amount-input">'
+        . '<input type="text" name="note" maxlength="255" placeholder="' . h(t('Nota (opcional)')) . '" class="note-input">'
+        . '<button class="ok" type="submit" name="op" value="add">' . t('+ Recargar') . '</button>'
+        . '<button class="bad" type="submit" name="op" value="sub"' . ($credits > 0 ? '' : ' disabled') . '>' . t('− Descontar') . '</button>'
         . '</form>';
-    if ($v['state'] !== 'none') {
-        $html .= '<form method="post" data-confirm="' . h(t('¿Quitar la vigencia de «')) . h($u['company']) . h(t('»? Sus equipos dejarán de mostrar el contenido.')) . '">'
-            . csrfField() . '<input type="hidden" name="action" value="user_clear_content">'
-            . '<input type="hidden" name="userId" value="' . $uid . '"><input type="hidden" name="back" value="' . h($back) . '">'
-            . '<button type="submit">' . t('Quitar vigencia') . '</button></form>';
-    }
     return $html . '</div>';
 }
 
@@ -881,6 +880,35 @@ try {
                 default:
                     redirectWith(t('Acción desconocida.'), $back);
             }
+        } elseif (str_starts_with($action, 'tariff_')) {
+            /* ---- TARIFAS (vista ?view=tariffs, 2026-11-23; sustituyen a los planes) ---- */
+            $tariffId = (int) param($_POST, 'tariffId');
+            $tariff = $action === 'tariff_create' ? null : TariffRepository::find($tariffId);
+            if ($action !== 'tariff_create' && $tariff === null) {
+                redirectWith(t('Esa tarifa ya no existe.'), 'view=tariffs');
+            }
+            switch ($action) {
+                case 'tariff_create':
+                case 'tariff_update':
+                    $data = TariffRepository::clean($_POST);
+                    if (is_string($data)) {
+                        redirectWith($data, 'view=tariffs');
+                    }
+                    if (TariffRepository::nameTaken($data['name'], $tariffId)) {
+                        redirectWith(t('Ya hay una tarifa llamada «%s».', $data['name']), 'view=tariffs');
+                    }
+                    if ($action === 'tariff_create') {
+                        TariffRepository::create($data);
+                        redirectWith(t('Tarifa «%s» creada. Asígnala en la ficha de cada usuario.', $data['name']), 'view=tariffs');
+                    }
+                    TariffRepository::update($tariffId, $data);
+                    redirectWith(t('Tarifa «%s» guardada. Los precios nuevos se aplican desde el próximo cobro diario.', $data['name']), 'view=tariffs');
+                case 'tariff_delete':
+                    TariffRepository::delete($tariffId);
+                    redirectWith(t('Tarifa «%s» eliminada; sus usuarios quedan sin tarifa y su contenido se desactivará en el próximo cobro.', (string) $tariff['name']), 'view=tariffs');
+                default:
+                    redirectWith(t('Acción desconocida.'), 'view=tariffs');
+            }
         } elseif (str_starts_with($action, 'plan_')) {
             /* ---- PLANES DE CONTENIDO (vista ?view=plans, 2026-11-22) ---- */
             $planId = (int) param($_POST, 'planId');
@@ -1087,6 +1115,26 @@ try {
                     $password = UserRepository::resetPassword($uid);
                     $_SESSION['newPassword'] = ['email' => $user['email'], 'company' => $user['company'], 'password' => $password];
                     redirectWith(t('Contraseña de «%s» restablecida; su sesión abierta se cierra.', (string) $user['company']), $back);
+                case 'user_tariff':
+                    // TARIFA del usuario ("" = sin tarifa: su contenido se desactiva en el próximo cobro)
+                    $raw = param($_POST, 'tariffId');
+                    $tid = ctype_digit($raw) && (int) $raw > 0 ? (int) $raw : null;
+                    if (!TariffRepository::assign($uid, $tid)) {
+                        redirectWith(t('Esa tarifa ya no existe.'), $back);
+                    }
+                    $tf = $tid === null ? null : TariffRepository::find($tid);
+                    redirectWith($tf === null ? t('«%s» queda sin tarifa: no podrá subir archivos ni activar contenido.', (string) $user['company'])
+                        : t('Tarifa «%s» asignada a «%s».', (string) $tf['name'], (string) $user['company']), $back);
+                case 'user_credits':
+                    // RECARGA (+) o DESCUENTO (−) de créditos, con su ID de transacción
+                    $sub = param($_POST, 'op') === 'sub';
+                    $res = CreditRepository::adminMove($uid, param($_POST, 'amount'), $sub, param($_POST, 'note'));
+                    if (is_string($res)) {
+                        redirectWith($res, $back);
+                    }
+                    redirectWith(($sub ? t('Descontados %s créditos a «%s»', TariffRepository::num(param($_POST, 'amount')), (string) $user['company'])
+                        : t('Recargados %s créditos a «%s»', TariffRepository::num(param($_POST, 'amount')), (string) $user['company']))
+                        . ' ' . t('(transacción %s). Saldo: %s.', $res['txn'], TariffRepository::num($res['balance'])), $back);
                 case 'user_plan_assign':
                 case 'user_plan_renew':
                     // PLAN (2026-11-22): asignar (o cambiar) y renovar suman los días del plan
@@ -1180,12 +1228,23 @@ try {
                     redirectWith(t('Alias y notas del administrador de %s guardados (el usuario no los ve).', (string) $id), $back);
                 case 'media_enable':
                 case 'media_disable':
-                    // Permiso de contenido (imágenes/videos de mirror.html), aparte de la autorización
-                    $on = $action === 'media_enable';
-                    DeviceRepository::setMediaEnabled($id, $on);
-                    redirectWith($on
-                        ? t('Contenido habilitado en %s: mostrará las imágenes/videos de su usuario si está autorizado.', (string) $id)
-                        : t('Contenido deshabilitado en %s: dejará de mostrarlo en su próxima consulta.', (string) $id), $back);
+                    // Contenido del equipo (2026-11-23, tarifas): activarlo cobra el primer día a su usuario
+                    // (igual que si lo activa él en /cuenta/); desactivarlo no devuelve lo pagado
+                    if ($action === 'media_disable') {
+                        CreditRepository::deactivate($id);
+                        redirectWith(t('Contenido deshabilitado en %s: dejará de mostrarlo en su próxima consulta.', $id), $back);
+                    }
+                    $dev = DeviceRepository::find($id);
+                    if ($dev === null || empty($dev['user_id'])) {
+                        redirectWith(t('%s no tiene usuario: asígnale uno antes de activar su contenido.', $id), $back);
+                    }
+                    $res = CreditRepository::activate((int) $dev['user_id'], $id);
+                    if (is_string($res)) {
+                        redirectWith($res, $back);
+                    }
+                    redirectWith(t('Contenido activado en %s.', $id) . ' ' . ($res['charged'] > 0
+                        ? t('Se cobraron %s créditos a su usuario por el primer día (transacción %s).', TariffRepository::num($res['charged']), (string) $res['txn'])
+                        : t('El día ya estaba pagado: no se cobró nada.')), $back);
                 case 'set_user':
                     // "" = sin asignar
                     $raw = param($_POST, 'userId');
@@ -1245,8 +1304,12 @@ try {
     }
     $q = mb_substr(trim(param($_GET, 'q')), 0, 40);
     // Vista: lista de equipos (por defecto), usuarios (?view=users) o contenido (?view=media)
-    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages', 'plans'], true) ? param($_GET, 'view') : 'list';
+    $view = in_array(param($_GET, 'view'), ['users', 'media', 'ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages', 'plans', 'tariffs'], true) ? param($_GET, 'view') : 'list';
     // Usuarios (para el filtro, el selector de cada equipo y la vista de usuarios)
+    // Cobro diario pendiente de todos (tarifas y créditos, 2026-11-23): antes de leer los saldos
+    if ($loggedIn) {
+        CreditRepository::settleAll();
+    }
     $users = $loggedIn ? UserRepository::all() : [];
     $usersById = array_column($users, null, 'id');
     // Filtro de usuario (?user=ID | ?user=none); se ignora si el usuario no existe
@@ -1281,7 +1344,7 @@ try {
      * Vista Usuarios organizada: lista compacta filtrada (búsqueda + estado)
      * o la FICHA de un usuario (?view=users&user=ID).
      */
-    $userStates = ['all' => t('Todos'), 'active' => t('Vigentes'), 'expired' => t('Vencidos'), 'none' => t('Sin vigencia'),
+    $userStates = ['all' => t('Todos'), 'credit' => t('Con saldo'), 'nocredit' => t('Sin saldo'), 'notariff' => t('Sin tarifa'),
         'temp' => t('Contraseña temporal'), 'nodevices' => t('Sin equipos')];
     $userState = param($_GET, 'us');
     if (!isset($userStates[$userState])) {
@@ -1294,8 +1357,11 @@ try {
         $needle = mb_strtolower($q);
         foreach ($users as $u) {
             // Estados de cada usuario (uno puede estar en varios filtros)
-            $u['validity'] = contentValidity($u['content_until'] ?? null);
-            $tags = ['all', $u['validity']['state']];
+            // Saldo y tarifa (2026-11-23, sustituyen a la vigencia)
+            $tags = ['all', (float) $u['credits'] > 0 ? 'credit' : 'nocredit'];
+            if (empty($u['tariff_id'])) {
+                $tags[] = 'notariff';
+            }
             if ((int) $u['must_change_password'] === 1) {
                 $tags[] = 'temp';
             }
@@ -1349,6 +1415,14 @@ try {
     // Rutas (?view=routes) y nombre de la ruta de cada usuario (ficha)
     // (también en la lista: URL final de cada tarjeta sin consultar por equipo)
     $routes = $loggedIn && ($view === 'routes' || $view === 'list' || $userCard) ? RouteRepository::all() : [];
+    // TARIFAS Y CRÉDITOS (2026-11-23): cobro diario pendiente de todos (barato si no hay nada vencido),
+    // la vista ?view=tariffs (con la búsqueda global de movimientos) y la ficha del usuario
+    $tariffs = $loggedIn && ($view === 'tariffs' || $userCard) ? TariffRepository::all() : [];
+    $planFilterC = planHistoryParams();
+    $userCredits = $loggedIn && $userCard
+        ? CreditRepository::search((int) $userCard['id'], $planFilterC['tq'], $planFilterC['tf'], $planFilterC['tt'], $planFilterC['tz']) : [];
+    $allCredits = $loggedIn && $view === 'tariffs'
+        ? CreditRepository::search(null, $planFilterC['tq'], $planFilterC['tf'], $planFilterC['tt'], $planFilterC['tz']) : [];
     // PLANES (2026-11-22): la vista ?view=plans y el selector de la ficha del usuario; su plan e historial
     $plans = $loggedIn && ($view === 'plans' || $userCard) ? PlanRepository::all() : [];
     $userPlan = $loggedIn && $userCard ? PlanRepository::forUser($userCard) : null;
@@ -1424,6 +1498,10 @@ try {
     $allDevices = [];
     $overlaysAll = [];
     $routes = [];
+    $tariffs = [];
+    $userCredits = [];
+    $allCredits = [];
+    $planFilterC = ['tq' => '', 'tf' => '', 'tt' => '', 'tz' => 0];
     $plans = [];
     $userPlan = null;
     $userPlanHistory = [];
@@ -1511,6 +1589,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     .conv-last { display: block; margin-top: 4px; overflow-wrap: anywhere; }
     /* Perfiles de equipo */
     .need-profile { color: var(--bad, #c0392b); }
+    /* Créditos: importe y nota de la recarga */
+    .days-form .amount-input { width: 110px; } .days-form .note-input { flex: 1 1 180px; min-width: 0; width: auto; }
     /* Recuadro "Misma TV que SP-…" (tomar los datos del equipo anterior) */
     .takeover { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; padding: 8px 10px;
       border: 1px solid var(--ok, #2e7d32); border-radius: 8px; }
@@ -1649,7 +1729,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <a class="btn <?= $view === 'ads' ? 'on' : '' ?>" href="?view=ads"><?= t('Anuncios') ?></a>
       <a class="btn <?= $view === 'overlays' ? 'on' : '' ?>" href="?view=overlays"><?= t('Tiras') ?></a>
       <a class="btn <?= $view === 'routes' ? 'on' : '' ?>" href="?view=routes"><?= t('Rutas') ?></a>
-      <a class="btn <?= $view === 'plans' ? 'on' : '' ?>" href="?view=plans"><?= t('Planes') ?></a>
+      <a class="btn <?= $view === 'tariffs' ? 'on' : '' ?>" href="?view=tariffs"><?= t('Tarifas') ?></a>
       <a class="btn <?= $view === 'leagues' ? 'on' : '' ?>" href="?view=leagues"><?= t('Ligas') ?></a>
       <a class="btn <?= $view === 'profiles' ? 'on' : '' ?>" href="?view=profiles"><?= t('Perfiles') ?></a>
       <!-- Buzón: número de mensajes de usuarios sin leer -->
@@ -1673,7 +1753,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
   <?php endif; ?>
 
   <!-- Buscador (oculto en Anuncios, Tiras, Rutas y Ligas: no aplica; se deja en la página porque el escáner lo usa) -->
-  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages', 'plans'], true) ? ' hidden-tools' : '' ?>" method="get">
+  <form class="tools<?= in_array($view, ['ads', 'overlays', 'routes', 'leagues', 'profiles', 'messages', 'plans', 'tariffs'], true) ? ' hidden-tools' : '' ?>" method="get">
     <input type="search" name="q" value="<?= h($q) ?>" placeholder="<?= $view === 'users' ? t('Buscar usuario por empresa, email o teléfono') : t('Buscar por ID, alias, alias del admin, empresa, email, MAC, MAC del case o S/N') ?>" aria-label="<?= h(t('Buscar')) ?>">
     <!-- Filtro por usuario (se aplica al cambiarlo) -->
     <select name="user" aria-label="<?= h(t('Usuario')) ?>" data-autosubmit>
@@ -1690,7 +1770,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
     <button type="button" id="scanBtn" class="primary"><?= t('Escanear QR') ?></button>
   </form>
 
-  <?php if ($view === 'users' && !$historyDevice && $userCard): $uid = (int) $userCard['id']; $uv = contentValidity($userCard['content_until'] ?? null); ?>
+  <?php if ($view === 'users' && !$historyDevice && $userCard): $uid = (int) $userCard['id']; $ut = TariffRepository::forUser($userCard); ?>
     <!-- ================= FICHA DE UN USUARIO (?view=users&user=ID) =================
          Todo lo de un usuario, separado por secciones. Las acciones vuelven aquí ($userBack). -->
     <section class="card user-card-head">
@@ -1701,7 +1781,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         </span>
         <span>
           <?php if ((int) $userCard['must_change_password'] === 1): ?><span class="badge pending"><?= t('Contraseña temporal') ?></span><?php endif; ?>
-          <span class="badge <?= ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$uv['state']] ?>"><?= ['active' => t('Vigente'), 'expired' => t('Vencida'), 'none' => t('Sin vigencia')][$uv['state']] ?></span>
+          <span class="badge <?= (float) $userCard['credits'] > 0 ? 'authorized' : 'revoked' ?>"><?= t('Saldo: %s', h(TariffRepository::num($userCard['credits']))) ?></span>
         </span>
       </div>
       <div class="meta">
@@ -1713,15 +1793,9 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="stats">
         <div class="stat"><b><?= (int) $userCard['devices'] ?></b><span><?= t('Equipos') ?></span></div>
         <div class="stat"><b><?= (int) $userCard['authorized'] ?></b><span><?= t('Autorizados') ?></span></div>
-        <div class="stat"><b><?= (int) $userCard['media'] ?>/<?= $userPlan && $userPlan['state'] === 'active' ? (int) $userPlan['plan']['max_files'] : '—' ?></b><span><?= t('Archivos') ?></span></div>
-        <div class="stat"><b><?= $uv['state'] === 'active' ? (int) $uv['days'] : '—' ?></b><span><?= t('Días de vigencia') ?></span></div>
+        <div class="stat"><b><?= (int) $userCard['media'] ?>/<?= $ut ? (int) $ut['max_files'] : '—' ?></b><span><?= t('Archivos') ?></span></div>
+        <div class="stat"><b><?= h(TariffRepository::num($userCard['credits'])) ?></b><span><?= t('Créditos') ?></span></div>
       </div>
-    </section>
-
-    <!-- Vigencia del contenido (días) -->
-    <section class="card section">
-      <h2><?= t('Vigencia del contenido') ?></h2>
-      <?= validityBlock($userCard, $userBack) ?>
     </section>
 
     <!-- Equipos: ver y autorizar/revocar todos -->
@@ -1741,61 +1815,39 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </div>
     </section>
 
-    <!-- PLAN del usuario (2026-11-22; sustituye a la sección Contenido / límite de archivos).
-         Asignar o renovar suma los días del plan al plan y a la vigencia y queda en el historial
-         (el usuario lo ve en /cuenta/ → Mi plan). Sin plan vigente no puede subir archivos nuevos. -->
+    <!-- TARIFA Y CRÉDITOS del usuario (2026-11-23; sustituye a Plan y Vigencia).
+         El usuario activa el contenido de cada dispositivo en /cuenta/ y se le cobra por día
+         (archivos que muestra × precio de su tarifa); sin saldo se desactiva solo. -->
     <section class="card section">
-      <h2><?= t('Plan') ?></h2>
-      <?php $up = $userPlan; $upl = $up['plan'] ?? null; ?>
-      <?php if ($upl === null): ?>
-        <div class="meta"><strong><?= t('Sin plan.') ?></strong> <?= t('No puede subir archivos nuevos (tiene') ?> <?= (int) $userCard['media'] ?> <?= t('subido(s); no se borran).') ?></div>
-      <?php else: ?>
-        <div class="meta">
-          <strong><?= h($upl['name']) ?></strong>
-          <span class="badge <?= $up['state'] === 'active' ? 'authorized' : 'revoked' ?>"><?= $up['state'] === 'active' ? t('Vigente ·') . ' ' . (int) $up['days'] . ' d' : t('Vencido') ?></span><br>
-          <?= $up['state'] === 'active' ? 'Vence' : t('Venció') ?> <?= t('el') ?> <?= $up['until'] ? dateTag($up['until']) : '—' ?>
-          · <?= (int) $upl['days'] ?> <?= t('días ·') ?> <?= (int) $upl['max_files'] ?> <?= t('archivos ·') ?> <?= h(PlanRepository::storageText((int) $upl['storage_mb'])) ?>
-          · <?= h(PlanRepository::priceText($upl)) ?><br>
-          <?= t('Usa') ?> <?= (int) $userCard['media'] ?> <?= t('de') ?> <?= (int) $upl['max_files'] ?> <?= t('archivo(s) y') ?> <?= h(formatBytes(MediaRepository::usedBytes($uid))) ?> <?= t('de') ?> <?= h(PlanRepository::storageText((int) $upl['storage_mb'])) ?>.
-        </div>
-        <div class="actions">
-          <!-- RENOVAR: solo el administrador; el usuario queda renovado al momento -->
-          <form method="post" data-confirm="<?= h(t('¿Renovar el plan «')) ?><?= h($upl['name']) ?><?= h(t('» de «')) ?><?= h($userCard['company']) ?><?= h(t('»? Se suman')) ?> <?= (int) $upl['days'] ?> <?= h(t('días al plan y a la vigencia (')) ?><?= h(PlanRepository::priceText($upl)) ?>)."><?= csrfField() ?>
-            <input type="hidden" name="action" value="user_plan_renew"><input type="hidden" name="userId" value="<?= $uid ?>">
-            <input type="hidden" name="back" value="<?= h($userBack) ?>">
-            <button class="ok" type="submit"><?= t('Renovar plan') ?></button></form>
-          <form method="post" data-confirm="<?= h(t('¿Quitar el plan a «')) ?><?= h($userCard['company']) ?><?= h(t('»? No podrá subir archivos nuevos; la vigencia no cambia.')) ?>"><?= csrfField() ?>
-            <input type="hidden" name="action" value="user_plan_remove"><input type="hidden" name="userId" value="<?= $uid ?>">
-            <input type="hidden" name="back" value="<?= h($userBack) ?>">
-            <button type="submit"><?= t('Quitar plan') ?></button></form>
-        </div>
-      <?php endif; ?>
-      <!-- Asignar (o cambiar) plan: empieza o alarga el periodo con los días del plan elegido -->
-      <?php if ($plans): ?>
-        <form method="post" class="days-form" data-confirm="<?= h(t('¿Asignar este plan? Se suman sus días al plan y a la vigencia del contenido.')) ?>"><?= csrfField() ?>
-          <input type="hidden" name="action" value="user_plan_assign"><input type="hidden" name="userId" value="<?= $uid ?>">
+      <h2><?= t('Tarifa y créditos') ?></h2>
+      <?= creditBlock($userCard, $userBack) ?>
+      <?php if ($tariffs): ?>
+        <form method="post" class="days-form"><?= csrfField() ?>
+          <input type="hidden" name="action" value="user_tariff"><input type="hidden" name="userId" value="<?= $uid ?>">
           <input type="hidden" name="back" value="<?= h($userBack) ?>">
-          <label for="plan<?= $uid ?>"><?= $upl === null ? t('Asignar plan') : t('Cambiar a otro plan') ?></label>
-          <select id="plan<?= $uid ?>" name="planId" required>
-            <?php foreach ($plans as $pl): ?>
-              <option value="<?= (int) $pl['id'] ?>" <?= $upl !== null && (int) $upl['id'] === (int) $pl['id'] ? 'selected' : '' ?>>
-                <?= h($pl['name'] . ' · ' . $pl['days'] . ' d · ' . $pl['max_files'] . ' ' . t('archivos ·') . ' ' . PlanRepository::storageText((int) $pl['storage_mb']) . ' · ' . PlanRepository::priceText($pl)) ?></option>
+          <label for="tf<?= $uid ?>"><?= t('Tarifa') ?></label>
+          <select id="tf<?= $uid ?>" name="tariffId" data-autosubmit>
+            <option value=""><?= t('Sin tarifa') ?></option>
+            <?php foreach ($tariffs as $tf): ?>
+              <option value="<?= (int) $tf['id'] ?>" <?= $ut && (int) $ut['id'] === (int) $tf['id'] ? 'selected' : '' ?>>
+                <?= h($tf['name'] . ' · ' . t('imagen %s · video %s', TariffRepository::num($tf['image_price']), TariffRepository::num($tf['video_price'])) . ' ' . $tf['currency']
+                    . ' · ' . $tf['max_files'] . ' ' . t('archivos') . ' · ' . PlanRepository::storageText((int) $tf['storage_mb'])) ?></option>
             <?php endforeach; ?>
           </select>
-          <button class="ok" type="submit"><?= $upl === null ? t('Asignar') : t('Cambiar') ?></button>
+          <noscript><button type="submit"><?= t('Guardar') ?></button></noscript>
         </form>
       <?php else: ?>
-        <div class="meta"><?= t('Todavía no hay planes: créalos en') ?> <a href="?view=plans"><?= t('Planes') ?></a>.</div>
+        <div class="meta"><?= t('Todavía no hay tarifas: créalas en') ?> <a href="?view=tariffs"><?= t('Tarifas') ?></a>.</div>
       <?php endif; ?>
-      <!-- Historial (lo mismo que ve el usuario en /cuenta/ → Mi plan), con ID de transacción y búsqueda -->
-      <?php $planFiltering = $planFilter['tq'] !== '' || $planFilter['tf'] !== '' || $planFilter['tt'] !== ''; ?>
-      <details class="edit" id="historial" <?= $planFiltering ? 'open' : '' ?>>
-        <summary><?= t('Historial de renovaciones (') ?><?= count($userPlanHistory) ?><?= $planFiltering ? ' encontrada(s)' : '' ?>)</summary>
-        <?= planHistoryFilter(['view' => 'users', 'user' => (string) $uid], $planFilter) ?>
-        <?php if (!$userPlanHistory): ?>
-          <p class="owner"><?= $planFiltering ? t('Ninguna transacción coincide con la búsqueda.') : t('Sin renovaciones todavía.') ?></p>
+      <!-- Movimientos de créditos (lo mismo que ve el usuario en /cuenta/), con ID de transacción y búsqueda -->
+      <?php $crFiltering = $planFilterC['tq'] !== '' || $planFilterC['tf'] !== '' || $planFilterC['tt'] !== ''; ?>
+      <details class="edit" id="historial" <?= $crFiltering ? 'open' : '' ?>>
+        <summary><?= t('Movimientos de créditos (%d)', count($userCredits)) ?></summary>
+        <?= planHistoryFilter(['view' => 'users', 'user' => (string) $uid], $planFilterC) ?>
+        <?php if (!$userCredits): ?>
+          <p class="owner"><?= $crFiltering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay movimientos.') ?></p>
         <?php else: ?>
-          <?= planHistoryTable($userPlanHistory, false, 'boots') ?>
+          <?= creditHistoryTable($userCredits, false, 'boots') ?>
         <?php endif; ?>
       </details>
       <div class="actions">
@@ -1914,7 +1966,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       <div class="card empty"><?= !$users ? t('Todavía no hay usuarios.') : ($q !== '' ? t('Ningún usuario coincide con «') . h($q) . '».' : t('No hay usuarios en esta lista.')) ?></div>
     <?php else: ?>
       <div class="card user-list">
-        <?php foreach ($userList as $u): $uid = (int) $u['id']; $v = $u['validity']; ?>
+        <?php foreach ($userList as $u): $uid = (int) $u['id']; ?>
           <!-- Fila: toda ella abre la ficha del usuario -->
           <a class="user-row" href="<?= h(panelUrl(['view' => 'users', 'user' => $uid])) ?>">
             <span class="user-main">
@@ -1922,10 +1974,9 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
               <span class="owner"><?= h($u['email']) ?> · <?= h($u['phone']) ?></span>
             </span>
             <span class="user-facts">
-              <span class="badge <?= ['active' => 'authorized', 'expired' => 'revoked', 'none' => 'off'][$v['state']] ?>">
-                <?= $v['state'] === 'active' ? t('Vigente ·') . ' ' . (int) $v['days'] . ' d' : ($v['state'] === 'expired' ? t('Vencida') : t('Sin vigencia')) ?></span>
+              <span class="badge <?= (float) $u['credits'] > 0 ? 'authorized' : 'revoked' ?>"><?= t('Saldo: %s', h(TariffRepository::num($u['credits']))) ?></span>
               <?php if ((int) $u['must_change_password'] === 1): ?><span class="badge pending"><?= t('Contraseña temporal') ?></span><?php endif; ?>
-              <span class="owner"><?= (int) $u['devices'] ?> <?= t('equipo(s) ·') ?> <?= (int) $u['authorized'] ?> <?= t('aut. ·') ?> <?= (int) $u['media'] ?> <?= t('archivo(s) ·') ?> <?= !empty($u['plan_name']) ? t('plan') . ' ' . h($u['plan_name']) . (!empty($u['plan_until']) && strtotime($u['plan_until'] . ' UTC') > time() ? '' : ' ' . t('(vencido)')) : t('sin plan') ?></span>
+              <span class="owner"><?= (int) $u['devices'] ?> <?= t('equipo(s) ·') ?> <?= (int) $u['authorized'] ?> <?= t('aut. ·') ?> <?= (int) $u['media'] ?> <?= t('archivo(s) ·') ?> <?= !empty($u['tariff_name']) ? t('tarifa %s', h($u['tariff_name'])) : t('sin tarifa') ?></span>
             </span>
             <span class="chev" aria-hidden="true"><?= t('&rsaquo;') ?></span>
           </a>
@@ -2229,6 +2280,76 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
         </details>
       </section>
     <?php endforeach; ?>
+
+  <?php elseif ($view === 'tariffs' && !$historyDevice):
+      // Campos de una tarifa (crear o editar); el almacenamiento se escribe en GB
+      $tariffFields = static function (?array $tf, string $px): string {
+          $v = $tf ?? ['name' => '', 'image_price' => '0.13', 'video_price' => '0.25', 'max_files' => 5, 'storage_mb' => 1024, 'currency' => 'USD', 'comment' => ''];
+          return '<div class="user-grid">'
+              . '<div><label for="' . $px . 'name">' . t('Nombre de la tarifa') . '</label><input type="text" id="' . $px . 'name" name="name" maxlength="60" required value="' . h((string) $v['name']) . '" placeholder="' . h(t('p. ej. Básica')) . '"></div>'
+              . '<div><label for="' . $px . 'img">' . t('Precio por imagen (por dispositivo y día)') . '</label><input type="text" id="' . $px . 'img" name="image_price" inputmode="decimal" required value="' . h(TariffRepository::num($v['image_price'])) . '"></div>'
+              . '<div><label for="' . $px . 'vid">' . t('Precio por video (por dispositivo y día)') . '</label><input type="text" id="' . $px . 'vid" name="video_price" inputmode="decimal" required value="' . h(TariffRepository::num($v['video_price'])) . '"></div>'
+              . '<div><label for="' . $px . 'files">' . t('Cantidad de contenido (archivos)') . '</label><input type="number" id="' . $px . 'files" name="max_files" min="1" max="' . TariffRepository::MAX_FILES . '" required value="' . (int) $v['max_files'] . '"></div>'
+              . '<div><label for="' . $px . 'gb">' . t('Almacenamiento (GB)') . '</label><input type="text" id="' . $px . 'gb" name="storage_gb" inputmode="decimal" required value="' . h(PlanRepository::storageGbValue((int) $v['storage_mb'])) . '"></div>'
+              . '<div><label for="' . $px . 'cur">' . t('Moneda') . '</label><input type="text" id="' . $px . 'cur" name="currency" maxlength="3" required value="' . h((string) $v['currency']) . '" data-upper></div>'
+              . '</div>'
+              . '<label for="' . $px . 'cm">' . t('Comentario (opcional, lo ven los usuarios)') . '</label>'
+              . '<textarea id="' . $px . 'cm" name="comment" rows="2" maxlength="500">' . h((string) ($v['comment'] ?? '')) . '</textarea>';
+      };
+  ?>
+    <!-- ================= TARIFAS (2026-11-23; sustituyen a los planes) =================
+         Precio en créditos por imagen y por video, por dispositivo y por día, más los límites.
+         Se asignan en la ficha de cada usuario; el usuario las ve en /cuenta/ → Mis créditos. -->
+    <h2 class="ov-list-title"><?= t('Tarifas') ?></h2>
+    <details class="card new-user" <?= !$tariffs ? 'open' : '' ?>>
+      <summary><strong><?= t('+ Nueva tarifa') ?></strong></summary>
+      <form method="post" autocomplete="off"><?= csrfField() ?>
+        <input type="hidden" name="action" value="tariff_create">
+        <?= $tariffFields(null, 'tfnew-') ?>
+        <p><button class="primary" type="submit"><?= t('Crear tarifa') ?></button>
+          <span class="owner"><?= t('Cada día se cobra, por cada dispositivo con el contenido activado, cada imagen y cada video que muestra.') ?></span></p>
+      </form>
+    </details>
+    <?php if (!$tariffs): ?><div class="card empty"><?= t('Todavía no hay tarifas.') ?></div><?php endif; ?>
+    <?php foreach ($tariffs as $tf): $tfid = (int) $tf['id']; ?>
+      <section class="card device">
+        <div class="user-head">
+          <span class="media-name"><?= h($tf['name']) ?></span>
+          <span class="badge <?= (int) $tf['users'] > 0 ? 'authorized' : 'off' ?>"><?= (int) $tf['users'] ?> <?= t('usuario(s)') ?></span>
+        </div>
+        <div class="meta">
+          <?= t('imagen %s · video %s', h(TariffRepository::num($tf['image_price'])), h(TariffRepository::num($tf['video_price']))) ?> <?= h($tf['currency']) ?> <?= t('por dispositivo y día') ?>
+          · <?= (int) $tf['max_files'] ?> <?= t('archivos') ?> · <?= h(PlanRepository::storageText((int) $tf['storage_mb'])) ?>
+          <?php if (!empty($tf['comment'])): ?><div class="admin-notes"><?= nl2br(h((string) $tf['comment'])) ?></div><?php endif; ?>
+        </div>
+        <details class="edit">
+          <summary><?= t('Editar') ?></summary>
+          <form method="post" autocomplete="off"><?= csrfField() ?>
+            <input type="hidden" name="action" value="tariff_update"><input type="hidden" name="tariffId" value="<?= $tfid ?>">
+            <?= $tariffFields($tf, 'tf' . $tfid . '-') ?>
+            <p><button class="primary" type="submit"><?= t('Guardar tarifa') ?></button>
+              <span class="owner"><?= t('Los precios nuevos se aplican desde el próximo cobro diario.') ?></span></p>
+          </form>
+        </details>
+        <div class="actions">
+          <form method="post" data-confirm="<?= h(t('¿Eliminar la tarifa «%s»? Sus usuarios quedarán sin tarifa y su contenido se desactivará.', $tf['name'])) ?>"><?= csrfField() ?>
+            <input type="hidden" name="action" value="tariff_delete"><input type="hidden" name="tariffId" value="<?= $tfid ?>">
+            <button type="submit"><?= t('Eliminar') ?></button></form>
+        </div>
+      </section>
+    <?php endforeach; ?>
+    <!-- Movimientos de créditos de todos los usuarios (ID de transacción y fechas) -->
+    <?php $crFiltering = $planFilterC['tq'] !== '' || $planFilterC['tf'] !== '' || $planFilterC['tt'] !== ''; ?>
+    <section class="card" id="historial">
+      <h2><?= t('Buscar transacciones') ?></h2>
+      <div class="meta"><?= t('Recargas, descuentos y cobros diarios de todos los usuarios, por ID de transacción o por fechas (máx. 500).') ?></div>
+      <?= planHistoryFilter(['view' => 'tariffs'], $planFilterC) ?>
+      <?php if (!$allCredits): ?>
+        <p class="owner"><?= $crFiltering ? t('Ninguna transacción coincide con la búsqueda.') : t('Todavía no hay transacciones.') ?></p>
+      <?php else: ?>
+        <?= creditHistoryTable($allCredits, true, 'boots') ?>
+      <?php endif; ?>
+    </section>
 
   <?php elseif ($view === 'plans' && !$historyDevice):
       // Campos de un plan (crear o editar); el almacenamiento se escribe en GB
@@ -2546,7 +2667,7 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </div>
       <div class="meta"><?= h($focusUser['email']) ?> <?= t('· Tel.') ?> <?= h($focusUser['phone']) ?>
         · <?= (int) $focusUser['devices'] ?> <?= t('equipo(s),') ?> <?= (int) $focusUser['authorized'] ?> <?= t('autorizado(s)') ?></div>
-      <?= validityBlock($focusUser, $back) ?>
+      <?= creditBlock($focusUser, $back) ?>
       <!-- Todos a la vez; cada equipo se sigue pudiendo cambiar con sus botones de abajo -->
       <div class="actions">
         <form method="post" data-confirm="<?= h(t('¿Autorizar TODOS los equipos de «')) ?><?= h($focusUser['company']) ?>»?"><?= csrfField() ?>
@@ -2610,7 +2731,8 @@ $focusUser = $userFilter ? ($usersById[$userFilter] ?? null) : null;
       </div>
       <div class="meta">
         <?= t('Usuario:') ?> <?= $d['user_company'] ? h($d['user_company']) . ' <span class="owner">(' . h($d['user_email']) . ')</span>'
-          . ' · <span class="owner">' . contentValidity($d['user_content_until'] ?? null)['text'] . '</span>' : '<em>' . t('sin asignar') . '</em>' ?><br>
+          . (isset($usersById[(int) $d['user_id']]) ? ' · <span class="owner">' . t('saldo %s', h(TariffRepository::num($usersById[(int) $d['user_id']]['credits']))) . '</span>' : '')
+          : '<em>' . t('sin asignar') . '</em>' ?><br>
         <?php if ($d['user_id']):
             $ownerId = (int) $d['user_id'];
             $ownerRoute = !empty($usersById[$ownerId]['route_id']);
