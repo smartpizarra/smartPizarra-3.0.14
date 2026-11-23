@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.18 (2026-11-23)
+// Versión del archivo: 1.0.19 (2026-11-23)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -3152,6 +3152,12 @@ final class RouteRepository
     {
         $r = self::forDevice($device);
         if ($r === null) {
+            return null;
+        }
+        // Sin LIGAS asignadas por el administrador a su usuario no se envía la pizarra (2026-11-23):
+        // la TV recibe null => routeUrl "none" => pantalla local none.html en lugar de SmartBet.
+        // (Con el contenido activado la TV muestra su contenido igualmente.)
+        if (!LeagueRepository::idsForUser((int) $device['user_id'])) {
             return null;
         }
         $league = LeagueRepository::devicePayload($device);
