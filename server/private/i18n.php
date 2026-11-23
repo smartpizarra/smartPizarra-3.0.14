@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-22)
+// Versión del archivo: 1.0.1 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - IDIOMAS DE LOS PANELES (español / inglés), 2026-11-22

@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.0 (2026-11-22)
+// Versión del archivo: 1.0.1 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - TRADUCCIONES AL INGLÉS (2026-11-22)
@@ -362,4 +362,4 @@ return [
     'usa el nivel H.264 %s (máximo 4.1)' => 'uses H.264 level %s (maximum 4.1)',
     'mide %d×%d (máximo 1920×1080)' => 'is %d×%d (maximum 1920×1080)',
     'Este video %s: en las pantallas no se vería bien (a saltos o nada). Expórtalo a 30 fps, H.264 (nivel 4.0) y 1920×1080 como máximo, sin audio, y vuelve a subirlo (p. ej. con HandBrake: Framerate 30 constante, Encoder Level 4.0).' => 'This video %s: it would not play well on the screens (stuttering or not at all). Export it at 30 fps, H.264 (level 4.0) and 1920×1080 maximum, without audio, and upload it again (e.g. with HandBrake: constant Framerate 30, Encoder Level 4.0).',
-];
+] + (is_file(__DIR__ . '/i18n_en_admin.php') ? (array) require __DIR__ . '/i18n_en_admin.php' : []); // fase 2: panel del administrador y Agentes

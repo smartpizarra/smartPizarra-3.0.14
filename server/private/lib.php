@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.14 (2026-11-22)
+// Versión del archivo: 1.0.15 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - CÓDIGO COMÚN DEL SERVIDOR
@@ -47,17 +47,17 @@ final class AppConfig
             $file = getenv('SP_CONFIG') ?: __DIR__ . '/config.php';
             if (!is_file($file)) {
                 throw new RuntimeException(
-                    'No existe private/config.php. Copia private/config.sample.php como config.php '
-                    . '(en la MISMA carpeta private/, al lado de lib.php) y rellénalo.'
+                    t('No existe private/config.php. Copia private/config.sample.php como config.php') . ' '
+                    . t('(en la MISMA carpeta private/, al lado de lib.php) y rellénalo.')
                 );
             }
             try {
                 $data = require $file;
             } catch (ParseError $e) {
                 throw new RuntimeException(
-                    'private/config.php tiene un error de escritura cerca de la línea ' . $e->getLine()
-                    . ' (suele ser una comilla, una coma o un corchete que falta). '
-                    . 'Pon los textos entre comillas simples \'...\'.'
+                    t('private/config.php tiene un error de escritura cerca de la línea') . ' ' . $e->getLine()
+                    . ' ' . t('(suele ser una comilla, una coma o un corchete que falta).') . ' '
+                    . t('Pon los textos entre comillas simples \'...\'.')
                 );
             }
             if (!is_array($data)) {
@@ -96,8 +96,8 @@ final class AppConfig
         }
         if ($missing) {
             throw new RuntimeException(
-                'A private/config.php le faltan estas claves: ' . implode(', ', $missing)
-                . '. Cópialas de config.sample.php.'
+                t('A private/config.php le faltan estas claves:') . ' ' . implode(', ', $missing)
+                . t('. Cópialas de config.sample.php.')
             );
         }
     }
@@ -142,24 +142,24 @@ final class Database
             $code = (int) ($e->errorInfo[1] ?? 0);
             $msg = (string) $e->getMessage();
             if ($code === 1045 || str_contains($msg, '1045')) {
-                return 'La base de datos rechaza el usuario o la contraseña de config.php (db[\'user\'] / db[\'password\']). '
-                    . 'Compruébalos en hPanel > Bases de datos > Administración de MySQL.';
+                return t('La base de datos rechaza el usuario o la contraseña de config.php (db[\'user\'] / db[\'password\']).') . ' '
+                    . t('Compruébalos en hPanel > Bases de datos > Administración de MySQL.');
             }
             if ($code === 1049 || str_contains($msg, '1049')) {
-                return 'No existe la base de datos indicada en config.php (db[\'name\']). '
-                    . 'En Hostinger el nombre lleva el prefijo de la cuenta (u123456789_...).';
+                return t('No existe la base de datos indicada en config.php (db[\'name\']).') . ' '
+                    . t('En Hostinger el nombre lleva el prefijo de la cuenta (u123456789_...).');
             }
             if ($code === 1044 || str_contains($msg, '1044')) {
-                return 'El usuario de config.php no tiene permiso sobre esa base de datos. '
-                    . 'En hPanel, asígnale la base al usuario.';
+                return t('El usuario de config.php no tiene permiso sobre esa base de datos.') . ' '
+                    . t('En hPanel, asígnale la base al usuario.');
             }
             if (str_contains($msg, '2002') || str_contains($msg, '2005')) {
-                return 'No se puede conectar con el servidor MySQL de config.php (db[\'host\']). En Hostinger suele ser \'localhost\'.';
+                return t('No se puede conectar con el servidor MySQL de config.php (db[\'host\']). En Hostinger suele ser \'localhost\'.');
             }
             if (str_contains($msg, 'could not find driver')) {
-                return 'PHP no tiene activada la extensión pdo_mysql. Actívala en hPanel > Avanzado > Configuración de PHP > Extensiones.';
+                return t('PHP no tiene activada la extensión pdo_mysql. Actívala en hPanel > Avanzado > Configuración de PHP > Extensiones.');
             }
-            return 'No se pudo conectar con la base de datos (código ' . $code . '). Revisa db en config.php.';
+            return t('No se pudo conectar con la base de datos (código') . ' ' . $code . t('). Revisa db en config.php.');
         }
 
         // Tablas y columnas que necesita el código (schema.sql + migrations/)
@@ -169,17 +169,17 @@ final class Database
         }
         $missing = array_diff(['sp_devices', 'sp_rate_limits', 'sp_boots', 'sp_users', 'sp_media', 'sp_media_devices'], $tables);
         if (in_array('sp_devices', $missing, true)) {
-            return 'Faltan las tablas: importa server/schema.sql en phpMyAdmin (pestaña Importar) sobre esta base.';
+            return t('Faltan las tablas: importa server/schema.sql en phpMyAdmin (pestaña Importar) sobre esta base.');
         }
         if (in_array('sp_boots', $missing, true)) {
-            return 'Falta la tabla sp_boots: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-boots.sql.';
+            return t('Falta la tabla sp_boots: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-boots.sql.');
         }
-        $usersSql = 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-08-users.sql.';
+        $usersSql = t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-08-users.sql.');
         if (in_array('sp_users', $missing, true)) {
             return 'Faltan tablas (' . implode(', ', $missing) . '): ' . $usersSql;
         }
         if ($missing) {
-            return 'Faltan tablas (' . implode(', ', $missing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+            return 'Faltan tablas (' . implode(', ', $missing) . t('): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-08-media.sql.';
         }
         $cols = [];
@@ -187,13 +187,13 @@ final class Database
             $cols[] = (string) $row['Field'];
         }
         if (!in_array('online_at', $cols, true)) {
-            return 'Falta la columna online_at: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-online.sql.';
+            return t('Falta la columna online_at: ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-06-online.sql.');
         }
         if (!in_array('user_id', $cols, true)) {
-            return 'Falta la columna user_id: ' . $usersSql;
+            return t('Falta la columna user_id:') . ' ' . $usersSql;
         }
         if (!in_array('media_enabled', $cols, true)) {
-            return 'Falta la columna media_enabled: ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la columna media_enabled: ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-08-media-enabled.sql.';
         }
         $userCols = [];
@@ -201,24 +201,24 @@ final class Database
             $userCols[] = (string) $row['Field'];
         }
         if (!in_array('content_until', $userCols, true)) {
-            return 'Falta la columna content_until (vigencia): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la columna content_until (vigencia): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-08-content-until.sql.';
         }
         // Anuncios del administrador
         $adsMissing = array_diff(['sp_ads', 'sp_ad_users', 'sp_ad_devices'], $tables);
         if ($adsMissing) {
-            return 'Faltan tablas (' . implode(', ', $adsMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+            return 'Faltan tablas (' . implode(', ', $adsMissing) . t('): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-11-ads.sql.';
         }
         // Ligas del administrador
         $leaguesMissing = array_diff(['sp_league_types', 'sp_leagues', 'sp_user_leagues'], $tables);
         if ($leaguesMissing) {
-            return 'Faltan tablas (' . implode(', ', $leaguesMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+            return 'Faltan tablas (' . implode(', ', $leaguesMissing) . t('): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-11-leagues.sql.';
         }
         // Liga de cada equipo (la elige el usuario en /cuenta/)
         if (!in_array('league_id', $cols, true)) {
-            return 'Falta la liga de cada equipo (columna league_id): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la liga de cada equipo (columna league_id): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-11-device-leagues.sql.';
         }
         // Fechas del contenido de los usuarios (permanente o desde/hasta)
@@ -227,18 +227,18 @@ final class Database
             $mediaCols[] = (string) $row['Field'];
         }
         if (!in_array('starts_at', $mediaCols, true) || !in_array('ends_at', $mediaCols, true)) {
-            return 'Faltan las columnas de fechas del contenido: ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Faltan las columnas de fechas del contenido: ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-11-media-dates.sql.';
         }
         // Pausar el contenido (como las tiras y banners)
         if (!in_array('active', $mediaCols, true)) {
-            return 'Falta la pausa del contenido (columna sp_media.active): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la pausa del contenido (columna sp_media.active): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-12-media-active.sql.';
         }
         // Tiras y banners de mirror.html (usuario y administrador)
         $overlaysMissing = array_diff(['sp_overlays', 'sp_overlay_users', 'sp_overlay_devices'], $tables);
         if ($overlaysMissing) {
-            return 'Faltan tablas (' . implode(', ', $overlaysMissing) . '): ejecuta en phpMyAdmin (pestaña SQL) '
+            return 'Faltan tablas (' . implode(', ', $overlaysMissing) . t('): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-11-overlays.sql.';
         }
         // Ajuste de la imagen del banner (proporcional / estirada a todo el ancho)
@@ -247,71 +247,71 @@ final class Database
             $ovCols[] = (string) $row['Field'];
         }
         if (!in_array('image_fit', $ovCols, true)) {
-            return 'Falta la columna image_fit (ajuste del banner): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la columna image_fit (ajuste del banner): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-11-overlays-fit.sql.';
         }
         // Gestión de rutas (URL de contenido por usuario)
         if (!in_array('sp_routes', $tables, true) || !in_array('route_id', $userCols, true)) {
-            return 'Falta la gestión de rutas (tabla sp_routes / columna sp_users.route_id): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la gestión de rutas (tabla sp_routes / columna sp_users.route_id): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-12-routes.sql.';
         }
         // Dirección MAC de cada equipo (la envía loading.html)
         if (!in_array('mac', $cols, true) || !in_array('mac_from', $cols, true)) {
-            return 'Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.';
+            return t('Falta la dirección MAC de los equipos (columnas sp_devices.mac / mac_at / mac_from):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-mac.sql.');
         }
         // Límite de archivos de contenido por usuario
         if (!in_array('max_files', $userCols, true)) {
-            return 'Falta el límite de archivos por usuario (columna sp_users.max_files): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta el límite de archivos por usuario (columna sp_users.max_files): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-12-user-max-files.sql.';
         }
         // Cola de descargas con turnos (muchas pantallas)
         if (!in_array('sp_download_queue', $tables, true) || !in_array('sp_kv', $tables, true)) {
-            return 'Falta la cola de descargas (tabla sp_download_queue): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta la cola de descargas (tabla sp_download_queue): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-13-download-queue.sql.';
         }
         // Buzón de mensajes administrador <-> usuario
         if (!in_array('sp_messages', $tables, true)) {
-            return 'Falta el buzón de mensajes (tabla sp_messages): ejecuta en phpMyAdmin (pestaña SQL) '
+            return t('Falta el buzón de mensajes (tabla sp_messages): ejecuta en phpMyAdmin (pestaña SQL)') . ' '
                 . 'server/migrations/2026-11-12-messages.sql.';
         }
         // Alias y notas del administrador por equipo
         if (!in_array('admin_alias', $cols, true) || !in_array('admin_notes', $cols, true)) {
-            return 'Faltan el alias y las notas del administrador (columnas sp_devices.admin_alias / admin_notes): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-admin-notes.sql.';
+            return t('Faltan el alias y las notas del administrador (columnas sp_devices.admin_alias / admin_notes):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-admin-notes.sql.');
         }
         // Perfiles de equipo (marca, modelo, MAC del case, instalación)
         if (!in_array('sp_device_profiles', $tables, true) || !in_array('first_authorized_at', $cols, true)) {
-            return 'Faltan los perfiles de equipo (tabla sp_device_profiles / columna first_authorized_at): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-profiles.sql.';
+            return t('Faltan los perfiles de equipo (tabla sp_device_profiles / columna first_authorized_at):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-12-device-profiles.sql.');
         }
         // Planes de contenido (2026-11-22)
         if (!in_array('sp_plans', $tables, true) || !in_array('sp_plan_renewals', $tables, true) || !in_array('plan_id', $userCols, true)) {
-            return 'Faltan los planes de contenido (tablas sp_plans / sp_plan_renewals, columna sp_users.plan_id): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans.sql.';
+            return t('Faltan los planes de contenido (tablas sp_plans / sp_plan_renewals, columna sp_users.plan_id):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans.sql.');
         }
         // Idioma de /cuenta/ por usuario (2026-11-22)
         if (!in_array('lang', $userCols, true)) {
-            return 'Falta el idioma de los usuarios (columna sp_users.lang): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-user-lang.sql.';
+            return t('Falta el idioma de los usuarios (columna sp_users.lang):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-user-lang.sql.');
         }
         // ID de transacción del historial de planes (2026-11-22)
         $renewalCols = $pdo->query('SHOW COLUMNS FROM sp_plan_renewals')->fetchAll(PDO::FETCH_COLUMN);
         if (!in_array('txn_id', $renewalCols, true)) {
-            return 'Falta el ID de transacción del historial de planes (columna sp_plan_renewals.txn_id): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plan-txn.sql.';
+            return t('Falta el ID de transacción del historial de planes (columna sp_plan_renewals.txn_id):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plan-txn.sql.');
         }
         // Comentario de los planes (2026-11-22)
         $planCols = $pdo->query('SHOW COLUMNS FROM sp_plans')->fetchAll(PDO::FETCH_COLUMN);
         if (!in_array('comment', $planCols, true)) {
-            return 'Falta el comentario de los planes (columna sp_plans.comment): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans-comment.sql.';
+            return t('Falta el comentario de los planes (columna sp_plans.comment):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-plans-comment.sql.');
         }
         // S/N del perfil (2026-11-22)
         $profileCols = $pdo->query('SHOW COLUMNS FROM sp_device_profiles')->fetchAll(PDO::FETCH_COLUMN);
         if (!in_array('serial', $profileCols, true)) {
-            return 'Falta el S/N de los perfiles (columna sp_device_profiles.serial): '
-                . 'ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-profile-serial.sql.';
+            return t('Falta el S/N de los perfiles (columna sp_device_profiles.serial):') . ' '
+                . t('ejecuta en phpMyAdmin (pestaña SQL) server/migrations/2026-11-22-profile-serial.sql.');
         }
         return null;
     }
@@ -711,16 +711,16 @@ final class DeviceRepository
     public static function takeOver(string $newId, string $oldId, bool $deleteOld): ?string
     {
         if ($newId === $oldId) {
-            return 'Es el mismo equipo.';
+            return t('Es el mismo equipo.');
         }
         $new = self::find($newId);
         $old = self::find($oldId);
         if ($new === null || $old === null) {
-            return 'El equipo anterior ya no existe: no hay datos que tomar.';
+            return t('El equipo anterior ya no existe: no hay datos que tomar.');
         }
         // Solo el equipo que recibió su MAC (misma TV restablecida)
         if ((string) ($new['mac_from'] ?? '') !== $oldId) {
-            return "$newId no viene de $oldId (su MAC no era de ese equipo).";
+            return t('%s no viene de %s (su MAC no era de ese equipo).', (string) $newId, (string) $oldId);
         }
         $pdo = Database::pdo();
         $now = Database::now();
@@ -756,7 +756,7 @@ final class DeviceRepository
         } catch (Throwable $e) {
             $pdo->rollBack();
             error_log('smartpizarra takeOver ' . $oldId . ' -> ' . $newId . ': ' . $e->getMessage());
-            return 'No se pudieron pasar los datos (no se cambió nada): ' . $e->getMessage();
+            return t('No se pudieron pasar los datos (no se cambió nada):') . ' ' . $e->getMessage();
         }
         return null;
     }
@@ -1180,7 +1180,7 @@ final class MediaRepository
     {
         $dir = (string) (AppConfig::get()['media_dir'] ?? (__DIR__ . '/media'));
         if (!is_dir($dir) && !mkdir($dir, 0750, true) && !is_dir($dir)) {
-            throw new RuntimeException('No se pudo crear la carpeta de archivos: ' . $dir);
+            throw new RuntimeException(t('No se pudo crear la carpeta de archivos:') . ' ' . $dir);
         }
         return $dir;
     }
@@ -1715,7 +1715,7 @@ final class MediaRepository
         // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
         $moved = is_uploaded_file($tmpFile) ? move_uploaded_file($tmpFile, $target) : rename($tmpFile, $target);
         if (!$moved) {
-            throw new RuntimeException('No se pudo guardar el archivo en ' . self::dir());
+            throw new RuntimeException(t('No se pudo guardar el archivo en') . ' ' . self::dir());
         }
         @chmod($target, 0640);
         if ($kind === 'image') {
@@ -2030,7 +2030,7 @@ final class AdRepository
         // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
         $moved = is_uploaded_file($tmpFile) ? move_uploaded_file($tmpFile, $target) : rename($tmpFile, $target);
         if (!$moved) {
-            throw new RuntimeException('No se pudo guardar el archivo en ' . MediaRepository::dir());
+            throw new RuntimeException(t('No se pudo guardar el archivo en') . ' ' . MediaRepository::dir());
         }
         @chmod($target, 0640);
         if ($kind === 'image') {
@@ -2334,7 +2334,7 @@ final class OverlayRepository
         $target = null;
         if ($data['kind'] === 'image') {
             if ($tmpFile === null || $mime === null || !in_array($mime, self::IMAGE_TYPES, true)) {
-                throw new InvalidArgumentException('Banner sin imagen válida');
+                throw new InvalidArgumentException(t('Banner sin imagen válida'));
             }
             [, $ext] = MediaRepository::TYPES[$mime];
             $originalName = basename(str_replace('\\', '/', $originalName));
@@ -2346,7 +2346,7 @@ final class OverlayRepository
             // move_uploaded_file solo con subidas reales; rename en pruebas por CLI
             $moved = is_uploaded_file($tmpFile) ? move_uploaded_file($tmpFile, $target) : rename($tmpFile, $target);
             if (!$moved) {
-                throw new RuntimeException('No se pudo guardar el archivo en ' . MediaRepository::dir());
+                throw new RuntimeException(t('No se pudo guardar el archivo en') . ' ' . MediaRepository::dir());
             }
             @chmod($target, 0640);
             MediaRepository::shrinkImage($target, $mime); // imagen enorme => máx. 1080x1920 (antes de tamaño y sha256)
@@ -2989,19 +2989,19 @@ final class RouteRepository
         };
         $name = $text((string) ($in['name'] ?? ''), 100);
         if ($name === '') {
-            return 'Escribe un nombre para la ruta.';
+            return t('Escribe un nombre para la ruta.');
         }
         $base = trim((string) ($in['base_url'] ?? ''));
         $parts = parse_url($base);
         if ($base === '' || strlen($base) > 500 || $parts === false || !in_array(strtolower((string) ($parts['scheme'] ?? '')), ['http', 'https'], true)
             || empty($parts['host']) || isset($parts['query']) || isset($parts['fragment']) || preg_match('/[\s"\'<>]/', $base)) {
-            return 'La URL base debe empezar por https:// (o http://) y no llevar parámetros ("?..."): p. ej. ' . self::DEFAULTS['base_url'];
+            return t('La URL base debe empezar por https:// (o http://) y no llevar parámetros ("?..."): p. ej.') . ' ' . self::DEFAULTS['base_url'];
         }
         $out = ['name' => $name, 'base_url' => $base];
         foreach (['page_index' => 'pageIndex', 'timer' => 'timer', 'page_size' => 'pageSize'] as $k => $label) {
             $v = trim((string) ($in[$k] ?? ''));
             if (!preg_match('/^\d{1,6}$/', $v) || (int) $v > self::MAX_NUMBER) {
-                return "«{$label}» debe ser un número entero entre 0 y " . self::MAX_NUMBER . '.';
+                return t('«%s» debe ser un número entero entre 0 y ', (string) $label) . self::MAX_NUMBER . '.';
             }
             $out[$k] = (int) $v;
         }
@@ -3182,33 +3182,33 @@ final class PlanRepository
         }
         $name = mb_substr($name, 0, 60);
         if ($name === '') {
-            return 'El plan necesita un nombre.';
+            return t('El plan necesita un nombre.');
         }
         $int = static fn($v) => ctype_digit(trim((string) $v)) ? (int) trim((string) $v) : -1;
         $days = $int($in['days'] ?? '');
         if ($days < 1 || $days > self::MAX_DAYS) {
-            return 'La duración debe ser de 1 a ' . self::MAX_DAYS . ' días.';
+            return t('La duración debe ser de 1 a') . ' ' . self::MAX_DAYS . ' ' . t('días.');
         }
         $files = $int($in['max_files'] ?? '');
         if ($files < 1 || $files > self::MAX_FILES) {
-            return 'La cantidad de contenido debe ser de 1 a ' . self::MAX_FILES . ' archivos.';
+            return t('La cantidad de contenido debe ser de 1 a') . ' ' . self::MAX_FILES . ' archivos.';
         }
         // Almacenamiento en GB (coma o punto decimal) => MB
         $gb = str_replace(',', '.', trim((string) ($in['storage_gb'] ?? '')));
         if (!preg_match('/^\d+(\.\d{1,3})?$/', $gb) || (float) $gb <= 0) {
-            return 'Escribe el almacenamiento en GB (p. ej. 1 o 0.5).';
+            return t('Escribe el almacenamiento en GB (p. ej. 1 o 0.5).');
         }
         $mb = (int) round((float) $gb * 1024);
         if ($mb < 1 || $mb > self::MAX_STORAGE_MB) {
-            return 'El almacenamiento debe ser de 0.001 a ' . (self::MAX_STORAGE_MB / 1024) . ' GB.';
+            return t('El almacenamiento debe ser de 0.001 a') . ' ' . (self::MAX_STORAGE_MB / 1024) . ' GB.';
         }
         $price = str_replace(',', '.', trim((string) ($in['price'] ?? '')));
         if (!preg_match('/^\d+(\.\d{1,2})?$/', $price) || (float) $price > self::MAX_PRICE) {
-            return 'Escribe el costo como número (p. ej. 10 o 9.99).';
+            return t('Escribe el costo como número (p. ej. 10 o 9.99).');
         }
         $currency = strtoupper(trim((string) ($in['currency'] ?? 'USD')));
         if (!preg_match('/^[A-Z]{3}$/', $currency)) {
-            return 'La moneda son 3 letras (p. ej. USD).';
+            return t('La moneda son 3 letras (p. ej. USD).');
         }
         // Comentario (opcional, lo ve el usuario): conserva los saltos de línea, máx. 500
         $comment = (string) ($in['comment'] ?? '');
@@ -3327,7 +3327,7 @@ final class PlanRepository
     {
         $user = UserRepository::find($userId);
         if ($user === null || empty($user['plan_id'])) {
-            return 'El usuario no tiene plan: asígnale uno.';
+            return t('El usuario no tiene plan: asígnale uno.');
         }
         return self::extend($userId, (int) $user['plan_id'], 'renew');
     }
@@ -3356,10 +3356,10 @@ final class PlanRepository
         $user = UserRepository::find($userId);
         $plan = self::find($planId);
         if ($user === null) {
-            return 'Ese usuario ya no existe.';
+            return t('Ese usuario ya no existe.');
         }
         if ($plan === null) {
-            return 'Ese plan ya no existe.';
+            return t('Ese plan ya no existe.');
         }
         $pdo = Database::pdo();
         $pdo->beginTransaction();
@@ -3382,7 +3382,7 @@ final class PlanRepository
         } catch (Throwable $e) {
             $pdo->rollBack();
             error_log('smartpizarra plan ' . $kind . ' usuario ' . $userId . ': ' . $e->getMessage());
-            return 'No se pudo ' . ($kind === 'renew' ? 'renovar' : 'asignar') . ' el plan (no se cambió nada).';
+            return t('No se pudo') . ' ' . ($kind === 'renew' ? t('renovar') : t('asignar')) . ' ' . t('el plan (no se cambió nada).');
         }
         return null;
     }
@@ -3504,24 +3504,24 @@ final class ProfileRepository
         $brand = $text($in['brand'] ?? '');
         $model = $text($in['model'] ?? '');
         if ($brand === '' || $model === '') {
-            return 'La marca y el modelo son obligatorios.';
+            return t('La marca y el modelo son obligatorios.');
         }
         $mac = DeviceRepository::cleanMac(mb_substr((string) ($in['case_mac'] ?? ''), 0, 40));
         if ($mac === null) {
-            return 'Escribe la MAC Case completa: 12 caracteres (0-9, A-F), con o sin «:» (p. ej. E8:BB:3E:C8:FB:5A o E8BB3EC8FB5A).';
+            return t('Escribe la MAC Case completa: 12 caracteres (0-9, A-F), con o sin «:» (p. ej. E8:BB:3E:C8:FB:5A o E8BB3EC8FB5A).');
         }
         $date = (string) ($in['installed_on'] ?? '');
         $d = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
         if ($d === false || $d->format('Y-m-d') !== $date || (int) $d->format('Y') < 2000) {
-            return 'Escribe la fecha de instalación.';
+            return t('Escribe la fecha de instalación.');
         }
         if ($d > new DateTimeImmutable('tomorrow')) {
-            return 'La fecha de instalación no puede ser futura.';
+            return t('La fecha de instalación no puede ser futura.');
         }
         // S/N (opcional): se guarda en mayúsculas y sin espacios por fuera; "" = sin S/N (NULL)
         $serial = strtoupper($text($in['serial'] ?? ''));
         if ($serial !== '' && !preg_match('/^[A-Z0-9][A-Z0-9 ._\/\-]*$/', $serial)) {
-            return 'El S/N solo puede llevar letras, números, espacios y los signos . _ / -';
+            return t('El S/N solo puede llevar letras, números, espacios y los signos . _ / -');
         }
         return ['brand' => $brand, 'model' => $model, 'case_mac' => $mac, 'serial' => $serial === '' ? null : $serial,
             'installed_on' => $date];

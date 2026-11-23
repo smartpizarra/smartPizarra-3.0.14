@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.3 (2026-11-22)
+// Versión del archivo: 1.0.4 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - AGENTE DE GESTIÓN REMOTA (código del servidor)
@@ -220,7 +220,7 @@ final class AgentGroupRepository
     {
         $name = mb_substr(trim((string) ($in['name'] ?? '')), 0, 80);
         if ($name === '') {
-            return 'El grupo necesita un nombre.';
+            return t('El grupo necesita un nombre.');
         }
         // La app principal (main_package) ya no se escribe aquí: la fija un despliegue
         // con "App principal del grupo" marcada (AgentDeployments::create).
@@ -229,12 +229,12 @@ final class AgentGroupRepository
         // Antes valía cualquier mezcla de [a-zA-Z0-9_.$] y un número suelto ("6555454") hacía que
         // el agente intentara abrir una actividad inexistente (2026-11-22, grupo Out27 Sport).
         if ($act !== '' && (mb_strlen($act) > 200 || !preg_match('/^\.?[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/', $act))) {
-            return 'La actividad no es válida: déjala vacía (recomendado, se abre la actividad de inicio de la app) '
-                . 'o escribe el nombre de la clase, p. ej. io.kodular.smartpizarra.smartPizarra_3_0_14.Screen1.';
+            return t('La actividad no es válida: déjala vacía (recomendado, se abre la actividad de inicio de la app)') . ' '
+                . t('o escribe el nombre de la clase, p. ej. io.kodular.smartpizarra.smartPizarra_3_0_14.Screen1.');
         }
         $win = trim((string) ($in['install_window'] ?? ''));
         if ($win !== '' && !preg_match('/^([01]?\d|2[0-3]):[0-5]\d-([01]?\d|2[0-3]):[0-5]\d$/', $win)) {
-            return 'La ventana de instalación debe ser como 02:00-05:00 (o vacía).';
+            return t('La ventana de instalación debe ser como 02:00-05:00 (o vacía).');
         }
         $color = static fn($v, $d) => preg_match('/^#[0-9A-Fa-f]{6}$/', (string) $v) ? strtoupper((string) $v) : $d;
         $text = mb_substr(trim((string) ($in['maintenance_text'] ?? '')), 0, 120);
@@ -323,7 +323,7 @@ final class AgentFiles
         $base = (string) AgentConfig::get('agent_dir', __DIR__ . '/agent');
         $d = rtrim($base, '/\\') . ($sub !== '' ? '/' . $sub : '');
         if (!is_dir($d) && !mkdir($d, 0750, true) && !is_dir($d)) {
-            throw new RuntimeException('No se pudo crear la carpeta ' . $d);
+            throw new RuntimeException(t('No se pudo crear la carpeta') . ' ' . $d);
         }
         return $d;
     }
@@ -405,13 +405,13 @@ final class AgentFiles
         }
         $info = @getimagesize($tmp);
         if ($info === false || !in_array($info[2], [IMAGETYPE_PNG, IMAGETYPE_JPEG, IMAGETYPE_WEBP], true)) {
-            return 'El logo debe ser una imagen PNG, JPG o WebP.';
+            return t('El logo debe ser una imagen PNG, JPG o WebP.');
         }
         if (filesize($tmp) > 1048576) {
-            return 'El logo no puede pasar de 1 MB.';
+            return t('El logo no puede pasar de 1 MB.');
         }
         if (!move_uploaded_file($tmp, self::logoPath()) && !copy($tmp, self::logoPath())) {
-            return 'No se pudo guardar el logo.';
+            return t('No se pudo guardar el logo.');
         }
         Database::pdo()->prepare(
             'INSERT INTO sp_kv (k, v, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = VALUES(updated_at)'
@@ -611,28 +611,28 @@ final class AgentApkRepository
     {
         $size = (int) filesize($tmp);
         if ($size <= 0) {
-            return 'El archivo está vacío.';
+            return t('El archivo está vacío.');
         }
         if ($size > self::maxBytes()) {
-            return 'El APK pasa del máximo (' . intdiv(self::maxBytes(), 1048576) . ' MB, config agent_apk_max_mb).';
+            return t('El APK pasa del máximo (') . intdiv(self::maxBytes(), 1048576) . ' MB, config agent_apk_max_mb).';
         }
         $info = ApkInfo::read($tmp);
         if ($info === null) {
-            return 'No parece un APK válido (no se pudo leer su AndroidManifest.xml).';
+            return t('No parece un APK válido (no se pudo leer su AndroidManifest.xml).');
         }
         if (!self::isValidPackage($info['package'])) {
-            return 'El paquete del APK no es válido.';
+            return t('El paquete del APK no es válido.');
         }
         $dup = Database::pdo()->prepare('SELECT id FROM sp_agent_apks WHERE package = ? AND version_code = ?');
         $dup->execute([$info['package'], $info['versionCode']]);
         if ($dup->fetchColumn() !== false) {
-            return 'Ya existe ' . $info['package'] . ' versión ' . $info['versionCode'] . '. Sube un APK con versionCode mayor.';
+            return 'Ya existe ' . $info['package'] . ' ' . t('versión') . ' ' . $info['versionCode'] . t('. Sube un APK con versionCode mayor.');
         }
         $sha = hash_file('sha256', $tmp);
         $file = $sha . '.apk';
         $dest = AgentFiles::dir('apk') . '/' . $file;
         if (!move_uploaded_file($tmp, $dest) && !copy($tmp, $dest)) {
-            return 'No se pudo guardar el APK en el servidor.';
+            return t('No se pudo guardar el APK en el servidor.');
         }
         Database::pdo()->prepare(
             'INSERT INTO sp_agent_apks (package, version_code, version_name, min_sdk, label, sha256, size_bytes, file_name, original_name, created_at)
@@ -684,7 +684,7 @@ final class AgentApkRepository
         $u = Database::pdo()->prepare('SELECT COUNT(*) FROM sp_agent_deployments WHERE apk_id = ?');
         $u->execute([$id]);
         if ((int) $u->fetchColumn() > 0) {
-            return 'Ese APK lo usa un despliegue: bórralo primero.';
+            return t('Ese APK lo usa un despliegue: bórralo primero.');
         }
         Database::pdo()->prepare('DELETE FROM sp_agent_apks WHERE id = ?')->execute([$id]);
         @unlink(self::path($apk));
@@ -728,22 +728,22 @@ final class AgentDeployments
     {
         $group = AgentGroupRepository::find($groupId);
         if ($group === null) {
-            return 'El grupo no existe.';
+            return t('El grupo no existe.');
         }
         $percent = max(1, min(100, $percent));
         if ($action === 'install') {
             $apk = AgentApkRepository::find($apkId);
             if ($apk === null) {
-                return 'Elige un APK.';
+                return t('Elige un APK.');
             }
             $package = (string) $apk['package'];
         } elseif ($action === 'uninstall') {
             if (!AgentApkRepository::isValidPackage($package)) {
-                return 'Escribe un nombre de paquete válido para desinstalar.';
+                return t('Escribe un nombre de paquete válido para desinstalar.');
             }
             $apkId = 0;
         } else {
-            return 'Acción no válida.';
+            return t('Acción no válida.');
         }
         $pdo = Database::pdo();
         // Un paquete, un despliegue activo por grupo: el nuevo sustituye al anterior
@@ -857,17 +857,17 @@ final class AgentCommands
                 $h = (int) ($in['h'] ?? 0);
                 $d = (int) ($in['density'] ?? 0);
                 if ($w < 320 || $w > 3840 || $h < 240 || $h > 2160 || ($d !== 0 && ($d < 80 || $d > 640))) {
-                    return 'Resolución no válida (ancho 320-3840, alto 240-2160, densidad 80-640 o vacía).';
+                    return t('Resolución no válida (ancho 320-3840, alto 240-2160, densidad 80-640 o vacía).');
                 }
                 return $d ? ['w' => $w, 'h' => $h, 'density' => $d] : ['w' => $w, 'h' => $h];
             case 'clear_app_data':
             case 'force_stop':
-                return $pkg() ? ['package' => (string) $in['package']] : 'Escribe un nombre de paquete válido.';
+                return $pkg() ? ['package' => (string) $in['package']] : t('Escribe un nombre de paquete válido.');
             case 'set_animations':
                 $s = (string) ($in['scale'] ?? '');
-                return in_array($s, ['0', '0.5', '1'], true) ? ['scale' => (float) $s] : 'La escala debe ser 0, 0.5 o 1.';
+                return in_array($s, ['0', '0.5', '1'], true) ? ['scale' => (float) $s] : t('La escala debe ser 0, 0.5 o 1.');
             default:
-                return isset(self::NAMES[$name]) ? [] : 'Comando no válido.';
+                return isset(self::NAMES[$name]) ? [] : t('Comando no válido.');
         }
     }
 
@@ -875,10 +875,10 @@ final class AgentCommands
     public static function create(?string $agentId, ?int $groupId, string $name, array $args, int $ttlHours = 24): ?string
     {
         if (!isset(self::NAMES[$name])) {
-            return 'Comando no válido.';
+            return t('Comando no válido.');
         }
         if (!self::canSign()) {
-            return 'Falta la clave para firmar comandos (' . basename(self::keyFile()) . ' en private/). Ver server/README.md.';
+            return t('Falta la clave para firmar comandos (') . basename(self::keyFile()) . ' ' . t('en private/). Ver server/README.md.');
         }
         $argsJson = $args ? json_encode($args, JSON_UNESCAPED_SLASHES) : '{}';
         $exp = time() + max(1, min(168, $ttlHours)) * 3600;
@@ -893,7 +893,7 @@ final class AgentCommands
             $target = $agentId !== null ? 'a:' . $agentId : 'g:' . $groupId;
             $key = openssl_pkey_get_private((string) file_get_contents(self::keyFile()));
             if ($key === false || !openssl_sign("$id|$target|$name|$argsJson|$exp", $sig, $key, OPENSSL_ALGO_SHA256)) {
-                throw new RuntimeException('No se pudo firmar el comando (clave no válida).');
+                throw new RuntimeException(t('No se pudo firmar el comando (clave no válida).'));
             }
             $pdo->prepare('UPDATE sp_agent_commands SET signature = ? WHERE id = ?')->execute([base64_encode($sig), $id]);
             $pdo->commit();
@@ -1244,7 +1244,7 @@ function agentDiagnose(): ?string
             $pdo->query("SELECT 1 FROM $t LIMIT 1");
         }
     } catch (Throwable $e) {
-        return 'Faltan las tablas del agente: ejecuta server/migrations/2026-11-16-agent.sql en phpMyAdmin.';
+        return t('Faltan las tablas del agente: ejecuta server/migrations/2026-11-16-agent.sql en phpMyAdmin.');
     }
     return null;
 }

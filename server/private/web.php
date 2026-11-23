@@ -1,5 +1,5 @@
 <?php
-// Versión del archivo: 1.0.2 (2026-11-22)
+// Versión del archivo: 1.0.3 (2026-11-22)
 /*
  * =====================================================================
  *  SMART PIZARRA - UTILIDADES DE LAS PÁGINAS WEB
@@ -284,6 +284,10 @@ function baseStyles(): string
     .device-filter-title { display: block; font-weight: 600; font-size: .9rem; margin-top: 8px; }
     .device-filter { display: block; width: 100%; margin: 4px 0 6px; }
     .device-hidden { display: none !important; }
+    /* Selector de idioma ES | EN (langSwitch) */
+    .lang-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; vertical-align: middle; }
+    .lang-switch a { padding: 6px 10px; text-decoration: none; color: var(--muted); font-size: .85rem; font-weight: 600; }
+    .lang-switch a.on { background: var(--accent); color: #fff; }
 CSS;
 }
 
@@ -793,4 +797,60 @@ function planHistoryTable(array $rows, bool $withUser, string $class): string
             . '<td>+' . (int) $r['days'] . '</td><td>' . h(PlanRepository::priceText($r)) . '</td><td>' . dateTag($r['plan_until']) . '</td></tr>';
     }
     return $html . '</table></div>';
+}
+
+/*
+ * IDIOMA DEL PANEL DEL ADMINISTRADOR (2026-11-22, fase 2). Hay un solo administrador:
+ * su elección se guarda en sp_kv ("admin_lang", vale para todos sus dispositivos) y en
+ * la cookie sp_admin_lang (path /admin/, también para la pantalla de entrada). Orden:
+ * ?lang= (selector) => sp_kv => cookie => idioma del navegador. Con ?lang= guarda y
+ * vuelve a la misma página sin el parámetro. Lo usan admin/index.php y agentes.php.
+ * @param string $page Página a la que se vuelve ("./" o "agentes.php").
+ */
+function applyAdminLang(string $page, bool $canSave): void
+{
+    $requested = I18n::valid(param($_GET, 'lang')) ? param($_GET, 'lang') : null;
+    $saved = null;
+    try {
+        $stmt = Database::pdo()->prepare('SELECT v FROM sp_kv WHERE k = ?');
+        $stmt->execute(['admin_lang']);
+        $saved = $stmt->fetchColumn() ?: null;
+    } catch (Throwable $e) {
+        $saved = null; // base aún sin configurar: se sigue con la cookie o el navegador
+    }
+    I18n::set(I18n::pick($requested, $saved, $_COOKIE['sp_admin_lang'] ?? null));
+    if ($requested === null) {
+        return;
+    }
+    setcookie('sp_admin_lang', $requested, ['expires' => time() + 31536000, 'path' => '/admin/',
+        'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off', 'httponly' => true, 'samesite' => 'Lax']);
+    if ($canSave) {
+        try {
+            Database::pdo()->prepare('INSERT INTO sp_kv (k, v, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v), updated_at = VALUES(updated_at)')
+                ->execute(['admin_lang', $requested, Database::now()]);
+        } catch (Throwable $e) {
+            error_log('smartpizarra admin_lang: ' . $e->getMessage());
+        }
+    }
+    $keep = $_GET;
+    unset($keep['lang']);
+    header('Location: ' . $page . ($keep ? '?' . http_build_query($keep) : ''), true, 303);
+    exit;
+}
+
+/**
+ * Selector de idioma ES | EN (enlaces ?lang=, conservan los demás parámetros de la página).
+ * Estilos en baseStyles() (.lang-switch).
+ */
+function langSwitch(): string
+{
+    $html = '<nav class="lang-switch" aria-label="' . h(t('Idioma')) . '">';
+    foreach (I18n::LANGS as $code => $name) {
+        $q = $_GET;
+        $q['lang'] = $code;
+        $on = I18n::lang() === $code;
+        $html .= '<a class="' . ($on ? 'on' : '') . '" href="?' . h(http_build_query($q)) . '" hreflang="' . h($code) . '" lang="' . h($code)
+            . '" title="' . h($name) . '"' . ($on ? ' aria-current="true"' : '') . '>' . strtoupper($code) . '</a>';
+    }
+    return $html . '</nav>';
 }

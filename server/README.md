@@ -1,4 +1,4 @@
-<!-- Versión del archivo: 1.0.15 (2026-11-22) -->
+<!-- Versión del archivo: 1.0.16 (2026-11-22) -->
 # Smart Pizarra · registro y autorización de dispositivos
 
 Servidor para `https://smartpizarra.cloud/` (Hostinger, PHP 8.1 o superior + MySQL).
@@ -358,7 +358,13 @@ Cómo funciona:
 
 ## Idiomas de los paneles (español / inglés) — 2026-11-22
 
-**Fase 1: `/cuenta/` (panel del usuario).** El panel del administrador sigue en español (fase 2).
+**Fase 1: `/cuenta/` (panel del usuario). Fase 2 (2026-11-22): panel del administrador (`/admin/`) y Agentes.**
+
+Fase 2, instalación: sin migración. Sube `private/i18n.php`, `private/i18n_en.php`, `private/i18n_en_admin.php`, `private/lib.php`, `private/web.php`, `private/agent.php`, `admin/index.php` y `admin/agentes.php`.
+
+- El panel y Agentes tienen el mismo selector **ES / EN** en la cabecera (también en la pantalla de entrada del panel). El idioma del administrador se guarda en la base (`sp_kv`, clave `admin_lang`), así vale en todos sus dispositivos, y en la cookie `sp_admin_lang`; la primera vez se usa el idioma del navegador.
+- Se traducen pestañas, formularios, avisos tras cada acción, confirmaciones, el lector de QR, los avisos de la MAC Case, los errores de validación (planes, rutas, perfiles, grupos, APK, comandos) y los avisos de instalación.
+- **No** se traducen los datos (nombres de usuarios, planes, ligas…), el texto de la pantalla de mantenimiento de las TV ni lo que reciben las TV por la API.
 
 Instalación: ejecuta una vez `migrations/2026-11-22-user-lang.sql` (columna `sp_users.lang`; si sale _Duplicate column name 'lang'_, ya estaba) y sube `private/i18n.php`, `private/i18n_en.php`, `private/lib.php`, `private/web.php` y `cuenta/index.php`.
 
